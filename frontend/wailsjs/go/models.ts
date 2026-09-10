@@ -190,6 +190,8 @@ export namespace services {
 	    postScript: string;
 	    page: number;
 	    pageSize: number;
+	    total: number;
+	    countTotal: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ExecuteRequest(source);
@@ -204,6 +206,8 @@ export namespace services {
 	        this.postScript = source["postScript"];
 	        this.page = source["page"];
 	        this.pageSize = source["pageSize"];
+	        this.total = source["total"];
+	        this.countTotal = source["countTotal"];
 	    }
 	}
 	export class QueryResult {
@@ -253,6 +257,30 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class TemplateExecuteRequest {
+	    templateId: number;
+	    connId: number;
+	    variables: Record<string, any>;
+	    page: number;
+	    pageSize: number;
+	    total: number;
+	    countTotal: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TemplateExecuteRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.templateId = source["templateId"];
+	        this.connId = source["connId"];
+	        this.variables = source["variables"];
+	        this.page = source["page"];
+	        this.pageSize = source["pageSize"];
+	        this.total = source["total"];
+	        this.countTotal = source["countTotal"];
+	    }
 	}
 	export class TemplateListItem {
 	    id: number;

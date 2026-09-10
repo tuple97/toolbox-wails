@@ -49,7 +49,6 @@ const form = reactive({
   preScript: '',
   postScript: '',
   paginationEnabled: false,
-  pageSize: DEFAULT_PAGE_SIZE,
 })
 
 /** 变量配置与字段映射（解析后的对象形式） */
@@ -96,7 +95,6 @@ async function loadTemplate(id: number) {
     form.preScript = tpl.preScript
     form.postScript = tpl.postScript
     form.paginationEnabled = tpl.paginationEnabled
-    form.pageSize = tpl.pageSize > 0 ? tpl.pageSize : DEFAULT_PAGE_SIZE
 
     variableConfigs.value = parseJSON<VariableConfig[]>(tpl.variables, [])
     fieldMappings.value = parseJSON<FieldMapping[]>(tpl.fieldMappings, [])
@@ -175,7 +173,6 @@ function handleCreate() {
   form.preScript = ''
   form.postScript = ''
   form.paginationEnabled = false
-  form.pageSize = DEFAULT_PAGE_SIZE
   variableConfigs.value = []
   fieldMappings.value = []
   detectedVariables.value = []
@@ -193,10 +190,6 @@ async function handleSave() {
   }
   if (!form.sqlText.trim()) {
     ElMessage.warning('SQL 内容不能为空')
-    return
-  }
-  if (form.paginationEnabled && !(form.pageSize > 0)) {
-    ElMessage.warning('开启分页后，每页条数必须大于 0')
     return
   }
 
@@ -222,7 +215,6 @@ async function handleSave() {
       preScript: form.preScript,
       postScript: form.postScript,
       paginationEnabled: form.paginationEnabled,
-      pageSize: form.pageSize > 0 ? form.pageSize : DEFAULT_PAGE_SIZE,
     }
 
     const id = await persistTemplate(payload)
@@ -386,24 +378,12 @@ const dialogVisible = computed({
                 <div class="tpl-mgr__basic-row">
                   <div class="tpl-mgr__basic-label">
                     <span>结果分页</span>
-                    <small>开启后查询结果按页展示，并自动统计总数据量</small>
+                    <small>
+                      开启后查询结果按页展示，并自动统计总数据量；
+                      每页条数在结果下方的翻页控件上设置，按标签页各自保存
+                    </small>
                   </div>
                   <el-switch v-model="form.paginationEnabled" />
-                </div>
-
-                <div class="tpl-mgr__basic-row">
-                  <div class="tpl-mgr__basic-label">
-                    <span>每页条数</span>
-                    <small>仅在开启分页时生效，取值范围 1 - 1000</small>
-                  </div>
-                  <el-input-number
-                    v-model="form.pageSize"
-                    :min="1"
-                    :max="1000"
-                    :disabled="!form.paginationEnabled"
-                    size="small"
-                    controls-position="right"
-                  />
                 </div>
               </div>
             </el-tab-pane>

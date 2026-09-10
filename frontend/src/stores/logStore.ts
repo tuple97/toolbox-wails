@@ -27,11 +27,12 @@ export const useLogStore = defineStore('logs', () => {
 
   /**
    * 记录一次请求。
-   * 格式：`>> [时间] [连接名] 执行SQL:` 换行 + 缩进的 SQL
+   * 格式：`>> [时间] [连接名] 执行SQL: <单行 SQL>`
+   * SQL 压成单行便于按行阅读；过长时由编辑器自动换行。
    */
   function logRequest(connName: string, sql: string) {
     const time = now()
-    append(`>> [${time}] [${connName}] 执行SQL:\n${indentSql(sql)}`)
+    append(`>> [${time}] [${connName}] 执行SQL: ${flattenSql(sql)}`)
   }
 
   /** 记录执行成功 */
@@ -42,11 +43,6 @@ export const useLogStore = defineStore('logs', () => {
   /** 记录执行错误 */
   function logError(message: string) {
     append(`<< [${now()}] 错误: ${message}`)
-  }
-
-  /** 记录一般信息（如渲染后的 SQL 预览） */
-  function logInfo(message: string) {
-    append(`-- [${now()}] ${message}`)
   }
 
   /** 清空日志 */
@@ -70,7 +66,6 @@ export const useLogStore = defineStore('logs', () => {
     logRequest,
     logSuccess,
     logError,
-    logInfo,
     clear,
     setMaxLines,
   }
@@ -83,10 +78,45 @@ function now(): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-/** 为 SQL 每行加缩进，便于在日志中区分层级 */
-function indentSql(sql: string): string {
-  return sql
-    .split('\n')
-    .map(line => `    ${line}`)
-    .join('\n')
+/**
+ * 把多行 SQL 压成单行。
+ *
+ * 只压缩引号（' " `）之外的空白，避免破坏字符串字面量里的空格；
+ * 连续空白统一收敛为一个空格，换行符一并去掉。
+ */
+function flattenSql(sql: string): string {
+  let result = ''
+  let pendingSpace = false
+  let inSingle = false
+  let inDouble = false
+  let inBacktick = false
+
+  for (const ch of sql) {
+    if (ch === '\'' && !inDouble && !inBacktick) {
+      inSingle = !inSingle
+    }
+    else if (ch === '"' && !inSingle && !inBacktick) {
+      inDouble = !inDouble
+    }
+    else if (ch === '`' && !inSingle && !inDouble) {
+      inBacktick = !inBacktick
+    }
+
+    const quoted = inSingle || inDouble || inBacktick
+
+    if (!quoted && /\s/.test(ch)) {
+      pendingSpace = true
+      continue
+    }
+
+    if (pendingSpace) {
+      if (result) {
+        result += ' '
+      }
+      pendingSpace = false
+    }
+    result += ch
+  }
+
+  return result.trim()
 }

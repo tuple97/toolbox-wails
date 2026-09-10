@@ -103,26 +103,15 @@ func (a *App) ValidateScript(source string) error {
 // 完整链路：取模板 → 补全变量 → 前置脚本 → 渲染 SQL → 执行 → 后置脚本。
 // 模板更新后，引用它的 Tab 无需同步即可在下次执行时生效。
 //
-// page / pageSize 仅在模板开启分页时生效，未开启时后端会自动忽略。
-func (a *App) ExecuteTemplateQuery(
-	templateId int64,
-	connId int64,
-	variables map[string]any,
-	page int,
-	pageSize int,
-) (*services.QueryResult, error) {
+// req 中的 Page / PageSize 仅在模板开启分页时生效，未开启时后端会自动忽略。
+// Total 与 CountTotal 用于翻页时复用总数：翻页传上次返回的 total 且 CountTotal=false。
+func (a *App) ExecuteTemplateQuery(req services.TemplateExecuteRequest) (*services.QueryResult, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
-	if templateId <= 0 {
+	if req.TemplateID <= 0 {
 		return nil, fmt.Errorf("请先选择 SQL 模板")
 	}
 
-	return a.dbService.ExecuteTemplateQuery(services.TemplateExecuteRequest{
-		TemplateID: templateId,
-		ConnID:     connId,
-		Variables:  variables,
-		Page:       page,
-		PageSize:   pageSize,
-	})
+	return a.dbService.ExecuteTemplateQuery(req)
 }

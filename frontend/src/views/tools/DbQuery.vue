@@ -55,8 +55,13 @@ const running = ref(false)
 const paginationEnabled = ref(false)
 /** 当前页码，从 1 开始 */
 const page = ref(1)
-/** 每页条数，取自模板配置 */
+/**
+ * 每页条数：属于当前 Tab 的私有状态，不写入模板。
+ * 这样同一个模板在不同标签页可以各用各的分页大小。
+ */
 const pageSize = ref(DEFAULT_PAGE_SIZE)
+/** 上一次执行得到的总数，翻页时带回后端以避免重复统计 */
+const lastTotal = ref(0)
 
 /** 连接管理弹窗 */
 const connectionDialogVisible = ref(false)
@@ -113,7 +118,6 @@ async function loadTemplateConfig(id: number | null) {
     variableConfigs.value = parseJSON<VariableConfig[]>(tpl.variables, [])
     fieldMappings.value = parseJSON<FieldMapping[]>(tpl.fieldMappings, [])
     paginationEnabled.value = tpl.paginationEnabled
-    pageSize.value = tpl.pageSize > 0 ? tpl.pageSize : DEFAULT_PAGE_SIZE
 
     // 连接未显式选择时，跟随模板配置
     if (!connId.value && tpl.connId) {
@@ -147,9 +151,12 @@ function parseJSON<T>(raw: string, fallback: T): T {
 
 /**
  * 执行查询。
+ *
  * targetPage 为要查询的页码；模板未开启分页时后端会忽略该参数。
+ * reuseTotal 为真表示翻页：沿用上次的总数，后端不再重复统计，
+ * 只有重新执行（新条件、改页大小、换模板/连接）时才重新统计。
  */
-async function handleRun(targetPage = 1) {
+async function handleRun(targetPage = 1, reuseTotal = false) {
   if (!templateId.value) {
     ElMessage.warning('请先选择 SQL 模板')
     return
@@ -163,22 +170,19 @@ async function handleRun(targetPage = 1) {
   const values = formRef.value?.getValues() ?? variableValues.value
   const requestPage = paginationEnabled.value ? Math.max(targetPage, 1) : 0
 
-  logStore.logInfo(
-    paginationEnabled.value
-      ? `使用模板「${currentTemplate.value?.name ?? templateId.value}」查询第 ${requestPage} 页`
-      : `使用模板「${currentTemplate.value?.name ?? templateId.value}」开始执行`,
-  )
-
   try {
     // 只传模板 ID 与变量值；SQL 与脚本由后端从模板读取
-    const data = await executeTemplateQuery(
-      templateId.value,
-      connId.value,
-      values,
-      requestPage,
-      paginationEnabled.value ? pageSize.value : 0,
-    )
+    const data = await executeTemplateQuery({
+      templateId: templateId.value,
+      connId: connId.value,
+      variables: values,
+      page: requestPage,
+      pageSize: paginationEnabled.value ? pageSize.value : 0,
+      total: reuseTotal ? lastTotal.value : 0,
+      countTotal: !reuseTotal,
+    })
     result.value = data
+    lastTotal.value = data.total
     // 以服务端返回的页码为准，避免页码越界后界面与数据不一致
     page.value = data.page > 0 ? data.page : 1
     if (data.pageSize > 0) {
@@ -207,6 +211,26 @@ async function handleRun(targetPage = 1) {
   }
 }
 
+/**
+ * 翻页：沿用上次统计到的总数，后端不再重复统计。
+ */
+function changePage(target: number) {
+  void handleRun(target, true)
+}
+
+/**
+ * 修改每页条数：回到第一页重新查询。
+ * 总数与页大小无关，已有总数时同样可以复用。
+ */
+function changePageSize(size: number) {
+  if (size <= 0 || size === pageSize.value) {
+    return
+  }
+  pageSize.value = size
+  page.value = 1
+  void handleRun(1, lastTotal.value > 0)
+}
+
 // ------------------------------------------------------------ 状态同步
 
 /**
@@ -227,6 +251,7 @@ function notifyChange() {
     templateId: templateId.value,
     connId: connId.value,
     variableValues: values,
+    pageSize: pageSize.value,
   }
 
   const signature = JSON.stringify(payload)
@@ -238,9 +263,9 @@ function notifyChange() {
   emit('change', props.tabId, payload)
 }
 
-/** 仅在模板/连接变化时上报；变量值由表单的 change 事件主动触发上报 */
+/** 模板/连接/每页条数变化时上报；变量值由表单的 change 事件主动触发上报 */
 watch(
-  () => JSON.stringify([templateId.value, connId.value]),
+  () => JSON.stringify([templateId.value, connId.value, pageSize.value]),
   () => notifyChange(),
 )
 
@@ -249,6 +274,14 @@ watch(templateId, id => {
   void loadTemplateConfig(id)
   result.value = null
   page.value = 1
+  lastTotal.value = 0
+})
+
+/** 切换连接后原结果不再对应当前库，清空并重置分页 */
+watch(connId, () => {
+  result.value = null
+  page.value = 1
+  lastTotal.value = 0
 })
 
 /** 模板管理弹窗关闭后刷新模板列表，保证新建/修改后的模板立即可用 */
@@ -270,6 +303,9 @@ onMounted(async () => {
   connId.value = (props.initialPayload.connId as number) ?? null
   variableValues.value =
     (props.initialPayload.variableValues as Record<string, unknown>) ?? {}
+  // 每页条数是本标签的私有状态，从 payload 恢复
+  const savedPageSize = Number(props.initialPayload.pageSize)
+  pageSize.value = savedPageSize > 0 ? savedPageSize : DEFAULT_PAGE_SIZE
 
   await Promise.all([loadTemplates(), loadConnections()])
 
@@ -357,6 +393,7 @@ onMounted(async () => {
           :conn-id="connId"
           inline
           @change="notifyChange"
+          @submit="handleRun()"
         />
       </section>
 
@@ -385,7 +422,8 @@ onMounted(async () => {
           :total="result.total"
           :page-count="result.pageCount"
           :loading="running"
-          @change="handleRun"
+          @change="changePage"
+          @size-change="changePageSize"
         />
       </section>
     </div>

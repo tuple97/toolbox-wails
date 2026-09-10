@@ -29,7 +29,8 @@ function renderCell(row: Record<string, unknown>, column: string) {
 </script>
 
 <template>
-  <div class="result-table">
+  <!-- selectable：允许选中表头与单元格文本，便于 Ctrl+C 复制 -->
+  <div class="result-table selectable">
     <el-table
       :data="result.rows"
       size="small"
@@ -85,6 +86,17 @@ function renderCell(row: Record<string, unknown>, column: string) {
 
 .result-table :deep(.el-table) {
   background: transparent;
+}
+
+/*
+ * 允许选中与复制：表头与单元格都要放开 user-select，
+ * body 上的全局禁选（桌面应用观感）不适用于结果集。
+ */
+.result-table :deep(.el-table__cell),
+.result-table :deep(.el-table__header-wrapper),
+.result-table :deep(.el-table__body-wrapper) {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .result-table :deep(.el-table__cell) {

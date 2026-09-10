@@ -19,6 +19,12 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: 'change', values: Record<string, unknown>): void
+  /**
+   * 条件区按下回车。
+   * 单行输入框在 <form> 内回车会触发原生提交，若不拦截会导致整页重载，
+   * 因此统一在表单上 preventDefault 后，把回车转成「执行查询」交给父组件。
+   */
+  (e: 'submit'): void
 }>()
 
 /** 各变量的当前取值 */
@@ -206,11 +212,17 @@ watch(
       模板中未检测到变量。在 SQL 中使用 <code>&#123;&#123; 变量名 &#125;&#125;</code> 即可自动识别。
     </p>
 
+    <!--
+      横向模式：条件名与控件同一行，两者作为整体参与换行，
+      避免条件名与控件被拆到两行。
+    -->
     <el-form
       v-else
-      label-position="top"
+      :label-position="inline ? 'right' : 'top'"
+      :label-width="inline ? '96px' : 'auto'"
       size="default"
       :class="{ 'dynamic-form__grid': inline }"
+      @submit.prevent="emit('submit')"
     >
       <el-form-item
         v-for="config in configs"
@@ -348,19 +360,34 @@ watch(
   color: var(--text-muted);
 }
 
-/* 横向排布：变量按固定宽度换行铺开，适合放在结果区上方的条件区 */
+/*
+ * 横向排布：每个条件（label + 控件）是一个不可拆分的整体，
+ * 宽度不够时整体换到下一行，而不是把 label 与控件拆开。
+ */
 .dynamic-form__grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 0 16px;
+  align-items: flex-start;
+  gap: 10px 16px;
 }
 
 .dynamic-form :deep(.dynamic-form__grid .el-form-item) {
-  flex: 0 0 240px;
+  flex: 0 0 auto;
+  width: 280px;
   margin-right: 0;
+  margin-bottom: 0;
+}
+
+.dynamic-form :deep(.dynamic-form__grid .el-form-item__label) {
+  padding-bottom: 0;
+  line-height: 24px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dynamic-form :deep(.dynamic-form__grid .el-form-item__content) {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
 }
 </style>

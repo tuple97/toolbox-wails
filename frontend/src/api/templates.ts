@@ -11,6 +11,7 @@ import {
 import type {
   QueryResult,
   SQLTemplate,
+  TemplateExecuteRequest,
   TemplateListItem,
 } from '@/types'
 
@@ -28,7 +29,7 @@ function toTemplate(raw: {
   preScript: string
   postScript: string
   paginationEnabled: boolean
-  pageSize: number
+  pageSize?: number
 }): SQLTemplate {
   return {
     id: raw.id,
@@ -40,7 +41,7 @@ function toTemplate(raw: {
     preScript: raw.preScript,
     postScript: raw.postScript,
     paginationEnabled: Boolean(raw.paginationEnabled),
-    pageSize: Number(raw.pageSize) > 0 ? Number(raw.pageSize) : DEFAULT_PAGE_SIZE,
+    pageSize: Number(raw.pageSize) || 0,
   }
 }
 
@@ -62,7 +63,8 @@ export async function fetchTemplate(id: number): Promise<SQLTemplate> {
 
 /** 保存模板；id 为 0 时新增 */
 export function persistTemplate(tpl: SQLTemplate): Promise<number> {
-  return SaveSqlTemplate(tpl)
+  // pageSize 为后端保留字段，界面上已由各标签页的翻页控件决定
+  return SaveSqlTemplate({ ...tpl, pageSize: tpl.pageSize ?? 0 })
 }
 
 /** 删除模板 */
@@ -91,20 +93,14 @@ export function validateScript(source: string): Promise<void> {
 /**
  * 按模板执行查询。
  * 前端只传模板 ID 与变量值，SQL/脚本由后端从模板读取，保证模板更新即时生效。
- * page 与 pageSize 仅在模板开启分页时被后端采纳，未开启时传 0 即可。
+ * page / pageSize 仅在模板开启分页时被后端采纳，未开启时传 0 即可。
  */
-export function executeTemplateQuery(
-  templateId: number,
-  connId: number,
-  variables: Record<string, unknown>,
-  page = 0,
-  pageSize = 0,
-): Promise<QueryResult> {
-  return ExecuteTemplateQuery(
-    templateId,
-    connId,
-    variables,
-    page,
-    pageSize,
-  ) as unknown as Promise<QueryResult>
+export function executeTemplateQuery(req: TemplateExecuteRequest): Promise<QueryResult> {
+  return ExecuteTemplateQuery({
+    ...req,
+    page: req.page ?? 0,
+    pageSize: req.pageSize ?? 0,
+    total: req.total ?? 0,
+    countTotal: req.countTotal ?? false,
+  }) as unknown as Promise<QueryResult>
 }

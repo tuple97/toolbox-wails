@@ -72,6 +72,8 @@ export function executeQuery(req: ExecuteRequest): Promise<QueryResult> {
     ...req,
     page: req.page ?? 0,
     pageSize: req.pageSize ?? 0,
+    total: req.total ?? 0,
+    countTotal: req.countTotal ?? false,
   })
 }
 

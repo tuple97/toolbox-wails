@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 import type { editor } from 'monaco-editor'
 import { useConfigStore } from '@/stores/configStore'
+import { APP_THEME_DARK, APP_THEME_LIGHT } from '@/utils/logLanguage'
 
 const props = withDefaults(defineProps<{
   /** 编辑内容（v-model） */
@@ -35,12 +36,18 @@ const emit = defineEmits<{
 
 const configStore = useConfigStore()
 
-/** 编辑器主题跟随全局配置 */
+/**
+ * 编辑器主题跟随全局配置。
+ *
+ * 所有编辑器统一使用应用主题（vs-dark / vs 的扩展版），
+ * 不直接使用 vs-dark / vs——Monaco 主题是全局的，
+ * 否则任一编辑器切到内置主题都会覆盖掉日志的自定义 token 颜色。
+ */
 const editorTheme = computed(() => {
   if (props.theme) {
     return props.theme
   }
-  return configStore.theme === 'dark' ? 'vs-dark' : 'vs'
+  return configStore.theme === 'dark' ? APP_THEME_DARK : APP_THEME_LIGHT
 })
 
 /** 编辑器配置；字号响应全局设置 */
@@ -54,9 +61,17 @@ const editorOptions = computed<editor.IStandaloneEditorConstructionOptions>(() =
   wordWrap: 'on',
   readOnly: props.readonly,
   renderLineHighlight: props.readonly ? 'none' : 'line',
+  // 关闭 Monaco 自带右键菜单，统一走应用自定义菜单策略
+  contextmenu: false,
   // 只读 / 日志场景关闭智能提示，避免误交互
   quickSuggestions: props.disableSuggestions ? false : undefined,
   suggestOnTriggerCharacters: !props.disableSuggestions,
+  // 概览标尺（滚动条旁的「全文预览」标记）在本应用所有编辑器里都不需要，统一关闭
+  overviewRulerLanes: 0,
+  overviewRulerBorder: false,
+  hideCursorInOverviewRuler: true,
+  // 滚动时顶部不再悬浮当前行的「粘性」预览
+  stickyScroll: { enabled: false },
   scrollbar: {
     verticalScrollbarSize: 8,
     horizontalScrollbarSize: 8,

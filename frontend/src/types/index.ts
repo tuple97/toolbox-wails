@@ -68,8 +68,8 @@ export interface SQLTemplate {
   postScript: string
   /** 查询结果是否分页展示 */
   paginationEnabled: boolean
-  /** 每页条数，仅在 paginationEnabled 为真时生效 */
-  pageSize: number
+  /** 每页条数保留字段：实际页大小由每个标签页的翻页控件决定 */
+  pageSize?: number
 }
 
 /** 词典，与后端 database.Dictionary 对应 */
@@ -124,6 +124,10 @@ export interface ExecuteRequest {
   page?: number
   /** 每页条数；小于等于 0 时取后端默认值 */
   pageSize?: number
+  /** 上一次的总数；翻页时带回可跳过重新统计 */
+  total?: number
+  /** 是否重新统计总数 */
+  countTotal?: boolean
 }
 
 /** 模板执行请求，与后端 services.TemplateExecuteRequest 对应 */
@@ -132,9 +136,13 @@ export interface TemplateExecuteRequest {
   connId: number
   variables: Record<string, unknown>
   /** 页码，从 1 开始；仅模板开启分页时生效 */
-  page: number
-  /** 每页条数；小于等于 0 时取模板配置值 */
-  pageSize: number
+  page?: number
+  /** 每页条数；小于等于 0 时取后端默认值 */
+  pageSize?: number
+  /** 上一次返回的总数；翻页时带回可跳过重新统计 */
+  total?: number
+  /** 是否重新统计总数；翻页时为 false，重新执行时为 true */
+  countTotal?: boolean
 }
 
 
@@ -254,4 +262,6 @@ export interface DbQueryPayload {
   connId: number | null
   /** 上次填写的变量值，用于恢复表单 */
   variableValues?: Record<string, unknown>
+  /** 该标签自己的每页条数，不随模板保存 */
+  pageSize?: number
 }

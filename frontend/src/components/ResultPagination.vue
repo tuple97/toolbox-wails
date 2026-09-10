@@ -18,7 +18,11 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: 'change', page: number): void
+  (e: 'size-change', pageSize: number): void
 }>()
+
+/** 可选的每页条数 */
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 200, 500]
 
 /** 跳转输入框的临时页码 */
 const jumpPage = ref(props.page)
@@ -78,6 +82,20 @@ function go(target: number) {
       >
         跳转
       </el-button>
+
+      <el-select
+        :model-value="pageSize"
+        class="result-pagination__size"
+        size="small"
+        @update:model-value="emit('size-change', Number($event))"
+      >
+        <el-option
+          v-for="size in PAGE_SIZE_OPTIONS"
+          :key="size"
+          :label="`${size} 条/页`"
+          :value="size"
+        />
+      </el-select>
     </div>
   </div>
 </template>
@@ -112,5 +130,10 @@ function go(target: number) {
 
 .result-pagination__jump-input {
   width: 88px;
+}
+
+.result-pagination__size {
+  width: 108px;
+  margin-left: 4px;
 }
 </style>

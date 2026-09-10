@@ -19,6 +19,7 @@ import cssWorker from 'monaco-editor/language/css/css.worker?worker'
 import htmlWorker from 'monaco-editor/language/html/html.worker?worker'
 import tsWorker from 'monaco-editor/language/typescript/ts.worker?worker'
 import { loader } from '@guolao/vue-monaco-editor'
+import { registerLogLanguage } from './logLanguage'
 
 /** 是否已完成初始化，避免重复配置 */
 let initialized = false
@@ -56,4 +57,7 @@ export function setupMonaco() {
 
   // 使用本地打包的 monaco 实例，禁止回退到 CDN
   loader.config({ monaco })
+
+  // 注册执行记录面板的自定义日志语言与主题
+  registerLogLanguage(monaco)
 }

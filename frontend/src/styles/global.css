@@ -207,6 +207,17 @@ html:not(.dark) {
   --el-drawer-bg-color: var(--el-bg-color-overlay);
 }
 
+/*
+ * 彻底隐藏 Monaco 的概览标尺（滚动条旁的「全文预览」标记）。
+ * options 里的 overviewRulerLanes: 0 负责从源头关闭，
+ * 这里再兜底一次：热更新时已存在的编辑器实例不会重建，仅改 options 可能不生效。
+ */
+.monaco-editor .decorationsOverviewRuler,
+.monaco-editor .monaco-scrollable-element > .decorationsOverviewRuler {
+  display: none !important;
+  width: 0 !important;
+}
+
 /* 滚动条美化，贴近原生观感 */
 ::-webkit-scrollbar {
   width: 10px;

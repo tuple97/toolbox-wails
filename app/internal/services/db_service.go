@@ -86,6 +86,10 @@ type ExecuteRequest struct {
 	Page int `json:"page"`
 	// PageSize 每页条数；小于等于 0 时取默认值
 	PageSize int `json:"pageSize"`
+	// Total 调用方缓存的总数；用于翻页时跳过统计
+	Total int64 `json:"total"`
+	// CountTotal 是否重新统计总数；首次执行与条件变化时应置真
+	CountTotal bool `json:"countTotal"`
 }
 
 // Execute 执行查询的完整链路：
@@ -123,8 +127,13 @@ func (s *DBService) Execute(req ExecuteRequest) (*QueryResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
 
-	// 3.1 分页：先统计总量，再按页取数。
-	// 统计与取数都基于同一份渲染结果，保证总数与分页口径一致。
+	// 3.1 分页：先确定总量，再按页取数。
+	//
+	// 总量的获取有两种途径：
+	//   - CountTotal 为真（首次执行或查询条件变化）：真实统计一次；
+	//   - 否则沿用调用方带回的上次总数（翻页场景），省掉一次全量扫描。
+	// 翻页复用总数属于「最终一致」：期间数据有增删时页数可能略有偏差，
+	// 用户重新执行查询（CountTotal 为真）即会刷新。
 	total := int64(0)
 	page := 1
 	pageSize := 0
@@ -138,9 +147,13 @@ func (s *DBService) Execute(req ExecuteRequest) (*QueryResult, error) {
 		}
 		page = req.Page
 
-		total, err = queryTotal(ctx, db, finalSQL)
-		if err != nil {
-			return nil, err
+		if req.CountTotal || req.Total <= 0 {
+			total, err = queryTotal(ctx, db, finalSQL)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			total = req.Total
 		}
 		finalSQL = applyPagination(finalSQL, pageSize, (page-1)*pageSize)
 	}
@@ -312,6 +325,10 @@ type TemplateExecuteRequest struct {
 	Page int `json:"page"`
 	// PageSize 每页条数；小于等于 0 时取模板配置值
 	PageSize int `json:"pageSize"`
+	// Total 上一次返回的总数；翻页时带回可避免重复统计
+	Total int64 `json:"total"`
+	// CountTotal 是否重新统计总数；翻页时为 false
+	CountTotal bool `json:"countTotal"`
 }
 
 // ExecuteTemplateQuery 按模板执行查询。
@@ -345,9 +362,6 @@ func (s *DBService) ExecuteTemplateQuery(req TemplateExecuteRequest) (*QueryResu
 		}
 		pageSize = req.PageSize
 		if pageSize <= 0 {
-			pageSize = tpl.PageSize
-		}
-		if pageSize <= 0 {
 			pageSize = defaultPageSize
 		}
 		if pageSize > maxPageSize {
@@ -363,6 +377,8 @@ func (s *DBService) ExecuteTemplateQuery(req TemplateExecuteRequest) (*QueryResu
 		PostScript:  tpl.PostScript,
 		Page:        page,
 		PageSize:    pageSize,
+		Total:       req.Total,
+		CountTotal:  req.CountTotal,
 	})
 }
 
@@ -490,30 +506,184 @@ func trimTrailingSemicolon(query string) string {
 }
 
 // queryTotal 统计查询的总数据量。
-// 做法是把原 SQL 作为派生表包一层 COUNT(*)，
-// 这样无需解析原 SQL 的 SELECT 列表，天然支持任意查询。
+// 先用 buildCountSQL 尽量把原 SQL 改写成 COUNT(*)（能去掉无用的 ORDER BY、
+// 避免派生表物化），改写不安全时再退回「包一层子查询」的通用做法。
 func queryTotal(ctx context.Context, db *sql.DB, query string) (int64, error) {
 	var total int64
-	countSQL := fmt.Sprintf(
-		"SELECT COUNT(*) FROM (%s) AS __toolbox_total",
-		trimTrailingSemicolon(query),
-	)
-	if err := db.QueryRowContext(ctx, countSQL).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, buildCountSQL(query)).Scan(&total); err != nil {
 		return 0, fmt.Errorf("统计总数据量失败: %w", err)
 	}
 	return total, nil
 }
 
+// buildCountSQL 生成统计总数的 SQL。
+//
+// 优先级：
+//  1. 简单查询（无 distinct / group by / having / union / CTE）→
+//     直接把 SELECT 列表替换成 COUNT(*)，并去掉末尾 ORDER BY；
+//  2. 其余情况 → SELECT COUNT(*) FROM (原SQL) AS __toolbox_total。
+//
+// 第 1 种能显著减少开销：数据库无需物化整个结果集，也无需做无意义的排序。
+func buildCountSQL(query string) string {
+	base := trimTrailingSemicolon(query)
+	if simple, ok := rewriteAsCount(base); ok {
+		return simple
+	}
+	return fmt.Sprintf(
+		"SELECT COUNT(*) FROM (%s) AS __toolbox_total",
+		stripTrailingOrderBy(base),
+	)
+}
+
+// rewriteAsCount 把「SELECT 列表 … FROM …」改写为「SELECT COUNT(*) FROM …」。
+// 仅在不改变语义的前提下改写，否则返回 ok=false 交由调用方兜底。
+func rewriteAsCount(query string) (string, bool) {
+	// 含这些子句时行数与 SELECT 列表相关，改写会改变计数结果
+	for _, keyword := range []string{"distinct", "group by", "having", "union"} {
+		if indexOfTopLevelKeyword(query, keyword) >= 0 {
+			return "", false
+		}
+	}
+
+	// CTE（WITH …）无法简单替换 SELECT 列表，交给通用兜底
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(query)), "select") {
+		return "", false
+	}
+
+	fromIdx := indexOfTopLevelKeyword(query, "from")
+	if fromIdx <= 0 {
+		return "", false
+	}
+
+	countSQL := "SELECT COUNT(*) " + query[fromIdx:]
+	return stripTrailingOrderBy(countSQL), true
+}
+
+// stripTrailingOrderBy 去掉 SQL 末尾最外层的 ORDER BY 及其之后的内容。
+// 计数不需要排序，留着它只会让数据库多一次排序（PostgreSQL 尤其明显）。
+func stripTrailingOrderBy(query string) string {
+	idx := indexOfTopLevelKeyword(query, "order by")
+	if idx <= 0 {
+		return query
+	}
+	return strings.TrimSpace(query[:idx])
+}
+
+// indexOfTopLevelKeyword 在最外层（不在子查询、引号、注释内）查找关键字。
+// 返回字节下标，未找到返回 -1。
+//
+// 关键字两侧必须是非标识符字符，避免把 ordering 之类字段名误判为 order by。
+func indexOfTopLevelKeyword(query, keyword string) int {
+	// 逐字节做 ASCII 大小写无关比较，避免 ToLower 改变字节长度导致下标错位
+	target := strings.ToLower(keyword)
+	depth := 0
+	inSingle, inDouble, inBacktick := false, false, false
+	inLineComment, inBlockComment := false, false
+
+	quoted := func() bool { return inSingle || inDouble || inBacktick }
+
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+
+		if inLineComment {
+			if c == '\n' {
+				inLineComment = false
+			}
+			continue
+		}
+		if inBlockComment {
+			if c == '*' && i+1 < len(query) && query[i+1] == '/' {
+				inBlockComment = false
+				i++
+			}
+			continue
+		}
+
+		switch c {
+		case '\'':
+			if !quoted() || inSingle {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !quoted() || inDouble {
+				inDouble = !inDouble
+			}
+		case '`':
+			if !quoted() || inBacktick {
+				inBacktick = !inBacktick
+			}
+		case '-':
+			if !quoted() && i+1 < len(query) && query[i+1] == '-' {
+				inLineComment = true
+				i++
+			}
+		case '/':
+			if !quoted() && i+1 < len(query) && query[i+1] == '*' {
+				inBlockComment = true
+				i++
+			}
+		case '(':
+			if !quoted() {
+				depth++
+			}
+		case ')':
+			if !quoted() {
+				depth--
+			}
+		}
+
+		if quoted() || inLineComment || inBlockComment || depth != 0 {
+			continue
+		}
+
+		if i+len(target) <= len(query) && strings.EqualFold(query[i:i+len(target)], target) {
+			prevOK := i == 0 || !isSQLIdentChar(query[i-1])
+			next := i + len(target)
+			nextOK := next >= len(query) || !isSQLIdentChar(query[next])
+			if prevOK && nextOK {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// isSQLIdentChar 判断字符是否可作为 SQL 标识符的一部分。
+func isSQLIdentChar(c byte) bool {
+	return c == '_' || c == '$' ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9')
+}
+
 // applyPagination 为查询追加 LIMIT / OFFSET。
-// MySQL 与 PostgreSQL 均支持 LIMIT n OFFSET m 写法，故无需按库型分支。
+//
+// 绝大多数情况直接在原 SQL 末尾追加即可（MySQL 与 PostgreSQL 写法一致），
+// 这样数据库无需物化派生表，SQL 也更容易阅读。
+// 只有原 SQL 自带 limit / offset 时才包一层派生表——
+// 否则追加的 LIMIT 会改变原有语义（例如模板里已写死 LIMIT 10）。
+//
+// 末尾若存在行注释（-- ...），换行后追加的 LIMIT 落在新行，不会被注释掉。
 func applyPagination(query string, pageSize, offset int) string {
 	if offset < 0 {
 		offset = 0
 	}
-	return fmt.Sprintf(
-		"SELECT * FROM (%s) AS __toolbox_page LIMIT %d OFFSET %d",
-		trimTrailingSemicolon(query), pageSize, offset,
-	)
+
+	base := trimTrailingSemicolon(query)
+	hasOwnLimit := indexOfTopLevelKeyword(base, "limit") >= 0 ||
+		indexOfTopLevelKeyword(base, "offset") >= 0
+
+	if hasOwnLimit {
+		return fmt.Sprintf(
+			"SELECT * FROM (%s) AS __toolbox_page LIMIT %d OFFSET %d",
+			base, pageSize, offset,
+		)
+	}
+
+	if offset == 0 {
+		return fmt.Sprintf("%s\nLIMIT %d", base, pageSize)
+	}
+	return fmt.Sprintf("%s\nLIMIT %d OFFSET %d", base, pageSize, offset)
 }
 
 // normalizeValue 把驱动返回的原始值转为 JSON 友好的类型。

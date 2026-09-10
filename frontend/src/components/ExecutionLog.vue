@@ -2,6 +2,7 @@
 import { computed, nextTick, watch } from 'vue'
 import MonacoEditor from '@/components/MonacoEditor.vue'
 import { useLogStore } from '@/stores/logStore'
+import { LOG_LANGUAGE_ID } from '@/utils/logLanguage'
 
 const logStore = useLogStore()
 
@@ -60,9 +61,8 @@ watch(() => logStore.entries.length, async () => {
     <div v-show="logStore.expanded" class="log-panel__body">
       <MonacoEditor
         :model-value="logText"
-        language="plaintext"
+        :language="LOG_LANGUAGE_ID"
         readonly
-        :show-line-numbers="false"
         disable-suggestions
         :height="PANEL_HEIGHT"
       />
@@ -115,5 +115,16 @@ watch(() => logStore.entries.length, async () => {
 .log-panel--collapsed .log-panel__body {
   height: 0;
   display: none;
+}
+
+/*
+ * 日志编辑器背景透明，透出面板底色。
+ * Monaco 的编辑器主题是全局共用的，不能为了日志把主题背景改成透明，
+ * 因此这里用样式覆盖（需要 !important 压过 Monaco 的内联样式）。
+ */
+.log-panel__body :deep(.monaco-editor),
+.log-panel__body :deep(.monaco-editor .monaco-editor-background),
+.log-panel__body :deep(.monaco-editor .margin) {
+  background: transparent !important;
 }
 </style>

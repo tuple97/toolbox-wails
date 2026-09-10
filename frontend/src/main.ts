@@ -28,4 +28,29 @@ app.use(ElementPlus, { locale: zhCn })
 // 这里先默认暗色，避免首帧闪白。
 document.documentElement.classList.add('dark')
 
+/**
+ * 全局屏蔽浏览器默认右键菜单。
+ *
+ * 只有「真正的输入场景」保留原生菜单（便于复制/粘贴），
+ * Monaco 内部的隐藏输入框不算输入场景，它自带的右键菜单也一并关闭。
+ * 后续需要右键菜单的位置，由对应组件自行渲染自定义菜单。
+ */
+document.addEventListener('contextmenu', (event) => {
+  if (shouldKeepNativeMenu(event.target)) {
+    return
+  }
+  event.preventDefault()
+})
+
+/** 判断事件目标是否属于需要保留原生菜单的输入控件 */
+function shouldKeepNativeMenu(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  if (target.closest('.monaco-editor')) {
+    return false
+  }
+  return Boolean(target.closest('input, textarea, [contenteditable="true"]'))
+}
+
 app.mount('#app')
