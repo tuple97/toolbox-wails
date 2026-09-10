@@ -1,0 +1,223 @@
+/*
+ * 主题变量。
+ * html 上带 .dark 时为暗色（默认），否则为亮色。
+ * 应用启动时由 configStore 根据后端配置切换该类名。
+ */
+:root {
+  --radius-lg: 16px;
+  --radius-md: 10px;
+  --font-mono: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  --titlebar-height: 40px;
+  /* 界面字体大小，由设置面板动态写入 */
+  --app-font-size: 13px;
+  --titlebar-bg: rgba(255, 255, 255, 0.85);
+  --panel-bg: rgba(255, 255, 255, 0.7);
+}
+
+/* 暗色主题 */
+html.dark {
+  --bg-color: #0f172a;
+  --bg-color-soft: #16213c;
+  --surface-color: rgba(255, 255, 255, 0.04);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --text-color: #e2e8f0;
+  --text-muted: #94a3b8;
+  --brand-color: #38bdf8;
+  --brand-color-strong: #6366f1;
+  --danger-color: #f87171;
+  --shadow-md: 0 18px 40px rgba(2, 6, 23, 0.45);
+  --titlebar-bg: rgba(12, 18, 34, 0.82);
+  --panel-bg: rgba(8, 13, 26, 0.6);
+}
+
+/* 亮色主题 */
+html:not(.dark) {
+  --bg-color: #f1f5f9;
+  --bg-color-soft: #e2e8f0;
+  --surface-color: rgba(15, 23, 42, 0.03);
+  --border-color: rgba(15, 23, 42, 0.12);
+  --text-color: #1e293b;
+  --text-muted: #64748b;
+  --brand-color: #0284c7;
+  --brand-color-strong: #4f46e5;
+  --danger-color: #dc2626;
+  --shadow-md: 0 18px 40px rgba(15, 23, 42, 0.12);
+  --titlebar-bg: rgba(255, 255, 255, 0.85);
+  --panel-bg: rgba(248, 250, 252, 0.8);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  color: var(--text-color);
+  font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
+    "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+    "Microsoft YaHei", sans-serif;
+  /* 字号由设置面板通过 --app-font-size 控制 */
+  font-size: var(--app-font-size);
+  -webkit-font-smoothing: antialiased;
+
+  /* 类似原生应用：默认禁止选中文本与拖拽 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  /*
+   * 注意：不要把 cursor 写在 body 上。
+   * Wails 的边缘缩放通过 document.documentElement.style.cursor 设置鼠标样式，
+   * 而 body 上的 cursor 规则优先级更高，会覆盖该内联样式，导致拖拽边缘时指针不变。
+   */
+}
+
+/*
+ * 默认右键菜单全局关闭，统一使用自定义右键菜单。
+ * 输入框、文本域等需要系统菜单的场景通过 --default-contextmenu: show 单独放开；
+ * 该变量由 Wails 内置运行时读取（见 runtime/desktop/contextmenu.js）。
+ */
+:root {
+  --default-contextmenu: hide;
+}
+
+/* 允许输入类控件的文本选中与系统右键菜单 */
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: auto;
+  --default-contextmenu: show;
+}
+
+/* 需要复制内容的区域可通过该类开放选中 */
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 主题化背景：暗色用深蓝渐变，亮色用浅灰渐变 */
+html.dark body {
+  background:
+    radial-gradient(1000px 600px at 15% -10%, rgba(56, 189, 248, 0.18), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(99, 102, 241, 0.2), transparent 55%),
+    var(--bg-color);
+}
+
+html:not(.dark) body {
+  background:
+    radial-gradient(1000px 600px at 15% -10%, rgba(2, 132, 199, 0.1), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(79, 70, 229, 0.08), transparent 55%),
+    var(--bg-color);
+}
+
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 400;
+  src: local(""), url("../assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+}
+
+#app {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 工具栏之下的内容区域，独立滚动 */
+.app-main {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/*
+ * Element Plus 主题对齐。
+ *
+ * 暗色：覆写为深蓝配色，与自定义工具栏一致。
+ * 亮色：不覆写，直接使用 Element Plus 默认亮色变量 + dark/css-vars 的
+ *       非激活状态，保证亮色主题也能正常显示。
+ */
+html.dark {
+  --el-color-primary: #38bdf8;
+  --el-color-primary-light-3: #2ea6d8;
+  --el-color-primary-light-5: #2285ad;
+  --el-color-primary-light-7: #176483;
+  --el-color-primary-light-8: #114257;
+  --el-color-primary-light-9: #0b2130;
+  --el-color-primary-dark-2: #5ccbfa;
+  --el-color-danger: #f87171;
+  --el-color-success: #34d399;
+  --el-color-warning: #fbbf24;
+
+  --el-bg-color: #0f172a;
+  --el-bg-color-overlay: #16213c;
+  --el-bg-color-page: #0b1120;
+  --el-text-color-primary: #e2e8f0;
+  --el-text-color-regular: #cbd5e1;
+  --el-text-color-secondary: #94a3b8;
+  --el-text-color-placeholder: #64748b;
+  --el-border-color: rgba(255, 255, 255, 0.12);
+  --el-border-color-light: rgba(255, 255, 255, 0.08);
+  --el-border-color-lighter: rgba(255, 255, 255, 0.06);
+  --el-fill-color-blank: rgba(255, 255, 255, 0.03);
+  --el-fill-color-light: rgba(255, 255, 255, 0.05);
+  --el-mask-color: rgba(2, 6, 23, 0.7);
+}
+
+/* 亮色下主色调调整为更深的蓝，保证在白底上的对比度 */
+html:not(.dark) {
+  --el-color-primary: #0284c7;
+  --el-bg-color-overlay: #ffffff;
+}
+
+/* 表格贴合暗色背景 */
+.el-table {
+  --el-table-border-color: var(--border-color);
+  --el-table-header-bg-color: rgba(255, 255, 255, 0.04);
+  --el-table-tr-bg-color: transparent;
+  --el-table-row-hover-bg-color: rgba(56, 189, 248, 0.08);
+  --el-table-bg-color: transparent;
+  background: transparent;
+}
+
+/* 弹窗与抽屉统一圆角与背景 */
+.el-dialog,
+.el-drawer {
+  --el-dialog-bg-color: var(--el-bg-color-overlay);
+  --el-drawer-bg-color: var(--el-bg-color-overlay);
+}
+
+/* 滚动条美化，贴近原生观感 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.35);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
+  background-clip: content-box;
+}
