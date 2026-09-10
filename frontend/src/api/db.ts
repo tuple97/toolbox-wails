@@ -66,9 +66,13 @@ export function revealPassword(encrypted: string): Promise<string> {
   return RevealPassword(encrypted)
 }
 
-/** 执行查询 */
+/** 执行查询；未指定分页参数时按不分页处理 */
 export function executeQuery(req: ExecuteRequest): Promise<QueryResult> {
-  return ExecuteQuery(req)
+  return ExecuteQuery({
+    ...req,
+    page: req.page ?? 0,
+    pageSize: req.pageSize ?? 0,
+  })
 }
 
 /** 执行 SQL 以获取变量的动态下拉选项 */

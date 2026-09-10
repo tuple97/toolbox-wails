@@ -45,6 +45,12 @@ type ColumnMeta struct {
 	Type string `json:"type"`
 }
 
+// 分页参数的取值边界：与仓储层的落库约束保持一致。
+const (
+	defaultPageSize = 50
+	maxPageSize     = 1000
+)
+
 // QueryResult 描述一次查询的完整结果。
 type QueryResult struct {
 	// Columns 列元信息（保持数据库返回顺序）
@@ -59,6 +65,14 @@ type QueryResult struct {
 	RowCount int `json:"rowCount"`
 	// Truncated 是否因超出上限被截断
 	Truncated bool `json:"truncated"`
+	// Total 满足条件的数据总量；未分页时等于 RowCount
+	Total int64 `json:"total"`
+	// Page 当前页码，从 1 开始；未分页时为 1
+	Page int `json:"page"`
+	// PageSize 每页条数；未分页时为 0
+	PageSize int `json:"pageSize"`
+	// PageCount 总页数；未分页时为 1
+	PageCount int `json:"pageCount"`
 }
 
 // ExecuteRequest 描述一次查询请求。
@@ -68,6 +82,10 @@ type ExecuteRequest struct {
 	Variables   map[string]any `json:"variables"`
 	PreScript   string         `json:"preScript"`
 	PostScript  string         `json:"postScript"`
+	// Page 页码，从 1 开始；小于等于 0 表示不分页
+	Page int `json:"page"`
+	// PageSize 每页条数；小于等于 0 时取默认值
+	PageSize int `json:"pageSize"`
 }
 
 // Execute 执行查询的完整链路：
@@ -105,6 +123,28 @@ func (s *DBService) Execute(req ExecuteRequest) (*QueryResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
 
+	// 3.1 分页：先统计总量，再按页取数。
+	// 统计与取数都基于同一份渲染结果，保证总数与分页口径一致。
+	total := int64(0)
+	page := 1
+	pageSize := 0
+	if req.Page > 0 {
+		pageSize = req.PageSize
+		if pageSize <= 0 {
+			pageSize = defaultPageSize
+		}
+		if pageSize > maxPageSize {
+			pageSize = maxPageSize
+		}
+		page = req.Page
+
+		total, err = queryTotal(ctx, db, finalSQL)
+		if err != nil {
+			return nil, err
+		}
+		finalSQL = applyPagination(finalSQL, pageSize, (page-1)*pageSize)
+	}
+
 	start := time.Now()
 	rows, columns, truncated, err := queryRows(ctx, db, finalSQL)
 	if err != nil {
@@ -118,14 +158,39 @@ func (s *DBService) Execute(req ExecuteRequest) (*QueryResult, error) {
 		return nil, fmt.Errorf("后置脚本执行失败: %w", err)
 	}
 
-	return &QueryResult{
+	rowCount := len(post.Rows)
+	result := &QueryResult{
 		Columns:   columns,
 		Rows:      post.Rows,
 		SQL:       finalSQL,
 		ElapsedMs: elapsed,
-		RowCount:  len(post.Rows),
+		RowCount:  rowCount,
 		Truncated: truncated,
-	}, nil
+		Total:     int64(rowCount),
+		Page:      1,
+		PageCount: 1,
+	}
+
+	// 分页场景回填分页信息；未分页时 Total 即本次返回的行数
+	if pageSize > 0 {
+		result.Total = total
+		result.Page = page
+		result.PageSize = pageSize
+		result.PageCount = calcPageCount(total, pageSize)
+	}
+	return result, nil
+}
+
+// calcPageCount 由总条数与页大小计算总页数，空结果也记 1 页。
+func calcPageCount(total int64, pageSize int) int {
+	if pageSize <= 0 {
+		return 1
+	}
+	count := int((total + int64(pageSize) - 1) / int64(pageSize))
+	if count < 1 {
+		return 1
+	}
+	return count
 }
 
 // renderSQL 渲染 SQL 模板。
@@ -243,12 +308,19 @@ type TemplateExecuteRequest struct {
 	TemplateID int64          `json:"templateId"`
 	ConnID     int64          `json:"connId"`
 	Variables  map[string]any `json:"variables"`
+	// Page 请求的页码，从 1 开始；仅在模板开启分页时生效
+	Page int `json:"page"`
+	// PageSize 每页条数；小于等于 0 时取模板配置值
+	PageSize int `json:"pageSize"`
 }
 
 // ExecuteTemplateQuery 按模板执行查询。
 //
 // 与 Execute 的区别：SQL、脚本等均从模板表读取，前端只传模板 ID 与变量值。
 // 这样模板更新后，引用它的 Tab 无需同步即可在下次执行时生效。
+//
+// 分页完全由模板配置决定：模板开启分页时才传页码与页大小，
+// 未开启时清零分页参数，行为与从前一致。
 func (s *DBService) ExecuteTemplateQuery(req TemplateExecuteRequest) (*QueryResult, error) {
 	tpl, err := s.repo.GetTemplate(req.TemplateID)
 	if err != nil {
@@ -264,12 +336,33 @@ func (s *DBService) ExecuteTemplateQuery(req TemplateExecuteRequest) (*QueryResu
 		return nil, fmt.Errorf("模板未关联数据库连接，请先选择连接")
 	}
 
+	page := 0
+	pageSize := 0
+	if tpl.PaginationEnabled {
+		page = req.Page
+		if page <= 0 {
+			page = 1
+		}
+		pageSize = req.PageSize
+		if pageSize <= 0 {
+			pageSize = tpl.PageSize
+		}
+		if pageSize <= 0 {
+			pageSize = defaultPageSize
+		}
+		if pageSize > maxPageSize {
+			pageSize = maxPageSize
+		}
+	}
+
 	return s.Execute(ExecuteRequest{
 		ConnID:      connID,
 		SQLTemplate: tpl.SQLText,
 		Variables:   req.Variables,
 		PreScript:   tpl.PreScript,
 		PostScript:  tpl.PostScript,
+		Page:        page,
+		PageSize:    pageSize,
 	})
 }
 
@@ -388,6 +481,39 @@ func queryRows(ctx context.Context, db *sql.DB, query string) ([]map[string]any,
 		return nil, nil, false, fmt.Errorf("遍历结果集失败: %w", err)
 	}
 	return result, columns, truncated, nil
+}
+
+// trimTrailingSemicolon 去掉 SQL 结尾的分号与空白。
+// 包装成子查询时末尾分号会破坏语法，必须先清理。
+func trimTrailingSemicolon(query string) string {
+	return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(query), ";"))
+}
+
+// queryTotal 统计查询的总数据量。
+// 做法是把原 SQL 作为派生表包一层 COUNT(*)，
+// 这样无需解析原 SQL 的 SELECT 列表，天然支持任意查询。
+func queryTotal(ctx context.Context, db *sql.DB, query string) (int64, error) {
+	var total int64
+	countSQL := fmt.Sprintf(
+		"SELECT COUNT(*) FROM (%s) AS __toolbox_total",
+		trimTrailingSemicolon(query),
+	)
+	if err := db.QueryRowContext(ctx, countSQL).Scan(&total); err != nil {
+		return 0, fmt.Errorf("统计总数据量失败: %w", err)
+	}
+	return total, nil
+}
+
+// applyPagination 为查询追加 LIMIT / OFFSET。
+// MySQL 与 PostgreSQL 均支持 LIMIT n OFFSET m 写法，故无需按库型分支。
+func applyPagination(query string, pageSize, offset int) string {
+	if offset < 0 {
+		offset = 0
+	}
+	return fmt.Sprintf(
+		"SELECT * FROM (%s) AS __toolbox_page LIMIT %d OFFSET %d",
+		trimTrailingSemicolon(query), pageSize, offset,
+	)
 }
 
 // normalizeValue 把驱动返回的原始值转为 JSON 友好的类型。

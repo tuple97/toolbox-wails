@@ -14,6 +14,9 @@ import type {
   TemplateListItem,
 } from '@/types'
 
+/** 模板未配置页大小时的默认值，需与后端 defaultPageSize 保持一致 */
+export const DEFAULT_PAGE_SIZE = 50
+
 /** 把后端模板对象规整为前端类型 */
 function toTemplate(raw: {
   id: number
@@ -24,6 +27,8 @@ function toTemplate(raw: {
   fieldMappings: string
   preScript: string
   postScript: string
+  paginationEnabled: boolean
+  pageSize: number
 }): SQLTemplate {
   return {
     id: raw.id,
@@ -34,6 +39,8 @@ function toTemplate(raw: {
     fieldMappings: raw.fieldMappings,
     preScript: raw.preScript,
     postScript: raw.postScript,
+    paginationEnabled: Boolean(raw.paginationEnabled),
+    pageSize: Number(raw.pageSize) > 0 ? Number(raw.pageSize) : DEFAULT_PAGE_SIZE,
   }
 }
 
@@ -84,11 +91,20 @@ export function validateScript(source: string): Promise<void> {
 /**
  * 按模板执行查询。
  * 前端只传模板 ID 与变量值，SQL/脚本由后端从模板读取，保证模板更新即时生效。
+ * page 与 pageSize 仅在模板开启分页时被后端采纳，未开启时传 0 即可。
  */
 export function executeTemplateQuery(
   templateId: number,
   connId: number,
   variables: Record<string, unknown>,
+  page = 0,
+  pageSize = 0,
 ): Promise<QueryResult> {
-  return ExecuteTemplateQuery(templateId, connId, variables) as unknown as Promise<QueryResult>
+  return ExecuteTemplateQuery(
+    templateId,
+    connId,
+    variables,
+    page,
+    pageSize,
+  ) as unknown as Promise<QueryResult>
 }

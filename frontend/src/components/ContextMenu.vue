@@ -196,7 +196,7 @@ onBeforeUnmount(() => {
   padding: 6px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: rgba(15, 23, 42, 0.96);
+  background: var(--menu-bg);
   backdrop-filter: blur(16px);
   box-shadow: 0 20px 45px rgba(2, 6, 23, 0.55);
   user-select: none;
@@ -222,7 +222,7 @@ onBeforeUnmount(() => {
 
 .context-menu__item.is-active:not(.is-disabled),
 .context-menu__item:hover:not(.is-disabled) {
-  background: rgba(56, 189, 248, 0.16);
+  background: var(--active-bg);
 }
 
 .context-menu__item.is-disabled {

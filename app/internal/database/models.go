@@ -38,6 +38,11 @@ type SQLTemplate struct {
 	FieldMappings string `json:"fieldMappings"`
 	PreScript     string `json:"preScript"`
 	PostScript    string `json:"postScript"`
+	// PaginationEnabled 是否对查询结果分页。
+	// 开启后执行时会自动统计总数据量，并按 PageSize 切页。
+	PaginationEnabled bool `json:"paginationEnabled"`
+	// PageSize 每页条数，仅在 PaginationEnabled 为真时生效
+	PageSize int `json:"pageSize"`
 }
 
 // Dictionary 对应 dictionaries 表。

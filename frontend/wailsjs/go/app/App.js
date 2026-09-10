@@ -26,8 +26,8 @@ export function ExecuteQuery(arg1) {
   return window['go']['app']['App']['ExecuteQuery'](arg1);
 }
 
-export function ExecuteTemplateQuery(arg1, arg2, arg3) {
-  return window['go']['app']['App']['ExecuteTemplateQuery'](arg1, arg2, arg3);
+export function ExecuteTemplateQuery(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['app']['App']['ExecuteTemplateQuery'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function ExtractTemplateVariables(arg1) {

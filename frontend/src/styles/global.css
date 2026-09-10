@@ -28,6 +28,10 @@ html.dark {
   --shadow-md: 0 18px 40px rgba(2, 6, 23, 0.45);
   --titlebar-bg: rgba(12, 18, 34, 0.82);
   --panel-bg: rgba(8, 13, 26, 0.6);
+  /* 悬浮高亮：亮暗主题方向相反，统一由变量提供 */
+  --hover-bg: rgba(255, 255, 255, 0.07);
+  --active-bg: rgba(56, 189, 248, 0.14);
+  --menu-bg: rgba(15, 23, 42, 0.98);
 }
 
 /* 亮色主题 */
@@ -44,6 +48,9 @@ html:not(.dark) {
   --shadow-md: 0 18px 40px rgba(15, 23, 42, 0.12);
   --titlebar-bg: rgba(255, 255, 255, 0.85);
   --panel-bg: rgba(248, 250, 252, 0.8);
+  --hover-bg: rgba(15, 23, 42, 0.06);
+  --active-bg: rgba(2, 132, 199, 0.12);
+  --menu-bg: rgba(255, 255, 255, 0.98);
 }
 
 * {
@@ -186,9 +193,9 @@ html:not(.dark) {
 /* 表格贴合暗色背景 */
 .el-table {
   --el-table-border-color: var(--border-color);
-  --el-table-header-bg-color: rgba(255, 255, 255, 0.04);
+  --el-table-header-bg-color: var(--surface-color);
   --el-table-tr-bg-color: transparent;
-  --el-table-row-hover-bg-color: rgba(56, 189, 248, 0.08);
+  --el-table-row-hover-bg-color: var(--active-bg);
   --el-table-bg-color: transparent;
   background: transparent;
 }

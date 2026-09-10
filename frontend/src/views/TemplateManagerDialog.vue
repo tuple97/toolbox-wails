@@ -5,6 +5,7 @@ import MonacoEditor from '@/components/MonacoEditor.vue'
 import VariableConfigPanel from '@/components/VariableConfigPanel.vue'
 import FieldMappingPanel from '@/components/FieldMappingPanel.vue'
 import {
+  DEFAULT_PAGE_SIZE,
   extractVariables,
   fetchTemplate,
   fetchTemplateList,
@@ -47,6 +48,8 @@ const form = reactive({
   fieldMappings: '[]',
   preScript: '',
   postScript: '',
+  paginationEnabled: false,
+  pageSize: DEFAULT_PAGE_SIZE,
 })
 
 /** 变量配置与字段映射（解析后的对象形式） */
@@ -55,8 +58,8 @@ const fieldMappings = ref<FieldMapping[]>([])
 
 /** 检测到的变量名 */
 const detectedVariables = ref<string[]>([])
-/** 配置区当前页签 */
-const configTab = ref('variables')
+/** 配置区当前页签，默认落在基础配置 */
+const configTab = ref('basic')
 
 // ------------------------------------------------------------ 加载
 
@@ -92,6 +95,8 @@ async function loadTemplate(id: number) {
     form.sqlText = tpl.sqlText
     form.preScript = tpl.preScript
     form.postScript = tpl.postScript
+    form.paginationEnabled = tpl.paginationEnabled
+    form.pageSize = tpl.pageSize > 0 ? tpl.pageSize : DEFAULT_PAGE_SIZE
 
     variableConfigs.value = parseJSON<VariableConfig[]>(tpl.variables, [])
     fieldMappings.value = parseJSON<FieldMapping[]>(tpl.fieldMappings, [])
@@ -169,6 +174,8 @@ function handleCreate() {
   form.sqlText = ''
   form.preScript = ''
   form.postScript = ''
+  form.paginationEnabled = false
+  form.pageSize = DEFAULT_PAGE_SIZE
   variableConfigs.value = []
   fieldMappings.value = []
   detectedVariables.value = []
@@ -186,6 +193,10 @@ async function handleSave() {
   }
   if (!form.sqlText.trim()) {
     ElMessage.warning('SQL 内容不能为空')
+    return
+  }
+  if (form.paginationEnabled && !(form.pageSize > 0)) {
+    ElMessage.warning('开启分页后，每页条数必须大于 0')
     return
   }
 
@@ -210,6 +221,8 @@ async function handleSave() {
       fieldMappings: JSON.stringify(fieldMappings.value),
       preScript: form.preScript,
       postScript: form.postScript,
+      paginationEnabled: form.paginationEnabled,
+      pageSize: form.pageSize > 0 ? form.pageSize : DEFAULT_PAGE_SIZE,
     }
 
     const id = await persistTemplate(payload)
@@ -368,6 +381,33 @@ const dialogVisible = computed({
           </div>
 
           <el-tabs v-model="configTab" class="tpl-mgr__tabs">
+            <el-tab-pane label="基础配置" name="basic">
+              <div class="tpl-mgr__basic">
+                <div class="tpl-mgr__basic-row">
+                  <div class="tpl-mgr__basic-label">
+                    <span>结果分页</span>
+                    <small>开启后查询结果按页展示，并自动统计总数据量</small>
+                  </div>
+                  <el-switch v-model="form.paginationEnabled" />
+                </div>
+
+                <div class="tpl-mgr__basic-row">
+                  <div class="tpl-mgr__basic-label">
+                    <span>每页条数</span>
+                    <small>仅在开启分页时生效，取值范围 1 - 1000</small>
+                  </div>
+                  <el-input-number
+                    v-model="form.pageSize"
+                    :min="1"
+                    :max="1000"
+                    :disabled="!form.paginationEnabled"
+                    size="small"
+                    controls-position="right"
+                  />
+                </div>
+              </div>
+            </el-tab-pane>
+
             <el-tab-pane label="变量配置" name="variables">
               <VariableConfigPanel
                 v-model="variableConfigs"
@@ -446,11 +486,11 @@ const dialogVisible = computed({
 }
 
 .tpl-mgr__item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover-bg);
 }
 
 .tpl-mgr__item.is-active {
-  background: rgba(56, 189, 248, 0.14);
+  background: var(--active-bg);
 }
 
 .tpl-mgr__item-main {
@@ -602,5 +642,43 @@ const dialogVisible = computed({
   margin: 0 0 8px;
   color: var(--text-muted);
   font-size: 11px;
+}
+
+/* 基础配置：纵向排列的配置行 */
+.tpl-mgr__basic {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 520px;
+  padding-top: 4px;
+}
+
+.tpl-mgr__basic-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-color);
+}
+
+.tpl-mgr__basic-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.tpl-mgr__basic-label > span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tpl-mgr__basic-label small {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
 }
 </style>

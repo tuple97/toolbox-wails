@@ -3,12 +3,19 @@ import { onMounted, reactive, watch } from 'vue'
 import { fetchVariableOptions } from '@/api/db'
 import type { VariableConfig, VariableOption } from '@/types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** 变量配置列表 */
   configs: VariableConfig[]
   /** 当前连接 ID，用于拉取动态选项 */
   connId: number | null
-}>()
+  /**
+   * 多个变量是否横向排布。
+   * 查询页的条件区位于结果区上方，横向排布更省垂直空间。
+   */
+  inline?: boolean
+}>(), {
+  inline: false,
+})
 
 const emit = defineEmits<{
   (e: 'change', values: Record<string, unknown>): void
@@ -199,7 +206,12 @@ watch(
       模板中未检测到变量。在 SQL 中使用 <code>&#123;&#123; 变量名 &#125;&#125;</code> 即可自动识别。
     </p>
 
-    <el-form v-else label-position="top" size="default">
+    <el-form
+      v-else
+      label-position="top"
+      size="default"
+      :class="{ 'dynamic-form__grid': inline }"
+    >
       <el-form-item
         v-for="config in configs"
         :key="config.name"
@@ -334,5 +346,21 @@ watch(
   padding-bottom: 4px;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* 横向排布：变量按固定宽度换行铺开，适合放在结果区上方的条件区 */
+.dynamic-form__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}
+
+.dynamic-form :deep(.dynamic-form__grid .el-form-item) {
+  flex: 0 0 240px;
+  margin-right: 0;
+}
+
+.dynamic-form :deep(.dynamic-form__grid .el-form-item__content) {
+  width: 100%;
 }
 </style>

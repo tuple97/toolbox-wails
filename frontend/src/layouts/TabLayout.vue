@@ -360,7 +360,7 @@ watch(
   align-items: center;
   gap: 4px;
   padding: 0 8px;
-  background: rgba(10, 16, 30, 0.6);
+  background: var(--panel-bg);
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -395,13 +395,13 @@ watch(
 }
 
 .workbench__tab:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover-bg);
   color: var(--text-color);
 }
 
 .workbench__tab--active {
-  background: rgba(56, 189, 248, 0.14);
-  border-color: rgba(56, 189, 248, 0.35);
+  background: var(--active-bg);
+  border-color: var(--brand-color);
   color: var(--text-color);
 }
 
@@ -431,7 +431,7 @@ watch(
   padding: 0 4px;
   border: 1px solid var(--brand-color);
   border-radius: 4px;
-  background: rgba(15, 23, 42, 0.9);
+  background: var(--bg-color);
   color: var(--text-color);
   font-size: 13px;
   outline: none;
@@ -463,7 +463,7 @@ watch(
 }
 
 .workbench__add:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover-bg);
   color: var(--text-color);
 }
 
@@ -489,9 +489,9 @@ watch(
   list-style: none;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: rgba(15, 23, 42, 0.98);
+  background: var(--menu-bg);
   backdrop-filter: blur(16px);
-  box-shadow: 0 16px 40px rgba(2, 6, 23, 0.5);
+  box-shadow: var(--shadow-md);
   user-select: none;
 }
 
@@ -504,7 +504,7 @@ watch(
 }
 
 .workbench__menu-item:hover:not(.is-disabled) {
-  background: rgba(56, 189, 248, 0.16);
+  background: var(--active-bg);
 }
 
 .workbench__menu-item.is-disabled {

@@ -64,7 +64,9 @@ CREATE TABLE IF NOT EXISTS sql_templates (
   variables      TEXT    NOT NULL,
   field_mappings TEXT    NOT NULL,
   pre_script     TEXT,
-  post_script    TEXT
+  post_script    TEXT,
+  pagination_enabled INTEGER NOT NULL DEFAULT 0,
+  page_size      INTEGER NOT NULL DEFAULT 50
 );
 
 -- 4. 词典表
@@ -152,7 +154,62 @@ func open(dataDir string) (*DB, error) {
 		return nil, fmt.Errorf("初始化表结构失败: %w", sErr)
 	}
 
+	// 旧库升级：CREATE TABLE IF NOT EXISTS 不会补充新增列，这里按需补建
+	for _, m := range columnMigrations {
+		if mErr := ensureColumn(conn, m.table, m.column, m.ddl); mErr != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("补充表结构失败(%s.%s): %w", m.table, m.column, mErr)
+		}
+	}
+
 	return &DB{conn: conn, path: dbPath}, nil
+}
+
+// columnMigration 描述一条「缺列则补建」的迁移。
+type columnMigration struct {
+	table  string
+	column string
+	ddl    string
+}
+
+// columnMigrations 为历史库补充新增列的清单。
+// 新增字段时在此登记即可，无需用户手动删库。
+var columnMigrations = []columnMigration{
+	{table: "sql_templates", column: "pagination_enabled", ddl: "pagination_enabled INTEGER NOT NULL DEFAULT 0"},
+	{table: "sql_templates", column: "page_size", ddl: "page_size INTEGER NOT NULL DEFAULT 50"},
+}
+
+// ensureColumn 在表缺少指定列时执行 ALTER TABLE ADD COLUMN。
+// 通过 PRAGMA table_info 判断列是否存在，保证重复执行幂等。
+func ensureColumn(conn *sql.DB, table, column, ddl string) error {
+	rows, err := conn.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			ctype     string
+			notNull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if scanErr := rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk); scanErr != nil {
+			return scanErr
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	_, err = conn.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", table, ddl))
+	return err
 }
 
 // Conn 返回底层连接，供仓储直接使用。

@@ -100,6 +100,8 @@ export namespace database {
 	    fieldMappings: string;
 	    preScript: string;
 	    postScript: string;
+	    paginationEnabled: boolean;
+	    pageSize: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new SQLTemplate(source);
@@ -115,6 +117,8 @@ export namespace database {
 	        this.fieldMappings = source["fieldMappings"];
 	        this.preScript = source["preScript"];
 	        this.postScript = source["postScript"];
+	        this.paginationEnabled = source["paginationEnabled"];
+	        this.pageSize = source["pageSize"];
 	    }
 	}
 	export class Setting {
@@ -184,6 +188,8 @@ export namespace services {
 	    variables: Record<string, any>;
 	    preScript: string;
 	    postScript: string;
+	    page: number;
+	    pageSize: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ExecuteRequest(source);
@@ -196,6 +202,8 @@ export namespace services {
 	        this.variables = source["variables"];
 	        this.preScript = source["preScript"];
 	        this.postScript = source["postScript"];
+	        this.page = source["page"];
+	        this.pageSize = source["pageSize"];
 	    }
 	}
 	export class QueryResult {
@@ -205,6 +213,10 @@ export namespace services {
 	    elapsedMs: number;
 	    rowCount: number;
 	    truncated: boolean;
+	    total: number;
+	    page: number;
+	    pageSize: number;
+	    pageCount: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new QueryResult(source);
@@ -218,6 +230,10 @@ export namespace services {
 	        this.elapsedMs = source["elapsedMs"];
 	        this.rowCount = source["rowCount"];
 	        this.truncated = source["truncated"];
+	        this.total = source["total"];
+	        this.page = source["page"];
+	        this.pageSize = source["pageSize"];
+	        this.pageCount = source["pageCount"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

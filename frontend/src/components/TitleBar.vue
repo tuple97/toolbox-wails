@@ -18,8 +18,6 @@ withDefaults(defineProps<{
 const emit = defineEmits<{
   /** 点击设置按钮 */
   (e: 'settings'): void
-  /** 点击 SQL 模板按钮 */
-  (e: 'templates'): void
   /**
    * 在标题栏空白区域触发右键。
    * 系统菜单仅在此事件中弹出，其余区域不响应。
@@ -115,17 +113,6 @@ onBeforeUnmount(() => {
 
     <!-- 窗口控制按钮 -->
     <div class="titlebar__controls" data-no-drag>
-      <!-- SQL 模板管理 -->
-      <button
-        class="titlebar__btn"
-        type="button"
-        aria-label="SQL 模板"
-        title="SQL 模板管理"
-        @click="emit('templates')"
-      >
-        <el-icon><Document /></el-icon>
-      </button>
-
       <!-- 设置 -->
       <button
         class="titlebar__btn"
@@ -280,12 +267,12 @@ onBeforeUnmount(() => {
 }
 
 .titlebar__btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover-bg);
   color: var(--text-color);
 }
 
 .titlebar__btn:active {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--active-bg);
 }
 
 .titlebar__btn--close:hover {

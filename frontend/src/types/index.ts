@@ -66,6 +66,10 @@ export interface SQLTemplate {
   fieldMappings: string
   preScript: string
   postScript: string
+  /** 查询结果是否分页展示 */
+  paginationEnabled: boolean
+  /** 每页条数，仅在 paginationEnabled 为真时生效 */
+  pageSize: number
 }
 
 /** 词典，与后端 database.Dictionary 对应 */
@@ -99,6 +103,14 @@ export interface QueryResult {
   elapsedMs: number
   rowCount: number
   truncated: boolean
+  /** 满足条件的数据总量；未分页时等于 rowCount */
+  total: number
+  /** 当前页码，从 1 开始；未分页时为 1 */
+  page: number
+  /** 每页条数；未分页时为 0 */
+  pageSize: number
+  /** 总页数；未分页时为 1 */
+  pageCount: number
 }
 
 /** 查询请求，与后端 services.ExecuteRequest 对应 */
@@ -108,6 +120,10 @@ export interface ExecuteRequest {
   variables: Record<string, unknown>
   preScript: string
   postScript: string
+  /** 页码，从 1 开始；小于等于 0 表示不分页 */
+  page?: number
+  /** 每页条数；小于等于 0 时取后端默认值 */
+  pageSize?: number
 }
 
 /** 模板执行请求，与后端 services.TemplateExecuteRequest 对应 */
@@ -115,7 +131,13 @@ export interface TemplateExecuteRequest {
   templateId: number
   connId: number
   variables: Record<string, unknown>
+  /** 页码，从 1 开始；仅模板开启分页时生效 */
+  page: number
+  /** 每页条数；小于等于 0 时取模板配置值 */
+  pageSize: number
 }
+
+
 
 /** 模板列表项（含截断的 SQL 预览），与后端 services.TemplateListItem 对应 */
 export interface TemplateListItem {

@@ -6,7 +6,6 @@ import TitleBar from '@/components/TitleBar.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import WindowResizeEdges from '@/components/WindowResizeEdges.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
-import TemplateManagerDialog from '@/views/TemplateManagerDialog.vue'
 import TabLayout from '@/layouts/TabLayout.vue'
 import { closeWindow, toggleMaximiseWindow } from '@/api/window'
 import { useConfigStore } from '@/stores/configStore'
@@ -21,9 +20,8 @@ const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
 
-/** 设置面板与模板管理弹窗 */
+/** 设置面板 */
 const settingsVisible = ref(false)
-const templateDialogVisible = ref(false)
 
 /** 标题栏系统右键菜单项 */
 const titleBarMenuItems: ContextMenuAction[] = [
@@ -74,7 +72,6 @@ onMounted(async () => {
       <TitleBar
         title="Toolbox"
         @settings="settingsVisible = true"
-        @templates="templateDialogVisible = true"
         @context-menu="openContextMenu"
       />
 
@@ -96,9 +93,6 @@ onMounted(async () => {
 
       <!-- 设置面板 -->
       <SettingsPanel v-model:visible="settingsVisible" />
-
-      <!-- SQL 模板管理（全屏） -->
-      <TemplateManagerDialog v-model:visible="templateDialogVisible" />
     </div>
   </ElConfigProvider>
 </template>

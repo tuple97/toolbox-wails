@@ -3,9 +3,11 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import DynamicForm from '@/components/DynamicForm.vue'
 import ResultTable from '@/components/ResultTable.vue'
+import ResultPagination from '@/components/ResultPagination.vue'
 import ConnectionManager from '@/components/ConnectionManager.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
-import { executeTemplateQuery, fetchTemplate, fetchTemplateList } from '@/api/templates'
+import TemplateManagerDialog from '@/views/TemplateManagerDialog.vue'
+import { DEFAULT_PAGE_SIZE, executeTemplateQuery, fetchTemplate, fetchTemplateList } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
 import { useLogStore } from '@/stores/logStore'
 import type {
@@ -49,8 +51,17 @@ const variableValues = ref<Record<string, unknown>>({})
 const result = ref<QueryResult | null>(null)
 const running = ref(false)
 
+/** 模板是否开启结果分页；由模板的基础配置决定，查询页只读 */
+const paginationEnabled = ref(false)
+/** 当前页码，从 1 开始 */
+const page = ref(1)
+/** 每页条数，取自模板配置 */
+const pageSize = ref(DEFAULT_PAGE_SIZE)
+
 /** 连接管理弹窗 */
 const connectionDialogVisible = ref(false)
+/** SQL 模板管理弹窗 */
+const templateDialogVisible = ref(false)
 
 const formRef = ref<{ getValues: () => Record<string, unknown> } | null>(null)
 
@@ -92,6 +103,8 @@ async function loadTemplateConfig(id: number | null) {
   if (!id) {
     variableConfigs.value = []
     fieldMappings.value = []
+    paginationEnabled.value = false
+    pageSize.value = DEFAULT_PAGE_SIZE
     return
   }
 
@@ -99,6 +112,8 @@ async function loadTemplateConfig(id: number | null) {
     const tpl = await fetchTemplate(id)
     variableConfigs.value = parseJSON<VariableConfig[]>(tpl.variables, [])
     fieldMappings.value = parseJSON<FieldMapping[]>(tpl.fieldMappings, [])
+    paginationEnabled.value = tpl.paginationEnabled
+    pageSize.value = tpl.pageSize > 0 ? tpl.pageSize : DEFAULT_PAGE_SIZE
 
     // 连接未显式选择时，跟随模板配置
     if (!connId.value && tpl.connId) {
@@ -109,6 +124,8 @@ async function loadTemplateConfig(id: number | null) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
     variableConfigs.value = []
     fieldMappings.value = []
+    paginationEnabled.value = false
+    pageSize.value = DEFAULT_PAGE_SIZE
   }
 }
 
@@ -128,7 +145,11 @@ function parseJSON<T>(raw: string, fallback: T): T {
 
 // ------------------------------------------------------------ 执行
 
-async function handleRun() {
+/**
+ * 执行查询。
+ * targetPage 为要查询的页码；模板未开启分页时后端会忽略该参数。
+ */
+async function handleRun(targetPage = 1) {
   if (!templateId.value) {
     ElMessage.warning('请先选择 SQL 模板')
     return
@@ -140,13 +161,29 @@ async function handleRun() {
 
   running.value = true
   const values = formRef.value?.getValues() ?? variableValues.value
+  const requestPage = paginationEnabled.value ? Math.max(targetPage, 1) : 0
 
-  logStore.logInfo(`使用模板「${currentTemplate.value?.name ?? templateId.value}」开始执行`)
+  logStore.logInfo(
+    paginationEnabled.value
+      ? `使用模板「${currentTemplate.value?.name ?? templateId.value}」查询第 ${requestPage} 页`
+      : `使用模板「${currentTemplate.value?.name ?? templateId.value}」开始执行`,
+  )
 
   try {
     // 只传模板 ID 与变量值；SQL 与脚本由后端从模板读取
-    const data = await executeTemplateQuery(templateId.value, connId.value, values)
+    const data = await executeTemplateQuery(
+      templateId.value,
+      connId.value,
+      values,
+      requestPage,
+      paginationEnabled.value ? pageSize.value : 0,
+    )
     result.value = data
+    // 以服务端返回的页码为准，避免页码越界后界面与数据不一致
+    page.value = data.page > 0 ? data.page : 1
+    if (data.pageSize > 0) {
+      pageSize.value = data.pageSize
+    }
 
     // 记录请求与响应，便于排查
     logStore.logRequest(
@@ -207,10 +244,22 @@ watch(
   () => notifyChange(),
 )
 
-/** 切换模板时重新加载其配置 */
+/** 切换模板时重新加载其配置，并回到第一页 */
 watch(templateId, id => {
   void loadTemplateConfig(id)
   result.value = null
+  page.value = 1
+})
+
+/** 模板管理弹窗关闭后刷新模板列表，保证新建/修改后的模板立即可用 */
+watch(templateDialogVisible, async (visible) => {
+  if (visible) {
+    return
+  }
+  await loadTemplates()
+  if (templateId.value) {
+    await loadTemplateConfig(templateId.value)
+  }
 })
 
 // ------------------------------------------------------------ 生命周期
@@ -269,21 +318,26 @@ onMounted(async () => {
           <el-icon><Setting /></el-icon>
           <span>管理连接</span>
         </el-button>
+
+        <el-button @click="templateDialogVisible = true">
+          <el-icon><Document /></el-icon>
+          <span>SQL 模板管理</span>
+        </el-button>
       </div>
 
       <div class="db-query__toolbar-right">
-        <el-button type="primary" :loading="running" @click="handleRun">
+        <el-button type="primary" :loading="running" @click="handleRun()">
           <el-icon><VideoPlay /></el-icon>
           <span>执行查询</span>
         </el-button>
       </div>
     </header>
 
-    <!-- 主体：变量表单 + 结果 -->
+    <!-- 主体：上为查询条件，下为查询结果 -->
     <div class="db-query__body">
       <section class="db-query__form">
         <div class="db-query__section-title">
-          <span>查询变量</span>
+          <span>查询条件</span>
           <small v-if="currentTemplate">
             来自模板「{{ currentTemplate.name }}」
           </small>
@@ -301,6 +355,7 @@ onMounted(async () => {
           :key="templateId"
           :configs="variableConfigs"
           :conn-id="connId"
+          inline
           @change="notifyChange"
         />
       </section>
@@ -310,6 +365,9 @@ onMounted(async () => {
           <span>查询结果</span>
           <span v-if="result" class="db-query__result-meta">
             {{ result.rowCount }} 行 · {{ result.elapsedMs }} ms
+            <template v-if="paginationEnabled">
+              · 共 {{ result.total }} 条
+            </template>
           </span>
         </div>
 
@@ -319,6 +377,16 @@ onMounted(async () => {
           :mappings="fieldMappings"
         />
         <el-empty v-else description="尚未执行查询" />
+
+        <ResultPagination
+          v-if="result && paginationEnabled"
+          :page="page"
+          :page-size="pageSize"
+          :total="result.total"
+          :page-count="result.pageCount"
+          :loading="running"
+          @change="handleRun"
+        />
       </section>
     </div>
 
@@ -330,6 +398,9 @@ onMounted(async () => {
       v-model:visible="connectionDialogVisible"
       @change="loadConnections"
     />
+
+    <!-- SQL 模板管理（全屏） -->
+    <TemplateManagerDialog v-model:visible="templateDialogVisible" />
   </div>
 </template>
 
@@ -357,18 +428,21 @@ onMounted(async () => {
   gap: 8px;
 }
 
+/* 条件区在上、结果区在下 */
 .db-query__body {
   display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
 }
 
 .db-query__form {
-  flex: 0 0 380px;
+  flex: 0 0 auto;
+  max-height: 45%;
   min-height: 0;
   overflow: auto;
-  padding: 14px 16px;
-  border-right: 1px solid var(--border-color);
+  padding: 12px 16px 14px;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .db-query__section-title {
@@ -389,6 +463,7 @@ onMounted(async () => {
 .db-query__result {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;

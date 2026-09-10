@@ -76,7 +76,7 @@ watch(() => logStore.entries.length, async () => {
   flex-direction: column;
   flex: 0 0 auto;
   border-top: 1px solid var(--border-color);
-  background: rgba(8, 13, 26, 0.6);
+  background: var(--panel-bg);
 }
 
 .log-panel__head {

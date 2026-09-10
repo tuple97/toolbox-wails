@@ -189,7 +189,7 @@ const infoItems = computed<InfoItem[]>(() => {
   padding: 9px 12px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: rgba(15, 23, 42, 0.6);
+  background: var(--surface-color);
   color: var(--text-color);
   font-size: 13px;
   outline: none;
