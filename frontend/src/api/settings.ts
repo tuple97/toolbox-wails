@@ -1,4 +1,4 @@
-import { GetAllSettings, SaveSetting } from '@wails/go/app/App'
+import { GetAllSettings, SaveSetting } from './bindings'
 import type { Setting } from '@/types'
 
 /** 读取全部应用配置 */

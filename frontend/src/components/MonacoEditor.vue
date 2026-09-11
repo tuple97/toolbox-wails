@@ -83,6 +83,11 @@ function handleUpdate(value: string) {
   if (props.readonly) {
     return
   }
+  // 程序化 setValue（父组件写入）触发的 change 不回抛：
+  // 值与 props 一致说明是父组件刚写入的，回抛只会造成冗余的响应链
+  if (value === props.modelValue) {
+    return
+  }
   emit('update:modelValue', value)
   emit('change', value)
 }

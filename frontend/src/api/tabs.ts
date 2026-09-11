@@ -1,4 +1,4 @@
-import { ListTabs, SaveTabs } from '@wails/go/app/App'
+import { ListTabs, SaveTabs } from './bindings'
 import type { WorkbenchTab } from '@/types'
 
 /**

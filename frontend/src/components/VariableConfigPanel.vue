@@ -145,7 +145,7 @@ async function testDynamicOptions(config: VariableConfig) {
           </el-tag>
         </template>
 
-        <el-form label-position="top" size="small">
+        <el-form label-position="left" label-width="70px" size="small">
           <el-form-item label="变量名">
             <el-input :model-value="config.name" disabled />
           </el-form-item>

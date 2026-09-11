@@ -7,7 +7,7 @@ import {
   RevealPassword,
   SaveConnection,
   TestConnection,
-} from '@wails/go/app/App'
+} from './bindings'
 import type { DBConnection, ExecuteRequest, QueryResult } from '@/types'
 
 /** 把后端返回的连接对象规整为前端类型，显式取字段避免夹带额外属性 */

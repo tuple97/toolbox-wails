@@ -20,16 +20,19 @@
       "@/*": [
         "./src/*"
       ],
-      "@wails/*": [
-        "./wailsjs/*"
+      "@bindings/*": [
+        "./bindings/*"
       ]
-    }
+    },
+    // 允许导入由 wails3 CLI 生成的 JS 绑定（仅做类型推断，不检查 JS 本身）
+    "allowJs": true,
+    "checkJs": false
   },
   "include": [
     "src/**/*.ts",
     "src/**/*.d.ts",
     "src/**/*.vue",
-    "wailsjs/**/*.ts"
+    "bindings/**/*.js"
   ],
   "references": [
     {

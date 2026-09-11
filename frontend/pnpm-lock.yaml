@@ -14,6 +14,9 @@ importers:
       '@guolao/vue-monaco-editor':
         specifier: ^1.6.0
         version: 1.6.0(monaco-editor@0.56.0)(vue@3.5.42(typescript@5.6.3))
+      '@wailsio/runtime':
+        specifier: 3.0.0-beta.20
+        version: 3.0.0-beta.20
       element-plus:
         specifier: ^2.14.5
         version: 2.14.5(vue@3.5.42(typescript@5.6.3))
@@ -505,6 +508,9 @@ packages:
     resolution: {integrity: sha512-JRgY90Sz8DDtPMsaDflvPMp9xYk69JZAmbuDvAquUVXKr2gEjqtzGNTTthLfckH0BzBqvnu31gb4a8TGLRe79g==}
     peerDependencies:
       vue: ^3.5.0
+
+  '@wailsio/runtime@3.0.0-beta.20':
+    resolution: {integrity: sha512-oPpWBgNK4QISP9/AweVnRIBg6hlEP7HVi0i4gVl0+6JEsQ6vDDTJXmbyy/j6AITPHWq7cWOYl2Ey5uucl1u3hw==}
 
   async-validator@4.2.5:
     resolution: {integrity: sha512-7HhHjtERjqlNbZtqNqy2rckN/SpOOlmDliet+lP7k+eKZEjPk3DgyeU9lIXLdeLz0uBbbVp+9Qdow9wJWgwwfg==}
@@ -1091,6 +1097,8 @@ snapshots:
   '@vueuse/shared@14.4.0(vue@3.5.42(typescript@5.6.3))':
     dependencies:
       vue: 3.5.42(typescript@5.6.3)
+
+  '@wailsio/runtime@3.0.0-beta.20': {}
 
   async-validator@4.2.5: {}
 

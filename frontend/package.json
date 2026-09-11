@@ -9,15 +9,17 @@
   },
   "scripts": {
     "dev": "vite",
-    "dev:app": "cd .. && wails dev",
+    "dev:app": "cd .. && set \"FRONTEND_DEVSERVER_URL=http://127.0.0.1:5173\" && go run .",
     "build": "vue-tsc --noEmit && vite build",
-    "build:app": "cd .. && wails build",
+    "build:app": "cd .. && go build -tags production",
+    "gen:bindings": "cd .. && wails3 generate bindings",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
     "@guolao/vue-monaco-editor": "^1.6.0",
+    "@wailsio/runtime": "3.0.0-beta.20",
     "element-plus": "^2.14.5",
     "monaco-editor": "^0.56.0",
     "pinia": "^4.0.3",

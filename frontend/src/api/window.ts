@@ -11,7 +11,7 @@ import {
   WindowIsMaximised,
   WindowMinimise,
   WindowToggleMaximise,
-} from '@wails/go/app/App'
+} from './bindings'
 
 /** 是否运行在 Wails 桌面环境中（浏览器直接访问 dev server 时为 false） */
 export const isWailsRuntime = typeof window !== 'undefined' && 'runtime' in window

@@ -1,12 +1,10 @@
 package main
 
 import (
-	"context"
 	"embed"
+	"log"
 
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"toolbox-wails/app"
 )
@@ -17,43 +15,49 @@ var assets embed.FS
 // 应用窗口相关配置
 const (
 	appName   = "Toolbox"
-	appWidth  = 1024
-	appHeight = 700
+	appWidth  = 1424
+	appHeight = 800
 )
 
 func main() {
-	// 创建应用实例
-	application := app.NewApp()
+	// 创建业务实例（Wails v3 中作为 Service 绑定到前端）
+	service := app.NewApp()
 
-	// 启动 Wails 应用
-	err := wails.Run(&options.App{
-		Title:     appName,
-		Width:     appWidth,
-		Height:    appHeight,
-		MinWidth:  900,
-		MinHeight: 600,
-		// 无边框窗口：关闭系统标题栏，由前端自定义工具栏接管
-		Frameless:     true,
-		DisableResize: false,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
+	// 创建 Wails v3 应用
+	wailsApp := application.New(application.Options{
+		Name:        appName,
+		Description: "桌面效率工具箱",
+		// v3 使用 Services 替代 v2 的 Bind
+		Services: []application.Service{
+			application.NewService(service),
 		},
-		BackgroundColour: &options.RGBA{R: 17, G: 24, B: 39, A: 1},
-		OnStartup:        application.Startup,
-		OnShutdown:       application.Shutdown,
-		OnBeforeClose: func(ctx context.Context) (prevent bool) {
-			// 关窗前通知前端做最后一次同步保存。
-			// 前端保存为同步落盘，此处短暂等待即可覆盖绝大多数情况；
-			// 即使超时也放行关闭，避免窗口卡住无法退出。
-			application.BeforeClose(ctx)
-			return false
+		Assets: application.AssetOptions{
+			Handler: application.BundledAssetFileServer(assets),
 		},
-		Bind: []interface{}{
-			application,
+		// 退出前通知前端做最后一次保存。
+		// 这里只发事件不阻塞：SQLite 写入是本地操作，通常毫秒级完成；
+		// 若在此等待异步保存返回，一旦异常会导致窗口无法关闭。
+		ShouldQuit: func() bool {
+			service.NotifyBeforeQuit()
+			return true
 		},
 	})
 
-	if err != nil {
-		println("Error:", err.Error())
+	// 注入应用实例，供窗口控制与事件发送使用
+	service.Attach(wailsApp)
+
+	// 创建主窗口
+	wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:     appName,
+		Width:     appWidth,
+		Height:    appHeight,
+		MinWidth:  1024,
+		MinHeight: 700,
+		// 无边框窗口：关闭系统标题栏，由前端自定义工具栏接管
+		Frameless: true,
+	})
+
+	if err := wailsApp.Run(); err != nil {
+		log.Fatal(err)
 	}
 }

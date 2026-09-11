@@ -71,6 +71,7 @@ onMounted(async () => {
       <!-- 自定义顶部工具栏：系统菜单与设置入口都在这里 -->
       <TitleBar
         title="Toolbox"
+        @close="closeWindow"
         @settings="settingsVisible = true"
         @context-menu="openContextMenu"
       />

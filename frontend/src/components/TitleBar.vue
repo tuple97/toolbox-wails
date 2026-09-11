@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import {
-  closeWindow,
   isWindowMaximised,
   minimiseWindow,
   toggleMaximiseWindow,
@@ -11,11 +10,20 @@ import logoUrl from '@/assets/images/logo-universal.png'
 withDefaults(defineProps<{
   /** 工具栏左侧显示的应用名称 */
   title?: string
+  /** 是否显示设置按钮；独立工具窗口（如 SQL 模板管理）可关闭 */
+  showSettings?: boolean
 }>(), {
   title: 'Toolbox',
+  showSettings: true,
 })
 
 const emit = defineEmits<{
+  /**
+   * 点击关闭按钮。
+   * 关闭行为由宿主窗口决定：主窗口为退出应用，
+   * 独立工具窗口通常只关闭自身（runtime Window.Close）。
+   */
+  (e: 'close'): void
   /** 点击设置按钮 */
   (e: 'settings'): void
   /**
@@ -115,6 +123,7 @@ onBeforeUnmount(() => {
     <div class="titlebar__controls" data-no-drag>
       <!-- 设置 -->
       <button
+        v-if="showSettings"
         class="titlebar__btn"
         type="button"
         aria-label="设置"
@@ -157,7 +166,7 @@ onBeforeUnmount(() => {
         type="button"
         aria-label="关闭"
         title="关闭"
-        @click="closeWindow"
+        @click="emit('close')"
       >
         <svg viewBox="0 0 12 12" aria-hidden="true">
           <path d="M3 3l6 6M9 3l-6 6" />

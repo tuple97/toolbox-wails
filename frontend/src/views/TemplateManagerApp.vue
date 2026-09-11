@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Events, Window } from '@wailsio/runtime'
+import TitleBar from '@/components/TitleBar.vue'
+import WindowResizeEdges from '@/components/WindowResizeEdges.vue'
 import MonacoEditor from '@/components/MonacoEditor.vue'
 import VariableConfigPanel from '@/components/VariableConfigPanel.vue'
 import FieldMappingPanel from '@/components/FieldMappingPanel.vue'
 import {
-  DEFAULT_PAGE_SIZE,
   extractVariables,
   fetchTemplate,
   fetchTemplateList,
@@ -22,13 +24,14 @@ import type {
   VariableConfig,
 } from '@/types'
 
-const props = defineProps<{
-  visible: boolean
-}>()
-
-const emit = defineEmits<{
-  (e: 'update:visible', value: boolean): void
-}>()
+/**
+ * SQL 模板管理（v3 独立窗口页面）。
+ *
+ * 与主窗口的关系：
+ *  - 本窗口是独立 webview，JS 上下文与主窗口隔离（Pinia 不互通）；
+ *  - 模板保存/删除后通过 Wails 事件 `templates:changed` 广播，
+ *    主窗口的查询页监听该事件刷新模板列表。
+ */
 
 /** 模板列表 */
 const templates = ref<TemplateListItem[]>([])
@@ -84,20 +87,61 @@ async function loadConnections() {
   }
 }
 
-/** 载入模板到编辑区 */
+/**
+ * 载入模板到编辑区。
+ *
+ * 【临时埋点】定位选中卡顿用，各阶段耗时输出到控制台（[perf] 前缀）：
+ *   - fetch：后端读取模板
+ *   - state：本地状态更新
+ *   - render：Vue 渲染 + Monaco setValue + 浏览器绘制（两帧 rAF 后统计）
+ *   - refreshVariables：变量提取往返 + 面板数据更新
+ */
 async function loadTemplate(id: number) {
+  const t0 = performance.now()
   try {
     const tpl = await fetchTemplate(id)
+    const t1 = performance.now()
+    console.log(`[perf] fetch(${id}) = ${(t1 - t0).toFixed(1)}ms`)
+    const t2 = t1
+
     editingId.value = tpl.id
     form.name = tpl.name
     form.connId = tpl.connId
+    form.paginationEnabled = tpl.paginationEnabled
+    await nextTick()
+    const tHead = performance.now()
+    console.log(`[perf]   patch: 头部表单+列表 = ${(tHead - t2).toFixed(1)}ms`)
+
     form.sqlText = tpl.sqlText
     form.preScript = tpl.preScript
     form.postScript = tpl.postScript
-    form.paginationEnabled = tpl.paginationEnabled
+    await nextTick()
+    const tMonaco = performance.now()
+    console.log(`[perf]   patch: monaco setValue = ${(tMonaco - tHead).toFixed(1)}ms`)
 
-    variableConfigs.value = parseJSON<VariableConfig[]>(tpl.variables, [])
-    fieldMappings.value = parseJSON<FieldMapping[]>(tpl.fieldMappings, [])
+    const varConfigs = parseJSON<VariableConfig[]>(tpl.variables, [])
+    const mappings = reuseUnchanged(parseJSON<FieldMapping[]>(tpl.fieldMappings, []))
+    console.log(
+      `[perf]   数据量: variables JSON ${tpl.variables.length}字/${varConfigs.length}项,`
+      + ` fieldMappings JSON ${tpl.fieldMappings.length}字/${mappings.length}项`,
+    )
+
+    variableConfigs.value = varConfigs
+    await nextTick()
+    const tVar = performance.now()
+    console.log(`[perf]   patch: 变量配置面板 = ${(tVar - tMonaco).toFixed(1)}ms`)
+
+    fieldMappings.value = mappings
+    await nextTick()
+    const tPanels = performance.now()
+    console.log(`[perf]   patch: 字段映射面板 = ${(tPanels - tVar).toFixed(1)}ms`)
+
+    // 连续两帧 rAF 后统计，覆盖绘制完成时间
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        console.log(`[perf]   layout + paint = ${(performance.now() - tPanels).toFixed(1)}ms`)
+      })
+    })
 
     await refreshVariables()
   }
@@ -121,6 +165,19 @@ function parseJSON<T>(raw: string, fallback: T): T {
   }
 }
 
+/**
+ * 复用与上一份配置内容相同（按 column 匹配）的映射对象。
+ * 引用不变配合 FieldMappingPanel 的 v-memo，可以让未变化的行跳过 patch，
+ * 避免映射条目多时（如 72 列结果集）每次选模板都全量重渲染。
+ */
+function reuseUnchanged(next: FieldMapping[]): FieldMapping[] {
+  const prev = new Map(fieldMappings.value.map(m => [m.column, m]))
+  return next.map((item) => {
+    const old = prev.get(item.column)
+    return old && JSON.stringify(old) === JSON.stringify(item) ? old : item
+  })
+}
+
 // ------------------------------------------------------------ 变量解析
 
 /** 重新解析 SQL 中的变量，保留已有配置 */
@@ -132,7 +189,11 @@ async function refreshVariables() {
   }
 
   try {
+    const t0 = performance.now()
     const names = await extractVariables(form.sqlText)
+    const t1 = performance.now()
+    console.log(`[perf]   refreshVariables.extract = ${(t1 - t0).toFixed(1)}ms`)
+
     detectedVariables.value = names
 
     const existing = new Map(variableConfigs.value.map(c => [c.name, c]))
@@ -144,6 +205,8 @@ async function refreshVariables() {
         dataType: 'string' as const,
       },
     )
+    const t2 = performance.now()
+    console.log(`[perf]   refreshVariables.panel = ${(t2 - t1).toFixed(1)}ms`)
   }
   catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
@@ -163,6 +226,14 @@ function scheduleParse() {
 }
 
 // ------------------------------------------------------------ 增删改
+
+/**
+ * 广播模板变更，主窗口监听后刷新模板列表。
+ * 两个窗口 JS 上下文隔离，这是唯一的同步通道。
+ */
+function notifyChanged() {
+  void Events.Emit('templates:changed')
+}
 
 /** 新建模板 */
 function handleCreate() {
@@ -221,6 +292,7 @@ async function handleSave() {
     editingId.value = id
     ElMessage.success('模板已保存')
     await loadTemplates()
+    notifyChanged()
   }
   catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
@@ -246,6 +318,7 @@ async function handleDelete(item: TemplateListItem) {
     }
     ElMessage.success('已删除')
     await loadTemplates()
+    notifyChanged()
   }
   catch (e) {
     if (e !== 'cancel') {
@@ -254,35 +327,53 @@ async function handleDelete(item: TemplateListItem) {
   }
 }
 
-// ------------------------------------------------------------ 弹窗
+// ------------------------------------------------------------ 窗口控制
 
+/**
+ * 关闭本窗口（仅隐藏自身，不影响主窗口）。
+ * Go 侧将 WindowClosing 拦截为隐藏，页面上下文保持存活，再次打开无需重新加载。
+ */
+function closeSelf() {
+  void Window.Close()
+}
+
+/**
+ * ESC 关闭窗口。
+ * Element Plus 的弹层（弹窗/下拉）打开时 ESC 优先用于关闭弹层，不关闭窗口。
+ */
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape') {
+    return
+  }
+  if (document.querySelector('.el-overlay, .el-popper[aria-hidden="false"]')) {
+    return
+  }
+  closeSelf()
+}
+
+// ------------------------------------------------------------ 初始化
+
+// 独立窗口：挂载即加载全部数据（不再依赖弹窗打开时机）
 onMounted(async () => {
-  await loadConnections()
+  window.addEventListener('keydown', handleKeydown)
+  await Promise.all([loadTemplates(), loadConnections()])
   handleCreate()
 })
 
-/** 弹窗打开时刷新列表，保证数据最新 */
-watch(() => props.visible, (value) => {
-  if (value) {
-    void loadTemplates()
-    void loadConnections()
-  }
-})
-
-/** 双向绑定：仅转发，不在此处产生副作用 */
-const dialogVisible = computed({
-  get: () => props.visible,
-  set: (value: boolean) => emit('update:visible', value),
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
 <template>
-  <el-dialog
-    v-model="dialogVisible"
-    title="SQL 模板管理"
-    fullscreen
-    :close-on-click-modal="false"
-  >
+  <div class="tpl-window">
+    <!-- 自定义标题栏：与主窗口一致的观感 -->
+    <TitleBar
+      title="SQL 模板管理"
+      :show-settings="false"
+      @close="closeSelf"
+    />
+
     <div class="tpl-mgr">
       <!-- 左：模板列表 -->
       <aside class="tpl-mgr__list">
@@ -388,18 +479,19 @@ const dialogVisible = computed({
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="变量配置" name="variables">
+            <!-- lazy：未激活不挂载，避免隐藏的 Monaco/面板在每次选模板时被无谓更新 -->
+            <el-tab-pane label="变量配置" name="variables" lazy>
               <VariableConfigPanel
                 v-model="variableConfigs"
                 :conn-id="form.connId || null"
               />
             </el-tab-pane>
 
-            <el-tab-pane label="字段映射" name="fields">
+            <el-tab-pane label="字段映射" name="fields" lazy>
               <FieldMappingPanel v-model="fieldMappings" />
             </el-tab-pane>
 
-            <el-tab-pane label="前置脚本" name="pre">
+            <el-tab-pane label="前置脚本" name="pre" lazy>
               <p class="tpl-mgr__hint">
                 可修改变量并追加 SQL 片段：
                 <code>return &#123; variables, sqlFragment &#125;</code>
@@ -407,7 +499,7 @@ const dialogVisible = computed({
               <MonacoEditor v-model="form.preScript" language="javascript" height="220px" />
             </el-tab-pane>
 
-            <el-tab-pane label="后置脚本" name="post">
+            <el-tab-pane label="后置脚本" name="post" lazy>
               <p class="tpl-mgr__hint">
                 可加工结果集：
                 <code>return &#123; rows &#125;</code>
@@ -418,14 +510,28 @@ const dialogVisible = computed({
         </div>
       </section>
     </div>
-  </el-dialog>
+
+    <!-- 无边框窗口的四周缩放宽边热区 -->
+    <WindowResizeEdges />
+  </div>
 </template>
 
 <style scoped>
+/* 独立窗口：标题栏 + 内容纵向排布，铺满视口 */
+.tpl-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+}
+
 .tpl-mgr {
   display: flex;
   gap: 12px;
-  height: calc(100vh - 140px);
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  box-sizing: border-box;
 }
 
 /* 左侧列表 */

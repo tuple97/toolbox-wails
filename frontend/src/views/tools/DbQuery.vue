@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import DynamicForm from '@/components/DynamicForm.vue'
 import ResultTable from '@/components/ResultTable.vue'
 import ResultPagination from '@/components/ResultPagination.vue'
 import ConnectionManager from '@/components/ConnectionManager.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
-import TemplateManagerDialog from '@/views/TemplateManagerDialog.vue'
 import { DEFAULT_PAGE_SIZE, executeTemplateQuery, fetchTemplate, fetchTemplateList } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
+import { OpenTemplatesWindow } from '@/api/bindings'
+import { EventsOn } from '@/api/runtime'
 import { useLogStore } from '@/stores/logStore'
 import type {
   DBConnection,
@@ -65,8 +66,6 @@ const lastTotal = ref(0)
 
 /** 连接管理弹窗 */
 const connectionDialogVisible = ref(false)
-/** SQL 模板管理弹窗 */
-const templateDialogVisible = ref(false)
 
 const formRef = ref<{ getValues: () => Record<string, unknown> } | null>(null)
 
@@ -284,15 +283,22 @@ watch(connId, () => {
   lastTotal.value = 0
 })
 
-/** 模板管理弹窗关闭后刷新模板列表，保证新建/修改后的模板立即可用 */
-watch(templateDialogVisible, async (visible) => {
-  if (visible) {
-    return
-  }
+/**
+ * 监听模板窗口的变更广播。
+ *
+ * 模板管理已改为 v3 独立窗口（templates:changed 由其保存/删除后发出）。
+ * 变更后除刷新列表外，还需重载当前引用模板的配置——
+ * 因为变量表单由模板驱动，模板改了配置也变了。
+ */
+const offTemplatesChanged = EventsOn('templates:changed', async () => {
   await loadTemplates()
   if (templateId.value) {
     await loadTemplateConfig(templateId.value)
   }
+})
+
+onBeforeUnmount(() => {
+  offTemplatesChanged()
 })
 
 // ------------------------------------------------------------ 生命周期
@@ -355,7 +361,8 @@ onMounted(async () => {
           <span>管理连接</span>
         </el-button>
 
-        <el-button @click="templateDialogVisible = true">
+        <!-- 打开 v3 独立模板窗口；重复点击只聚焦已开窗口 -->
+        <el-button @click="OpenTemplatesWindow()">
           <el-icon><Document /></el-icon>
           <span>SQL 模板管理</span>
         </el-button>
@@ -436,9 +443,6 @@ onMounted(async () => {
       v-model:visible="connectionDialogVisible"
       @change="loadConnections"
     />
-
-    <!-- SQL 模板管理（全屏） -->
-    <TemplateManagerDialog v-model:visible="templateDialogVisible" />
   </div>
 </template>
 

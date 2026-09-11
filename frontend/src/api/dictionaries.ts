@@ -5,7 +5,7 @@ import {
   LoadDictionaryCache,
   SaveDictionary,
   SaveDictionaryItems,
-} from '@wails/go/app/App'
+} from './bindings'
 import type { Dictionary, DictionaryItem } from '@/types'
 
 /** 把后端词典对象规整为前端类型 */

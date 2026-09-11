@@ -7,7 +7,7 @@ import {
   PreviewTemplate,
   SaveSqlTemplate,
   ValidateScript,
-} from '@wails/go/app/App'
+} from './bindings'
 import type {
   QueryResult,
   SQLTemplate,

@@ -7,6 +7,12 @@
 </head>
 <body>
 <div id="app"></div>
+<!--
+  Wails v3 的 runtime 通过 npm 包 @wailsio/runtime 引入
+  （由 src/api/runtime.ts 与生成的绑定 import 触发），
+  无需在此加载 /wails/runtime.js；直接加载反而会让
+  vite 在独立启动时因找不到该路径而报错。
+-->
 <script src="./src/main.ts" type="module"></script>
 </body>
 </html>
