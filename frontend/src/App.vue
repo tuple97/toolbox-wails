@@ -5,23 +5,26 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import TitleBar from '@/components/TitleBar.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import WindowResizeEdges from '@/components/WindowResizeEdges.vue'
-import SettingsPanel from '@/components/SettingsPanel.vue'
-import TabLayout from '@/layouts/TabLayout.vue'
+import Workbench from '@/layouts/Workbench.vue'
 import { closeWindow, toggleMaximiseWindow } from '@/api/window'
 import { useConfigStore } from '@/stores/configStore'
 import { useLogStore } from '@/stores/logStore'
+import { useTabStore } from '@/stores/tabStore'
 import type { ContextMenuAction } from '@/types'
 
 const configStore = useConfigStore()
 const logStore = useLogStore()
+const tabStore = useTabStore()
 
 /** 自定义右键菜单状态（仅标题栏触发） */
 const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
 
-/** 设置面板 */
-const settingsVisible = ref(false)
+/** 打开设置：设置已改为单例标签页，不存在则新建并跳转 */
+function openSettings() {
+  tabStore.openTool('settings')
+}
 
 /** 标题栏系统右键菜单项 */
 const titleBarMenuItems: ContextMenuAction[] = [
@@ -72,12 +75,12 @@ onMounted(async () => {
       <TitleBar
         title="Toolbox"
         @close="closeWindow"
-        @settings="settingsVisible = true"
+        @settings="openSettings"
         @context-menu="openContextMenu"
       />
 
       <main class="app-main app-main--flush">
-        <TabLayout />
+        <Workbench />
       </main>
 
       <!-- 窗口四周缩放宽边热区 -->
@@ -91,9 +94,6 @@ onMounted(async () => {
         :items="titleBarMenuItems"
         @select="handleMenuSelect"
       />
-
-      <!-- 设置面板 -->
-      <SettingsPanel v-model:visible="settingsVisible" />
     </div>
   </ElConfigProvider>
 </template>

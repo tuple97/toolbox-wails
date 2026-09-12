@@ -25,10 +25,28 @@ export interface ContextMenuAction {
  * 注意：后端 database.Tab.ToolType 为 string，
  * 因此 WorkbenchTab.toolType 保持 string，此联合类型仅用于工具选择处的约束。
  */
-export type ToolType = 'db-query' | 'placeholder'
+export type ToolType =
+  // 尚未绑定工具的空白标签（历史数据兼容）
+  | 'placeholder'
+  // SQL 查询（多例）
+  | 'db-query'
+  // 以下均为单例标签
+  | 'connections'
+  | 'sql-template'
+  | 'dictionary'
+  | 'settings'
 
 /** 工作台 Tab，与后端 database.Tab 对应 */
 export interface WorkbenchTab {
+  /**
+   * 会话内稳定标识，不落库。
+   *
+   * 新建标签先用负数 id 占位，首次落盘时后端会重新分配 id；
+   * 若组件层用 id 做渲染 key，保存回来后 key 变化会导致组件销毁重建
+   * （表现为打开新标签约 1s 后闪一下、状态丢失）。
+   * 因此渲染 key 与按标签的缓存一律用 uid，id 只负责持久化。
+   */
+  uid: string
   id: number
   name: string
   sortOrder: number
@@ -168,10 +186,18 @@ export type SettingKey =
   | 'font_size'
   | 'control_size'
   | 'editor_font_size'
+  | 'editor_font_family'
   | 'log_max_lines'
+  | 'background_alpha'
+  | 'background_blur'
+  | 'font_family'
 
-/** 主题模式 */
-export type ThemeMode = 'dark' | 'light'
+/**
+ * 主题标识。
+ * dark：深蓝（默认）；midnight：极夜黑；idea：IDEA Darcula 风格；light：亮色。
+ * 除 light 外都属于暗色族，编辑器等处按暗色处理。
+ */
+export type ThemeMode = 'dark' | 'midnight' | 'idea' | 'light'
 
 /** Element Plus 控件尺寸 */
 export type ControlSize = 'large' | 'default' | 'small'

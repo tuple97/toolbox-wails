@@ -55,6 +55,18 @@ func main() {
 		MinHeight: 700,
 		// 无边框窗口：关闭系统标题栏，由前端自定义工具栏接管
 		Frameless: true,
+		// 与暗色主题 --bg-color(#0f172a) 一致，避免启动首屏黑屏
+		// （BackgroundColour 零值为透明，会渲染成黑色）
+		BackgroundColour: application.RGBA{Red: 15, Green: 23, Blue: 42, Alpha: 255},
+		/*
+		 * 背景类型：透明。
+		 *
+		 * 「背景透明度 / 磨砂」由页面 CSS 控制（#app-backdrop 层负责
+		 * rgba 底色 + backdrop-filter），窗口本身必须透明才能透出桌面。
+		 * 默认 alpha 为 100（页面底色不透明），观感与不透明窗口一致；
+		 * 注意 v3 没有运行时切换 BackgroundType 的 API，只能在创建时确定。
+		 */
+		BackgroundType: application.BackgroundTypeTransparent,
 	})
 
 	if err := wailsApp.Run(); err != nil {

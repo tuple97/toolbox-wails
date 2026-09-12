@@ -219,7 +219,7 @@ onBeforeUnmount(() => {
 }
 
 .titlebar__title {
-  font-size: 13px;
+  font-size: var(--app-font-size);
   font-weight: 600;
   letter-spacing: 0.2px;
   color: var(--text-color);
@@ -245,21 +245,22 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 46px;
+  /* 只有宽度是控件尺寸；高度撑满标题栏（容器高度不随控件大小变） */
+  width: calc(46px * var(--app-control-scale));
   height: 100%;
   padding: 0;
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: var(--app-font-size-xl);
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 /* 窗口控制按钮使用内联 svg，统一线宽与尺寸 */
 .titlebar__btn > svg {
-  width: 12px;
-  height: 12px;
+  width: calc(12px * var(--app-control-scale));
+  height: calc(12px * var(--app-control-scale));
   fill: none;
   stroke: currentColor;
   stroke-width: 1.1;
@@ -267,7 +268,7 @@ onBeforeUnmount(() => {
 
 /* Element Plus 图标按钮（模板、设置）保持字号大小 */
 .titlebar__btn > .el-icon {
-  font-size: 15px;
+  font-size: var(--app-font-size-xl);
 }
 
 .titlebar__btn:focus-visible {

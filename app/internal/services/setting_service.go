@@ -25,6 +25,13 @@ var defaultSettings = []database.Setting{
 	{Key: "control_size", Type: SettingTypeString, Value: "default"},
 	{Key: "editor_font_size", Type: SettingTypeNumber, Value: "13"},
 	{Key: "log_max_lines", Type: SettingTypeNumber, Value: "200"},
+	// 窗口背景：透明度百分比（100 为不透明）与磨砂模糊半径（px，0 为关闭）
+	{Key: "background_alpha", Type: SettingTypeNumber, Value: "100"},
+	{Key: "background_blur", Type: SettingTypeNumber, Value: "0"},
+	// 界面字体标识（取值见前端 utils/fonts.ts）
+	{Key: "font_family", Type: SettingTypeString, Value: "system"},
+	// 编辑器字体标识，独立于界面字体；取值规则同 font_family
+	{Key: "editor_font_family", Type: SettingTypeString, Value: "system"},
 }
 
 // SettingService 负责全局配置的读写。

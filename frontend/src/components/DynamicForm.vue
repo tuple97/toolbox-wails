@@ -142,6 +142,15 @@ function optionsFor(config: VariableConfig): VariableOption[] {
   return dynamicOptions[config.name] ?? config.options ?? []
 }
 
+/**
+ * 是否占用整行。
+ * 多行文本与滑块（带输入框）横向空间需求大，放进网格单列会很局促，
+ * 因此让它们横跨整行。
+ */
+function isFullWidthItem(config: VariableConfig): boolean {
+  return config.component === 'textarea' || config.component === 'slider'
+}
+
 /** 值变化后通知外部，并把值按数据类型转换 */
 function notifyChange() {
   const converted: Record<string, unknown> = {}
@@ -228,6 +237,7 @@ watch(
         v-for="config in configs"
         :key="config.name"
         :label="config.label || config.name"
+        :class="{ 'dynamic-form__item--full': inline && isFullWidthItem(config) }"
       >
         <!-- 文本输入 -->
         <el-input
@@ -332,14 +342,17 @@ watch(
   padding: 4px 0;
 }
 
+/* 未检测到变量时的提示 */
 .dynamic-form__empty {
   margin: 0;
-  padding: 16px;
+  padding: 18px;
   border: 1px dashed var(--border-color);
   border-radius: var(--radius-md);
+  background: var(--surface-color);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--app-font-size-sm);
   line-height: 1.7;
+  text-align: center;
 }
 
 .dynamic-form__empty code {
@@ -350,37 +363,42 @@ watch(
   font-family: var(--font-mono);
 }
 
+/* 竖排（上置标签）模式：用于非查询页的窄容器 */
 .dynamic-form :deep(.el-form-item) {
   margin-bottom: 14px;
 }
 
 .dynamic-form :deep(.el-form-item__label) {
-  padding-bottom: 4px;
-  font-size: 12px;
   color: var(--text-muted);
+  font-size: var(--app-font-size-sm);
 }
 
 /*
- * 横向排布：每个条件（label + 控件）是一个不可拆分的整体，
- * 宽度不够时整体换到下一行，而不是把 label 与控件拆开。
+ * 横向模式：用网格排布条件。
+ *
+ * 相比 flex-wrap，网格能保证各列宽度一致、上下行标签对齐；
+ * 列宽 300px 起步，窗口越宽列数越多（auto-fill 不会拉伸已有列）。
  */
 .dynamic-form__grid {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 10px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px 18px;
+  align-items: center;
 }
 
 .dynamic-form :deep(.dynamic-form__grid .el-form-item) {
-  flex: 0 0 auto;
-  width: 280px;
-  margin-right: 0;
-  margin-bottom: 0;
+  margin: 0;
+  align-items: center;
 }
 
+/* 标签与控件垂直居中（Element Plus 的行内标签默认行高是给竖排标签用的） */
 .dynamic-form :deep(.dynamic-form__grid .el-form-item__label) {
-  padding-bottom: 0;
-  line-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: auto;
+  padding: 0 10px 0 0;
+  line-height: 1.4;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -389,5 +407,10 @@ watch(
 .dynamic-form :deep(.dynamic-form__grid .el-form-item__content) {
   flex: 1;
   min-width: 0;
+}
+
+/* 多行文本 / 滑块：横跨整行 */
+.dynamic-form :deep(.dynamic-form__grid .el-form-item.dynamic-form__item--full) {
+  grid-column: 1 / -1;
 }
 </style>

@@ -206,6 +206,19 @@ export function ListSqlTemplates() {
 }
 
 /**
+ * ListSystemFonts 返回本机已安装的字体族名称列表。
+ * 
+ * 供设置面板的字体下拉使用（前端拼成字体栈）。
+ * 列表在单次运行内缓存，重复调用不会重复读取注册表。
+ * @returns {$CancellablePromise<string[]>}
+ */
+export function ListSystemFonts() {
+    return $Call.ByID(1215069897).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType2($result);
+    }));
+}
+
+/**
  * ListTabs 返回全部工作台 Tab。
  * @returns {$CancellablePromise<database$0.Tab[]>}
  */
@@ -247,22 +260,6 @@ export function LoadDictionaryCache() {
  */
 export function NotifyBeforeQuit() {
     return $Call.ByID(1771222557);
-}
-
-/**
- * OpenTemplatesWindow 打开（或聚焦）SQL 模板管理窗口。
- * 
- * v3 多窗口说明：
- *   - 每个窗口是独立 webview，拥有独立 JS 上下文（Pinia 状态互不相通），
- *     因此模板窗口与主窗口之间通过事件通信（templates:changed）。
- *   - 窗口被用户关闭时，v3 会将其从内部 windows map 移除，
- *     此时 GetByName 返回 false，下次调用会重新创建，不会操作已销毁窗口。
- *   - 模板窗口为独立 HTML 入口（templates.html，vite 多页应用），
- *     dev 模式由 vite 直接提供，生产模式由嵌入的 dist 提供。
- * @returns {$CancellablePromise<void>}
- */
-export function OpenTemplatesWindow() {
-    return $Call.ByID(3353117031);
 }
 
 /**

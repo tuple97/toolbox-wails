@@ -4,19 +4,19 @@ import { ElMessage } from 'element-plus'
 import DynamicForm from '@/components/DynamicForm.vue'
 import ResultTable from '@/components/ResultTable.vue'
 import ResultPagination from '@/components/ResultPagination.vue'
-import ConnectionManager from '@/components/ConnectionManager.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
 import { DEFAULT_PAGE_SIZE, executeTemplateQuery, fetchTemplate, fetchTemplateList } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
-import { OpenTemplatesWindow } from '@/api/bindings'
 import { EventsOn } from '@/api/runtime'
 import { useLogStore } from '@/stores/logStore'
+import { useTabStore } from '@/stores/tabStore'
 import type {
   DBConnection,
   DbQueryPayload,
   FieldMapping,
   QueryResult,
   TemplateListItem,
+  ToolType,
   VariableConfig,
 } from '@/types'
 
@@ -29,9 +29,17 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'change', tabId: number, payload: DbQueryPayload): void
+  /** 首次初始化完成（父级据此关闭 loading 遮罩） */
+  (e: 'ready'): void
 }>()
 
 const logStore = useLogStore()
+const tabStore = useTabStore()
+
+/** 跳转到单例功能标签页（连接管理 / SQL 模板） */
+function openTool(type: ToolType) {
+  tabStore.openTool(type)
+}
 
 /** 模板列表与连接列表 */
 const templates = ref<TemplateListItem[]>([])
@@ -64,8 +72,7 @@ const pageSize = ref(DEFAULT_PAGE_SIZE)
 /** 上一次执行得到的总数，翻页时带回后端以避免重复统计 */
 const lastTotal = ref(0)
 
-/** 连接管理弹窗 */
-const connectionDialogVisible = ref(false)
+// 连接管理与 SQL 模板已改为独立标签页，这里不再维护弹窗状态
 
 const formRef = ref<{ getValues: () => Record<string, unknown> } | null>(null)
 
@@ -284,11 +291,10 @@ watch(connId, () => {
 })
 
 /**
- * 监听模板窗口的变更广播。
+ * 其他标签页的数据变更通知。
  *
- * 模板管理已改为 v3 独立窗口（templates:changed 由其保存/删除后发出）。
- * 变更后除刷新列表外，还需重载当前引用模板的配置——
- * 因为变量表单由模板驱动，模板改了配置也变了。
+ * 连接管理 / SQL 模板是独立的单例标签页，改动后通过事件广播；
+ * 这里据此刷新下拉与当前引用模板的配置（变量表单由模板驱动）。
  */
 const offTemplatesChanged = EventsOn('templates:changed', async () => {
   await loadTemplates()
@@ -297,26 +303,37 @@ const offTemplatesChanged = EventsOn('templates:changed', async () => {
   }
 })
 
+const offConnectionsChanged = EventsOn('connections:changed', async () => {
+  await loadConnections()
+})
+
 onBeforeUnmount(() => {
   offTemplatesChanged()
+  offConnectionsChanged()
 })
 
 // ------------------------------------------------------------ 生命周期
 
 onMounted(async () => {
-  // 恢复上次状态
-  templateId.value = (props.initialPayload.templateId as number) ?? null
-  connId.value = (props.initialPayload.connId as number) ?? null
-  variableValues.value =
-    (props.initialPayload.variableValues as Record<string, unknown>) ?? {}
-  // 每页条数是本标签的私有状态，从 payload 恢复
-  const savedPageSize = Number(props.initialPayload.pageSize)
-  pageSize.value = savedPageSize > 0 ? savedPageSize : DEFAULT_PAGE_SIZE
+  try {
+    // 恢复上次状态
+    templateId.value = (props.initialPayload.templateId as number) ?? null
+    connId.value = (props.initialPayload.connId as number) ?? null
+    variableValues.value =
+      (props.initialPayload.variableValues as Record<string, unknown>) ?? {}
+    // 每页条数是本标签的私有状态，从 payload 恢复
+    const savedPageSize = Number(props.initialPayload.pageSize)
+    pageSize.value = savedPageSize > 0 ? savedPageSize : DEFAULT_PAGE_SIZE
 
-  await Promise.all([loadTemplates(), loadConnections()])
+    await Promise.all([loadTemplates(), loadConnections()])
 
-  if (templateId.value) {
-    await loadTemplateConfig(templateId.value)
+    if (templateId.value) {
+      await loadTemplateConfig(templateId.value)
+    }
+  }
+  finally {
+    // 失败也要上报，否则遮罩会一直盖住界面
+    emit('ready')
   }
 })
 </script>
@@ -356,15 +373,21 @@ onMounted(async () => {
           />
         </el-select>
 
-        <el-button @click="connectionDialogVisible = true">
-          <el-icon><Setting /></el-icon>
-          <span>管理连接</span>
+        <!-- 图标按钮：跳转到对应的单例标签页 -->
+        <el-button
+          class="db-query__icon-btn"
+          title="连接管理"
+          @click="openTool('connections')"
+        >
+          <el-icon><Link /></el-icon>
         </el-button>
 
-        <!-- 打开 v3 独立模板窗口；重复点击只聚焦已开窗口 -->
-        <el-button @click="OpenTemplatesWindow()">
+        <el-button
+          class="db-query__icon-btn"
+          title="SQL 模板管理"
+          @click="openTool('sql-template')"
+        >
           <el-icon><Document /></el-icon>
-          <span>SQL 模板管理</span>
         </el-button>
       </div>
 
@@ -380,9 +403,13 @@ onMounted(async () => {
     <div class="db-query__body">
       <section class="db-query__form">
         <div class="db-query__section-title">
+          <span class="db-query__section-bar" aria-hidden="true" />
           <span>查询条件</span>
           <small v-if="currentTemplate">
             来自模板「{{ currentTemplate.name }}」
+          </small>
+          <small v-if="templateId && variableConfigs.length">
+            共 {{ variableConfigs.length }} 项
           </small>
         </div>
 
@@ -437,12 +464,6 @@ onMounted(async () => {
 
     <!-- 底部：执行记录 -->
     <ExecutionLog />
-
-    <!-- 连接管理 -->
-    <ConnectionManager
-      v-model:visible="connectionDialogVisible"
-      @change="loadConnections"
-    />
   </div>
 </template>
 
@@ -452,6 +473,11 @@ onMounted(async () => {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+}
+
+/* 图标按钮：只显示图标，跳转到对应的单例标签页 */
+.db-query__icon-btn {
+  padding: 8px 10px;
 }
 
 .db-query__toolbar {
@@ -483,23 +509,36 @@ onMounted(async () => {
   max-height: 45%;
   min-height: 0;
   overflow: auto;
-  padding: 12px 16px 14px;
+  padding: 14px 16px 16px;
   border-bottom: 1px solid var(--border-color);
 }
 
 .db-query__section-title {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
-  font-size: 13px;
+  margin-bottom: 12px;
+  font-size: var(--app-font-size);
   font-weight: 600;
+}
+
+/* 标题前的强调条，弱化版的分区标记 */
+.db-query__section-bar {
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--brand-color);
 }
 
 .db-query__section-title small {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--app-font-size-xs);
   font-weight: 400;
+}
+
+/* 条件数量靠右，与模板来源形成左右信息分布 */
+.db-query__section-title small:last-child {
+  margin-left: auto;
 }
 
 .db-query__result {
@@ -516,14 +555,14 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   padding: 8px 16px;
-  font-size: 13px;
+  font-size: var(--app-font-size);
   font-weight: 600;
   border-bottom: 1px solid var(--border-color);
 }
 
 .db-query__result-meta {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--app-font-size-sm);
   font-weight: 400;
 }
 </style>

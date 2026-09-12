@@ -214,7 +214,7 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   background: transparent;
   color: var(--text-color);
-  font-size: 13px;
+  font-size: var(--app-font-size);
   text-align: left;
   cursor: pointer;
   transition: background-color 0.12s ease;
@@ -242,7 +242,7 @@ onBeforeUnmount(() => {
 
 .context-menu__shortcut {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--app-font-size-xs);
   font-family: var(--font-mono);
 }
 
@@ -256,7 +256,7 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 8px 10px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--app-font-size-sm);
 }
 
 .context-menu-enter-active,

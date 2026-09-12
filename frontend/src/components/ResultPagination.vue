@@ -113,7 +113,7 @@ function go(target: number) {
 
 .result-pagination__info {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--app-font-size-sm);
 }
 
 .result-pagination__actions {
@@ -125,7 +125,7 @@ function go(target: number) {
 
 .result-pagination__jump-label {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--app-font-size-sm);
 }
 
 .result-pagination__jump-input {

@@ -9,15 +9,19 @@ import {
   revealPassword,
   testConnection,
 } from '@/api/db'
+import { Events } from '@wailsio/runtime'
 import type { DBConnection } from '@/types'
 
-const props = defineProps<{
-  visible: boolean
-}>()
+/**
+ * 连接管理（单例标签页）。
+ *
+ * 与其他标签的关系：连接变更后广播 `connections:changed`，
+ * SQL 查询标签页监听该事件刷新连接下拉。
+ */
 
 const emit = defineEmits<{
-  (e: 'update:visible', value: boolean): void
-  (e: 'change'): void
+  /** 首次加载完成（父级据此关闭 loading 遮罩） */
+  (e: 'ready'): void
 }>()
 
 /** 支持的数据库类型 */
@@ -70,6 +74,11 @@ async function load() {
   finally {
     loading.value = false
   }
+}
+
+/** 广播连接变更，供其他标签页刷新 */
+function notifyChanged() {
+  void Events.Emit('connections:changed')
 }
 
 /** 切换数据库类型时同步默认端口 */
@@ -151,7 +160,7 @@ async function handleSave() {
     ElMessage.success('保存成功')
     editVisible.value = false
     await load()
-    emit('change')
+    notifyChanged()
   }
   catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
@@ -172,7 +181,7 @@ async function handleDelete(conn: DBConnection) {
     await removeConnection(conn.id)
     ElMessage.success('已删除')
     await load()
-    emit('change')
+    notifyChanged()
   }
   catch (e) {
     // 用户取消时不提示
@@ -182,55 +191,53 @@ async function handleDelete(conn: DBConnection) {
   }
 }
 
-onMounted(load)
-
-/** 弹窗打开时重新加载，保证数据最新 */
-function handleVisibleChange(value: boolean) {
-  emit('update:visible', value)
-  if (value) {
-    void load()
+onMounted(async () => {
+  try {
+    await load()
   }
-}
+  finally {
+    // 失败也要上报，否则遮罩会一直盖住界面
+    emit('ready')
+  }
+})
 </script>
 
 <template>
-  <el-dialog
-    :model-value="props.visible"
-    title="数据库连接管理"
-    width="720px"
-    @update:model-value="handleVisibleChange"
-  >
-    <div class="conn">
-      <div class="conn__toolbar">
-        <el-button type="primary" @click="openCreate">
-          <el-icon><Plus /></el-icon>
-          <span>新建连接</span>
-        </el-button>
+  <div class="conn-view">
+    <header class="conn-view__head">
+      <div class="conn-view__title">
+        <span class="conn-view__bar" aria-hidden="true" />
+        <span>数据库连接管理</span>
+        <small>新建、编辑与测试数据库连接；密码加密保存在本地</small>
       </div>
 
-      <el-table
-        v-loading="loading"
-        :data="connections"
-        size="small"
-        height="320"
-        empty-text="暂无连接，请点击新建"
-      >
-        <el-table-column prop="name" label="名称" min-width="130" />
-        <el-table-column prop="dbType" label="类型" width="110" />
-        <el-table-column label="地址" min-width="180">
-          <template #default="{ row }">
-            {{ row.host }}:{{ row.port }}/{{ row.database }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="username" label="用户名" width="120" />
-        <el-table-column label="操作" width="140" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
+      <el-button type="primary" @click="openCreate">
+        <el-icon><Plus /></el-icon>
+        <span>新建连接</span>
+      </el-button>
+    </header>
+
+    <el-table
+      v-loading="loading"
+      :data="connections"
+      size="small"
+      empty-text="暂无连接，请点击右上角新建"
+    >
+      <el-table-column prop="name" label="名称" min-width="130" />
+      <el-table-column prop="dbType" label="类型" width="110" />
+      <el-table-column label="地址" min-width="180">
+        <template #default="{ row }">
+          {{ row.host }}:{{ row.port }}/{{ row.database }}
+        </template>
+      </el-table-column>
+      <el-table-column prop="username" label="用户名" width="120" />
+      <el-table-column label="操作" width="140" fixed="right">
+        <template #default="{ row }">
+          <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+          <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
 
     <!-- 编辑弹窗 -->
     <el-dialog
@@ -293,11 +300,42 @@ function handleVisibleChange(value: boolean) {
         <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
       </template>
     </el-dialog>
-  </el-dialog>
+  </div>
 </template>
 
 <style scoped>
-.conn__toolbar {
-  margin-bottom: 12px;
+.conn-view {
+  height: 100%;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+.conn-view__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.conn-view__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--app-font-size-lg);
+  font-weight: 600;
+}
+
+.conn-view__bar {
+  width: 3px;
+  height: 15px;
+  border-radius: 2px;
+  background: var(--brand-color);
+}
+
+.conn-view__title small {
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+  font-weight: 400;
 }
 </style>

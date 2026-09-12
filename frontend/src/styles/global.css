@@ -6,16 +6,43 @@
 :root {
   --radius-lg: 16px;
   --radius-md: 10px;
-  --font-mono: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  /* 等宽字体栈：优先本机可能安装的中文等宽/编程字体，末尾补中文避免出现方块 */
+  --font-mono: "Sarasa Mono SC", "JetBrains Mono", Consolas, "Microsoft YaHei", "PingFang SC", monospace;
+  /* 界面字体栈，由设置面板动态写入；此处为默认值 */
+  --app-font-family: "Nunito", "Microsoft YaHei", "PingFang SC", sans-serif;
   --titlebar-height: 40px;
   /* 界面字体大小，由设置面板动态写入 */
   --app-font-size: 13px;
+  /*
+   * 派生字号：自定义组件样式请使用这些变量而不是写死 px，
+   * 否则「设置 → 字体大小」对它们无效。
+   */
+  --app-font-size-2xs: calc(var(--app-font-size) - 3px);
+  --app-font-size-xs: calc(var(--app-font-size) - 2px);
+  --app-font-size-sm: calc(var(--app-font-size) - 1px);
+  --app-font-size-lg: calc(var(--app-font-size) + 1px);
+  --app-font-size-xl: calc(var(--app-font-size) + 2px);
+  /*
+   * 控件大小倍率，由设置面板动态写入（小 0.9 / 默认 1 / 大 1.1）。
+   * Element Plus 的控件高度已由下方 --el-component-size* 自动跟随；
+   * 自绘控件（标题栏按钮、菜单项、标签页、面板工具行…）在「控件高度/宽度」上
+   * 显式乘它即可，如 height: calc(32px * var(--app-control-scale))。
+   * 注意只缩放控件自身，容器高度（窗口标题栏、面板、内容区）保持固定。
+   */
+  --app-control-scale: 1;
+  /* 窗口背景：透明度（0~1）与磨砂模糊半径，由设置面板动态写入 */
+  --app-bg-alpha: 1;
+  --app-bg-blur: 0px;
+  /* 弹窗遮罩颜色 */
+  --app-mask: rgba(2, 6, 23, 0.45);
   --titlebar-bg: rgba(255, 255, 255, 0.85);
   --panel-bg: rgba(255, 255, 255, 0.7);
 }
 
 /* 暗色主题 */
 html.dark {
+  /* --bg-rgb 供 rgba() 使用，支持按透明度叠加 */
+  --bg-rgb: 15 23 42;
   --bg-color: #0f172a;
   --bg-color-soft: #16213c;
   --surface-color: rgba(255, 255, 255, 0.04);
@@ -26,16 +53,21 @@ html.dark {
   --brand-color-strong: #6366f1;
   --danger-color: #f87171;
   --shadow-md: 0 18px 40px rgba(2, 6, 23, 0.45);
-  --titlebar-bg: rgba(12, 18, 34, 0.82);
-  --panel-bg: rgba(8, 13, 26, 0.6);
+  /*
+   * 各面板底色按「面板自带透明度 × 全局背景透明度」计算，
+   * 这样调低背景透明度时，标题栏、执行记录、菜单会一起透出桌面。
+   */
+  --titlebar-bg: rgb(12 18 34 / calc(var(--app-bg-alpha) * 0.82));
+  --panel-bg: rgb(8 13 26 / calc(var(--app-bg-alpha) * 0.6));
   /* 悬浮高亮：亮暗主题方向相反，统一由变量提供 */
   --hover-bg: rgba(255, 255, 255, 0.07);
   --active-bg: rgba(56, 189, 248, 0.14);
-  --menu-bg: rgba(15, 23, 42, 0.98);
+  --menu-bg: rgb(var(--bg-rgb) / calc(var(--app-bg-alpha) * 0.98));
 }
 
 /* 亮色主题 */
 html:not(.dark) {
+  --bg-rgb: 241 245 249;
   --bg-color: #f1f5f9;
   --bg-color-soft: #e2e8f0;
   --surface-color: rgba(15, 23, 42, 0.03);
@@ -46,11 +78,92 @@ html:not(.dark) {
   --brand-color-strong: #4f46e5;
   --danger-color: #dc2626;
   --shadow-md: 0 18px 40px rgba(15, 23, 42, 0.12);
-  --titlebar-bg: rgba(255, 255, 255, 0.85);
-  --panel-bg: rgba(248, 250, 252, 0.8);
+  --titlebar-bg: rgb(255 255 255 / calc(var(--app-bg-alpha) * 0.85));
+  --panel-bg: rgb(248 250 252 / calc(var(--app-bg-alpha) * 0.8));
   --hover-bg: rgba(15, 23, 42, 0.06);
   --active-bg: rgba(2, 132, 199, 0.12);
-  --menu-bg: rgba(255, 255, 255, 0.98);
+  --menu-bg: rgb(255 255 255 / calc(var(--app-bg-alpha) * 0.98));
+  --app-mask: rgba(15, 23, 42, 0.28);
+}
+
+/*
+ * 扩展主题：在「暗色 / 亮色」两套基础变量之上，
+ * 用 html[data-theme] 覆盖配色（由 configStore 设置该属性）。
+ * 二者特异性相同，因此下面这些规则必须写在基础主题之后。
+ */
+
+/* 极夜黑：接近纯黑，对比度高 */
+html[data-theme='midnight'] {
+  --bg-rgb: 10 10 12;
+  --bg-color: #0a0a0c;
+  --bg-color-soft: #16161a;
+  --surface-color: rgba(255, 255, 255, 0.05);
+  --border-color: rgba(255, 255, 255, 0.12);
+  --text-color: #e8e8ea;
+  --text-muted: #8b8b93;
+  --brand-color: #7dd3fc;
+  --brand-color-strong: #818cf8;
+  --danger-color: #f87171;
+  --titlebar-bg: rgb(14 14 16 / calc(var(--app-bg-alpha) * 0.82));
+  --panel-bg: rgb(18 18 21 / calc(var(--app-bg-alpha) * 0.62));
+  --menu-bg: rgb(var(--bg-rgb) / calc(var(--app-bg-alpha) * 0.98));
+}
+
+/* IDEA Darcula 风格：经典深灰 + 橙色强调 */
+html[data-theme='idea'] {
+  --bg-rgb: 43 43 43;
+  --bg-color: #2b2b2b;
+  --bg-color-soft: #313335;
+  --surface-color: rgba(255, 255, 255, 0.05);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --text-color: #d6d6d6;
+  --text-muted: #9a9a9a;
+  --brand-color: #cc7832;
+  --brand-color-strong: #ffc66d;
+  --danger-color: #e05561;
+  --titlebar-bg: rgb(60 63 65 / calc(var(--app-bg-alpha) * 0.85));
+  --panel-bg: rgb(50 52 54 / calc(var(--app-bg-alpha) * 0.65));
+  --menu-bg: rgb(43 43 43 / calc(var(--app-bg-alpha) * 0.98));
+  --hover-bg: rgba(255, 255, 255, 0.08);
+  --active-bg: rgba(204, 120, 50, 0.18);
+}
+
+/*
+ * 让 Element Plus 组件（弹窗、表单、下拉、表格…）沿用应用调色板。
+ *
+ * EP 自带的主题是固定配色（暗色为 #141414 一类），弹窗看起来会与应用主题脱节。
+ * 这里用应用语义变量覆盖 EP 的关键变量；由于 main.ts 中 global.css 在 EP 的
+ * css-vars 之后导入，同特异性下后者生效。
+ */
+html.dark,
+html:not(.dark) {
+  --el-bg-color: var(--bg-color);
+  --el-bg-color-page: var(--bg-color);
+  --el-bg-color-overlay: var(--bg-color-soft);
+  --el-text-color-primary: var(--text-color);
+  --el-text-color-regular: var(--text-color);
+  --el-text-color-secondary: var(--text-muted);
+  --el-text-color-placeholder: var(--text-muted);
+  --el-text-color-disabled: var(--text-muted);
+  --el-border-color: var(--border-color);
+  --el-border-color-light: var(--border-color);
+  --el-border-color-lighter: var(--border-color);
+  --el-border-color-extra-light: var(--border-color);
+  --el-fill-color: var(--surface-color);
+  --el-fill-color-light: var(--surface-color);
+  --el-fill-color-lighter: var(--surface-color);
+  --el-fill-color-blank: var(--bg-color-soft);
+  --el-color-primary: var(--brand-color);
+  --el-color-primary-light-3: var(--brand-color-strong);
+  --el-color-primary-light-5: var(--brand-color-strong);
+  --el-color-primary-light-7: var(--brand-color-strong);
+  --el-color-primary-light-8: var(--brand-color-strong);
+  --el-color-primary-light-9: var(--active-bg);
+  --el-color-primary-dark-2: var(--brand-color);
+  --el-box-shadow: var(--shadow-md);
+  --el-box-shadow-light: var(--shadow-md);
+  --el-mask-color: var(--app-mask);
+  --el-disabled-bg-color: var(--surface-color);
 }
 
 * {
@@ -66,9 +179,13 @@ body {
 
 body {
   color: var(--text-color);
-  font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
+  /* 字体由设置面板通过 --app-font-family 控制（见 utils/fonts.ts） */
+  font-family: var(
+    --app-font-family,
+    "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
     "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-    "Microsoft YaHei", sans-serif;
+    "Microsoft YaHei", sans-serif
+  );
   /* 字号由设置面板通过 --app-font-size 控制 */
   font-size: var(--app-font-size);
   -webkit-font-smoothing: antialiased;
@@ -109,19 +226,35 @@ textarea,
   -webkit-user-select: text;
 }
 
-/* 主题化背景：暗色用深蓝渐变，亮色用浅灰渐变 */
-html.dark body {
+/*
+ * 主题化背景：暗色用深蓝渐变，亮色用浅灰渐变。
+ *
+ * 背景画在独立的 #app-backdrop 层上（而非 body），原因：
+ *  1. 窗口是透明的（BackgroundTypeTransparent），底色必须能被 alpha 控制，
+ *     才能透出桌面实现「背景透明度」；
+ *  2. 磨砂用 backdrop-filter 实现，放在独立层上不会影响内容里的
+ *     position: fixed 元素（backdrop-filter 会让元素成为固定定位的包含块）。
+ */
+#app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  backdrop-filter: blur(var(--app-bg-blur));
+}
+
+html.dark #app-backdrop {
   background:
     radial-gradient(1000px 600px at 15% -10%, rgba(56, 189, 248, 0.18), transparent 60%),
     radial-gradient(900px 500px at 100% 0%, rgba(99, 102, 241, 0.2), transparent 55%),
-    var(--bg-color);
+    rgb(var(--bg-rgb) / var(--app-bg-alpha));
 }
 
-html:not(.dark) body {
+html:not(.dark) #app-backdrop {
   background:
     radial-gradient(1000px 600px at 15% -10%, rgba(2, 132, 199, 0.1), transparent 60%),
     radial-gradient(900px 500px at 100% 0%, rgba(79, 70, 229, 0.08), transparent 55%),
-    var(--bg-color);
+    rgb(var(--bg-rgb) / var(--app-bg-alpha));
 }
 
 @font-face {
@@ -134,6 +267,9 @@ html:not(.dark) body {
 #app {
   height: 100vh;
   overflow: hidden;
+  /* 内容位于背景层之上 */
+  position: relative;
+  z-index: 1;
 }
 
 .app-root {
@@ -188,6 +324,30 @@ html.dark {
 html:not(.dark) {
   --el-color-primary: #0284c7;
   --el-bg-color-overlay: #ffffff;
+}
+
+/*
+ * 字号与控件尺寸跟随「设置 → 字体大小 / 控件大小」。
+ *
+ * Element Plus 的字号（--el-font-size-*）与控件高度（--el-component-size*）
+ * 自成一套，且 `<ElConfigProvider :size>` 只对「没显式写 size 的组件」生效，
+ * 组件上写了 size="small" 就完全不受控。这里把两套变量都挂到应用变量上：
+ *  - --app-font-size：设置面板写入的正文字号
+ *  - --app-control-scale：控件大小倍率（小 0.9 / 默认 1 / 大 1.1）
+ * 注意必须在 EP 的 :root 变量之后、且选择器特异性不低于它才会生效。
+ */
+html.dark,
+html:not(.dark) {
+  --el-font-size-extra-large: calc(var(--app-font-size) + 6px);
+  --el-font-size-large: calc(var(--app-font-size) + 4px);
+  --el-font-size-medium: calc(var(--app-font-size) + 2px);
+  --el-font-size-base: var(--app-font-size);
+  --el-font-size-small: calc(var(--app-font-size) - 1px);
+  --el-font-size-extra-small: calc(var(--app-font-size) - 2px);
+
+  --el-component-size-large: calc(40px * var(--app-control-scale));
+  --el-component-size: calc(32px * var(--app-control-scale));
+  --el-component-size-small: calc(24px * var(--app-control-scale));
 }
 
 /* 表格贴合暗色背景 */

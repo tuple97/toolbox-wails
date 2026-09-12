@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { fetchTabs, persistTabs } from '@/api/tabs'
+import { fetchTabs, nextTabUid, persistTabs } from '@/api/tabs'
+import { toolOf } from '@/utils/tools'
 import type { ToolType, WorkbenchTab } from '@/types'
 
 /** 防抖保存间隔：state 变化后等待 1s 再落盘 */
@@ -121,9 +122,16 @@ export const useTabStore = defineStore('tabs', () => {
       // 后端按 sort_order 返回，这里再按字段显式排序确保顺序稳定
       tabs.value = [...list].sort((a, b) => a.sortOrder - b.sortOrder)
 
+      // 单例标签不允许改名，历史数据里被改过的名称在这里纠正回工具名
+      const renamed = normalizeSingletonNames()
+
       const active = tabs.value.find(tab => tab.isActive)
       activeId.value = active?.id ?? tabs.value[0]?.id ?? null
       loaded.value = true
+
+      if (renamed) {
+        scheduleSave()
+      }
     }
     catch (e) {
       saveError.value = e instanceof Error ? e.message : String(e)
@@ -131,11 +139,32 @@ export const useTabStore = defineStore('tabs', () => {
     }
   }
 
+  /**
+   * 把单例标签的名称纠正回工具默认名。
+   *
+   * 单例标签的名称就是功能名（全局只有一个），设计上不允许改名，
+   * 因此加载时统一纠正历史数据里被改过的名称。
+   *
+   * @returns 是否有名称被纠正（有则需要回写）
+   */
+  function normalizeSingletonNames(): boolean {
+    let changed = false
+    for (const tab of tabs.value) {
+      const definition = toolOf(tab.toolType)
+      if (definition && !definition.multi && tab.name !== definition.label) {
+        tab.name = definition.label
+        changed = true
+      }
+    }
+    return changed
+  }
+
   // ------------------------------------------------------------ 增删改
 
   /** 新建一个 Tab 并激活 */
   function addTab(toolType: ToolType = 'placeholder', name?: string): WorkbenchTab {
     const tab: WorkbenchTab = {
+      uid: nextTabUid(),
       id: nextLocalId--,
       name: name ?? `${DEFAULT_TAB_NAME} ${tabs.value.length + 1}`,
       sortOrder: tabs.value.length,
@@ -229,6 +258,37 @@ export const useTabStore = defineStore('tabs', () => {
   }
 
   /**
+   * 打开工具标签。
+   *
+   * 单例工具：已有标签则直接跳转（不新建）；
+   * 多例工具：每次调用新建一个实例（菜单上的 + 与标签栏的 + 都走这里）。
+   *
+   * @param type 工具类型
+   * @param options.newInstance 强制新建（多例工具右键/下拉新建时使用）
+   */
+  function openTool(type: ToolType, options: { newInstance?: boolean } = {}): WorkbenchTab {
+    const definition = toolOf(type)
+    const isMulti = definition?.multi ?? false
+
+    // 单例：已存在则跳转
+    if (!isMulti && !options.newInstance) {
+      const existing = tabs.value.find(tab => tab.toolType === type)
+      if (existing) {
+        activeId.value = existing.id
+        scheduleSave()
+        return existing
+      }
+    }
+
+    // 多例：名称带序号，便于区分
+    const label = definition?.label ?? '新建标签'
+    const sameKind = tabs.value.filter(tab => tab.toolType === type).length
+    const name = isMulti ? `${label} ${sameKind + 1}` : label
+
+    return addTab(type, name)
+  }
+
+  /**
    * 为 Tab 绑定工具。
    * 依据 PRD：工具一旦选定即永久绑定，不支持再切换。
    */
@@ -277,6 +337,7 @@ export const useTabStore = defineStore('tabs', () => {
     saveNow,
     scheduleSave,
     addTab,
+    openTool,
     closeTab,
     closeOthers,
     closeAll,

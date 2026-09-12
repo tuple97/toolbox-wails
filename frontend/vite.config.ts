@@ -32,15 +32,8 @@ export default defineConfig({
     // Monaco 体积较大，提高警告阈值避免噪音
     chunkSizeWarningLimit: 3000,
     rollupOptions: {
-      /*
-       * 多页应用入口：
-       *   index.html      → 主窗口（Tab 工作台）
-       *   templates.html  → SQL 模板管理窗口（v3 独立 webview）
-       * 两个窗口共享同一套 Go 绑定，但 JS 上下文独立（Pinia 不互通）。
-       */
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
-        templates: fileURLToPath(new URL('./templates.html', import.meta.url)),
       },
       output: {
         // 把体积大的依赖拆包，避免单个 chunk 过大影响首屏

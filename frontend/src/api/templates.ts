@@ -58,7 +58,11 @@ export async function fetchTemplateList(): Promise<TemplateListItem[]> {
 
 /** 读取单个模板的完整内容 */
 export async function fetchTemplate(id: number): Promise<SQLTemplate> {
-  return toTemplate(await GetSqlTemplate(id))
+  const raw = await GetSqlTemplate(id)
+  if (!raw) {
+    throw new Error(`模板不存在（id=${id}）`)
+  }
+  return toTemplate(raw)
 }
 
 /** 保存模板；id 为 0 时新增 */

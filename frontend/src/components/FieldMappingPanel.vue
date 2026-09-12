@@ -39,7 +39,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="field-panel">
+  <div class="tpl-panel-list">
     <el-empty
       v-if="!modelValue.length"
       description="执行查询后会自动列出结果列"
@@ -51,80 +51,90 @@ onMounted(() => {
       v-memo：mapping 对象引用与词典数据都没变时整行跳过 patch
       （父组件赋值时会复用未变化的 mapping 对象，引用相等才能命中缓存）。
     -->
-    <el-collapse v-model="expandedNames">
+    <el-collapse v-else v-model="expandedNames" class="tpl-panel-list__collapse">
       <el-collapse-item
         v-for="(mapping, index) in modelValue"
         :key="mapping.column"
         :name="mapping.column"
       >
         <template #title>
-          <code class="field-panel__name">{{ mapping.column }}</code>
-          <span v-if="mapping.label" class="field-panel__alias-hint">{{ mapping.label }}</span>
-          <el-tag v-if="mapping.dictionaryId" size="small" type="info" effect="plain">
-            词典
-          </el-tag>
+          <div class="tpl-panel__title">
+            <code class="tpl-panel__chip">{{ mapping.column }}</code>
+            <span class="tpl-panel__title-text">{{ mapping.label || '未设置别名' }}</span>
+            <el-tag v-if="mapping.dictionaryId" size="small" type="info" effect="plain">
+              词典
+            </el-tag>
+          </div>
         </template>
 
         <div
           v-if="expandedNames.includes(mapping.column)"
           v-memo="[mapping, dictOptions]"
-          class="field-panel__detail"
         >
-          <!-- 列名与展示别名平行在同一行 -->
-          <div class="field-panel__alias-row">
-            <code class="field-panel__name">{{ mapping.column }}</code>
-            <el-input
-              :model-value="mapping.label"
-              placeholder="展示别名（表格列标题）"
-              @update:model-value="update(index, { label: $event })"
-            />
-          </div>
+          <el-form class="tpl-panel__form" label-position="left" label-width="76px" size="small">
+            <!-- 列信息与展示 -->
+            <section class="tpl-panel__group">
+              <div class="tpl-panel__group-title">展示设置</div>
+              <div class="tpl-panel__grid">
+                <el-form-item label="展示别名">
+                  <el-input
+                    :model-value="mapping.label"
+                    placeholder="表格列标题，留空用列名"
+                    @update:model-value="update(index, { label: $event })"
+                  />
+                </el-form-item>
 
-          <el-form label-position="left" label-width="70px" size="small">
-            <div class="field-panel__row">
-              <el-form-item label="列宽">
-                <el-input-number
-                  :model-value="mapping.width"
-                  :min="0"
-                  controls-position="right"
-                  placeholder="自适应"
-                  @update:model-value="update(index, { width: $event ?? undefined })"
-                />
-              </el-form-item>
+                <el-form-item label="列宽">
+                  <el-input-number
+                    :model-value="mapping.width"
+                    :min="0"
+                    controls-position="right"
+                    placeholder="自适应"
+                    style="width: 100%"
+                    @update:model-value="update(index, { width: $event ?? undefined })"
+                  />
+                </el-form-item>
 
-              <el-form-item label="对齐">
-                <el-select
-                  :model-value="mapping.align ?? 'left'"
-                  style="width: 100%"
-                  @update:model-value="update(index, { align: $event as FieldMapping['align'] })"
-                >
-                  <el-option label="左对齐" value="left" />
-                  <el-option label="居中" value="center" />
-                  <el-option label="右对齐" value="right" />
-                </el-select>
-              </el-form-item>
-            </div>
+                <el-form-item label="对齐">
+                  <el-select
+                    :model-value="mapping.align ?? 'left'"
+                    style="width: 100%"
+                    @update:model-value="update(index, { align: $event as FieldMapping['align'] })"
+                  >
+                    <el-option label="左对齐" value="left" />
+                    <el-option label="居中" value="center" />
+                    <el-option label="右对齐" value="right" />
+                  </el-select>
+                </el-form-item>
+              </div>
+            </section>
 
-            <el-form-item label="绑定词典">
-              <!-- 虚拟滚动下拉：词典多时不会为每行渲染完整选项列表 -->
-              <el-select-v2
-                :model-value="mapping.dictionaryId"
-                :options="dictOptions"
-                placeholder="不翻译"
-                clearable
-                filterable
-                style="width: 100%"
-                @update:model-value="update(index, { dictionaryId: $event ?? undefined })"
-              />
-            </el-form-item>
+            <!-- 词典翻译 -->
+            <section class="tpl-panel__group">
+              <div class="tpl-panel__group-title">词典翻译</div>
+              <div class="tpl-panel__grid">
+                <el-form-item label="绑定词典">
+                  <!-- 虚拟滚动下拉：词典多时不会为每行渲染完整选项列表 -->
+                  <el-select-v2
+                    :model-value="mapping.dictionaryId"
+                    :options="dictOptions"
+                    placeholder="不翻译"
+                    clearable
+                    filterable
+                    style="width: 100%"
+                    @update:model-value="update(index, { dictionaryId: $event ?? undefined })"
+                  />
+                </el-form-item>
 
-            <el-form-item v-if="mapping.dictionaryId" label="展示模板">
-              <el-input
-                :model-value="mapping.template ?? ''"
-                placeholder="留空显示释义，例：&#123;&#123;value&#125;&#125; - &#123;&#123;meaning&#125;&#125;"
-                @update:model-value="update(index, { template: $event })"
-              />
-            </el-form-item>
+                <el-form-item v-if="mapping.dictionaryId" label="展示模板">
+                  <el-input
+                    :model-value="mapping.template ?? ''"
+                    placeholder="留空显示释义，例：&#123;&#123;value&#125;&#125; - &#123;&#123;meaning&#125;&#125;"
+                    @update:model-value="update(index, { template: $event })"
+                  />
+                </el-form-item>
+              </div>
+            </section>
           </el-form>
         </div>
       </el-collapse-item>
@@ -133,72 +143,12 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.field-panel {
-  padding: 4px 0;
+/* 具体排版规范见 styles/template-panels.css，这里只保留面板级微调 */
+.tpl-panel-list {
+  padding: 2px 0;
 }
 
-/* 收起态标题：列名 + 别名提示 + 词典标记 */
-.field-panel__name {
-  display: inline-block;
-  margin-right: 8px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: rgba(56, 189, 248, 0.14);
-  color: var(--brand-color);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.field-panel__alias-hint {
-  margin-right: 8px;
-  color: var(--text-muted);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 展开态：列名与展示别名输入框平行同一行 */
-.field-panel__alias-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.field-panel__alias-row > .field-panel__name {
-  flex: 0 0 auto;
-  margin-right: 0;
-}
-
-.field-panel__alias-row > .el-input {
-  flex: 1;
-  min-width: 0;
-}
-
-.field-panel__row {
-  display: flex;
-  gap: 10px;
-}
-
-.field-panel__row > * {
-  flex: 1;
-  min-width: 0;
-}
-
-.field-panel :deep(.el-collapse-item__header) {
-  height: 36px;
-  line-height: 36px;
-  font-size: 12px;
-}
-
-.field-panel :deep(.el-form-item) {
-  margin-bottom: 8px;
-}
-
-.field-panel :deep(.el-form-item__label) {
-  padding-bottom: 2px;
-  font-size: 12px;
-  line-height: 1.4;
+.tpl-panel-list :deep(.el-collapse-item__header) {
+  font-size: var(--app-font-size);
 }
 </style>

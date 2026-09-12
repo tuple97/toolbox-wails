@@ -100,6 +100,6 @@ function renderCell(row: Record<string, unknown>, column: string) {
 }
 
 .result-table :deep(.el-table__cell) {
-  font-size: 12px;
+  font-size: var(--app-font-size-sm);
 }
 </style>

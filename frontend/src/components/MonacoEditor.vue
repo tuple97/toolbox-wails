@@ -1,9 +1,14 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, shallowRef } from 'vue'
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 import type { editor } from 'monaco-editor'
 import { useConfigStore } from '@/stores/configStore'
-import { APP_THEME_DARK, APP_THEME_LIGHT } from '@/utils/logLanguage'
+import {
+  APP_THEME_DARK,
+  APP_THEME_IDEA,
+  APP_THEME_LIGHT,
+  APP_THEME_MIDNIGHT,
+} from '@/utils/logLanguage'
 
 const props = withDefaults(defineProps<{
   /** 编辑内容（v-model） */
@@ -47,14 +52,26 @@ const editorTheme = computed(() => {
   if (props.theme) {
     return props.theme
   }
-  return configStore.theme === 'dark' ? APP_THEME_DARK : APP_THEME_LIGHT
+  // 每种应用主题对应一套编辑器配色（背景与调色板一致）
+  switch (configStore.theme) {
+    case 'light':
+      return APP_THEME_LIGHT
+    case 'midnight':
+      return APP_THEME_MIDNIGHT
+    case 'idea':
+      return APP_THEME_IDEA
+    default:
+      return APP_THEME_DARK
+  }
 })
 
-/** 编辑器配置；字号响应全局设置 */
+/** 编辑器配置；字号与字体响应全局设置（编辑器字体独立于界面字体） */
 const editorOptions = computed<editor.IStandaloneEditorConstructionOptions>(() => ({
   automaticLayout: true,
   minimap: { enabled: false },
   fontSize: configStore.editorFontSize,
+  // 编辑器字体：设置里「编辑器字体」单独指定，默认与界面一致（Nunito）
+  fontFamily: configStore.editorFontStack,
   lineNumbers: props.showLineNumbers ? 'on' : 'off',
   scrollBeyondLastLine: false,
   tabSize: 2,
@@ -78,6 +95,70 @@ const editorOptions = computed<editor.IStandaloneEditorConstructionOptions>(() =
   },
 }))
 
+/**
+ * 编辑器实例（由 @guolao/vue-monaco-editor 的 mount 事件给出）。
+ *
+ * 必须用 shallowRef：Monaco 实例体积巨大且内部互相引用，
+ * 放进普通 ref 会被深层代理成响应式对象，调用时开销极高甚至卡死界面，
+ * 且 `ed === editorInstance.value` 会因代理而不再成立。
+ */
+const editorInstance = shallowRef<editor.IStandaloneCodeEditor | null>(null)
+
+/** 编辑器创建完成后保存实例，供插入片段等命令式操作使用 */
+function handleEditorMount(ed: editor.IStandaloneCodeEditor) {
+  editorInstance.value = ed
+}
+
+/**
+ * 在当前光标（或选区）处插入文本。
+ *
+ * 使用 executeEdits 而非 setValue：可撤销，且不会重置光标。
+ * 插入后若文本中包含占位词，会选中该词方便直接改写。
+ *
+ * @param text 待插入文本
+ * @param placeholder 需要被选中的占位词，默认「变量」
+ * @returns 是否插入成功（编辑器未就绪时为 false）
+ */
+function insertText(text: string, placeholder = '变量'): boolean {
+  const ed = editorInstance.value
+  const model = ed?.getModel()
+  const selection = ed?.getSelection()
+  if (!text || !ed || !model || !selection) {
+    return false
+  }
+
+  try {
+    // 记录插入起点在文档中的偏移，用于定位占位词
+    const startOffset = model.getOffsetAt(selection.getStartPosition())
+
+    ed.executeEdits('insert-snippet', [{ range: selection, text, forceMoveMarkers: true }])
+    ed.pushUndoStop()
+
+    const index = text.indexOf(placeholder)
+    if (index >= 0) {
+      const start = model.getPositionAt(startOffset + index)
+      const end = model.getPositionAt(startOffset + index + placeholder.length)
+      ed.setSelection({
+        startLineNumber: start.lineNumber,
+        startColumn: start.column,
+        endLineNumber: end.lineNumber,
+        endColumn: end.column,
+      })
+    }
+
+    ed.focus()
+    return true
+  }
+  catch (e) {
+    // 插入失败时明确告知，避免「点了没反应」
+    console.error('[MonacoEditor] insertText failed', e)
+    return false
+  }
+}
+
+// 供父组件调用：仅暴露插入能力，避免外部直接操作编辑器
+defineExpose({ insertText })
+
 function handleUpdate(value: string) {
   // 只读模式不向上抛更新，避免意外写入
   if (props.readonly) {
@@ -100,6 +181,7 @@ function handleUpdate(value: string) {
     :theme="editorTheme"
     :options="editorOptions"
     :style="{ height }"
+    @mount="handleEditorMount"
     @update:value="handleUpdate"
   />
 </template>

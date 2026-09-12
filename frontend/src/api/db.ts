@@ -43,7 +43,11 @@ export async function fetchConnections(): Promise<DBConnection[]> {
 
 /** 读取单个连接 */
 export async function fetchConnection(id: number): Promise<DBConnection> {
-  return toConnection(await GetConnection(id))
+  const raw = await GetConnection(id)
+  if (!raw) {
+    throw new Error(`连接不存在（id=${id}）`)
+  }
+  return toConnection(raw)
 }
 
 /** 保存连接（密码由后端加密） */
@@ -67,14 +71,18 @@ export function revealPassword(encrypted: string): Promise<string> {
 }
 
 /** 执行查询；未指定分页参数时按不分页处理 */
-export function executeQuery(req: ExecuteRequest): Promise<QueryResult> {
-  return ExecuteQuery({
+export async function executeQuery(req: ExecuteRequest): Promise<QueryResult> {
+  const result = await ExecuteQuery({
     ...req,
     page: req.page ?? 0,
     pageSize: req.pageSize ?? 0,
     total: req.total ?? 0,
     countTotal: req.countTotal ?? false,
   })
+  if (!result) {
+    throw new Error('查询未返回结果')
+  }
+  return result
 }
 
 /** 执行 SQL 以获取变量的动态下拉选项 */

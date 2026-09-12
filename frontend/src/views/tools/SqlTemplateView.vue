@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Events, Window } from '@wailsio/runtime'
-import TitleBar from '@/components/TitleBar.vue'
-import WindowResizeEdges from '@/components/WindowResizeEdges.vue'
+import { Events } from '@wailsio/runtime'
 import MonacoEditor from '@/components/MonacoEditor.vue'
 import VariableConfigPanel from '@/components/VariableConfigPanel.vue'
 import FieldMappingPanel from '@/components/FieldMappingPanel.vue'
@@ -16,6 +14,8 @@ import {
   validateScript,
 } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
+import { SNIPPET_CATEGORIES, SQL_SNIPPETS } from '@/utils/sqlSnippets'
+import type { SqlSnippet } from '@/utils/sqlSnippets'
 import type {
   DBConnection,
   FieldMapping,
@@ -25,13 +25,17 @@ import type {
 } from '@/types'
 
 /**
- * SQL 模板管理（v3 独立窗口页面）。
+ * SQL 模板管理（单例标签页）。
  *
- * 与主窗口的关系：
- *  - 本窗口是独立 webview，JS 上下文与主窗口隔离（Pinia 不互通）；
- *  - 模板保存/删除后通过 Wails 事件 `templates:changed` 广播，
- *    主窗口的查询页监听该事件刷新模板列表。
+ * 与其他标签的关系：模板增删改后广播 `templates:changed`，
+ * SQL 查询标签页据此刷新模板下拉与当前模板配置
+ * （变量表单由模板驱动，模板改了配置也变了）。
  */
+
+const emit = defineEmits<{
+  /** 首次加载完成（父级据此关闭 loading 遮罩） */
+  (e: 'ready'): void
+}>()
 
 /** 模板列表 */
 const templates = ref<TemplateListItem[]>([])
@@ -87,61 +91,20 @@ async function loadConnections() {
   }
 }
 
-/**
- * 载入模板到编辑区。
- *
- * 【临时埋点】定位选中卡顿用，各阶段耗时输出到控制台（[perf] 前缀）：
- *   - fetch：后端读取模板
- *   - state：本地状态更新
- *   - render：Vue 渲染 + Monaco setValue + 浏览器绘制（两帧 rAF 后统计）
- *   - refreshVariables：变量提取往返 + 面板数据更新
- */
+/** 载入模板到编辑区 */
 async function loadTemplate(id: number) {
-  const t0 = performance.now()
   try {
     const tpl = await fetchTemplate(id)
-    const t1 = performance.now()
-    console.log(`[perf] fetch(${id}) = ${(t1 - t0).toFixed(1)}ms`)
-    const t2 = t1
-
     editingId.value = tpl.id
     form.name = tpl.name
     form.connId = tpl.connId
     form.paginationEnabled = tpl.paginationEnabled
-    await nextTick()
-    const tHead = performance.now()
-    console.log(`[perf]   patch: 头部表单+列表 = ${(tHead - t2).toFixed(1)}ms`)
-
     form.sqlText = tpl.sqlText
     form.preScript = tpl.preScript
     form.postScript = tpl.postScript
-    await nextTick()
-    const tMonaco = performance.now()
-    console.log(`[perf]   patch: monaco setValue = ${(tMonaco - tHead).toFixed(1)}ms`)
 
-    const varConfigs = parseJSON<VariableConfig[]>(tpl.variables, [])
-    const mappings = reuseUnchanged(parseJSON<FieldMapping[]>(tpl.fieldMappings, []))
-    console.log(
-      `[perf]   数据量: variables JSON ${tpl.variables.length}字/${varConfigs.length}项,`
-      + ` fieldMappings JSON ${tpl.fieldMappings.length}字/${mappings.length}项`,
-    )
-
-    variableConfigs.value = varConfigs
-    await nextTick()
-    const tVar = performance.now()
-    console.log(`[perf]   patch: 变量配置面板 = ${(tVar - tMonaco).toFixed(1)}ms`)
-
-    fieldMappings.value = mappings
-    await nextTick()
-    const tPanels = performance.now()
-    console.log(`[perf]   patch: 字段映射面板 = ${(tPanels - tVar).toFixed(1)}ms`)
-
-    // 连续两帧 rAF 后统计，覆盖绘制完成时间
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        console.log(`[perf]   layout + paint = ${(performance.now() - tPanels).toFixed(1)}ms`)
-      })
-    })
+    variableConfigs.value = parseJSON<VariableConfig[]>(tpl.variables, [])
+    fieldMappings.value = reuseUnchanged(parseJSON<FieldMapping[]>(tpl.fieldMappings, []))
 
     await refreshVariables()
   }
@@ -189,11 +152,7 @@ async function refreshVariables() {
   }
 
   try {
-    const t0 = performance.now()
     const names = await extractVariables(form.sqlText)
-    const t1 = performance.now()
-    console.log(`[perf]   refreshVariables.extract = ${(t1 - t0).toFixed(1)}ms`)
-
     detectedVariables.value = names
 
     const existing = new Map(variableConfigs.value.map(c => [c.name, c]))
@@ -205,8 +164,6 @@ async function refreshVariables() {
         dataType: 'string' as const,
       },
     )
-    const t2 = performance.now()
-    console.log(`[perf]   refreshVariables.panel = ${(t2 - t1).toFixed(1)}ms`)
   }
   catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
@@ -227,10 +184,7 @@ function scheduleParse() {
 
 // ------------------------------------------------------------ 增删改
 
-/**
- * 广播模板变更，主窗口监听后刷新模板列表。
- * 两个窗口 JS 上下文隔离，这是唯一的同步通道。
- */
+/** 广播模板变更，供其他标签页（SQL 查询）刷新模板列表与配置 */
 function notifyChanged() {
   void Events.Emit('templates:changed')
 }
@@ -327,53 +281,67 @@ async function handleDelete(item: TemplateListItem) {
   }
 }
 
-// ------------------------------------------------------------ 窗口控制
+// ------------------------------------------------------------ 片段插入
 
-/**
- * 关闭本窗口（仅隐藏自身，不影响主窗口）。
- * Go 侧将 WindowClosing 拦截为隐藏，页面上下文保持存活，再次打开无需重新加载。
- */
-function closeSelf() {
-  void Window.Close()
+/** SQL 编辑器实例，用于在当前光标处插入片段 */
+const sqlEditorRef = ref<InstanceType<typeof MonacoEditor> | null>(null)
+/** 片段选择弹窗 */
+const snippetVisible = ref(false)
+/** 当前选中的分类 */
+const snippetCategory = ref<string>(SNIPPET_CATEGORIES[0])
+/** 当前选中的片段 */
+const selectedSnippet = ref<SqlSnippet>(SQL_SNIPPETS[0])
+
+/** 当前分类下的片段 */
+const visibleSnippets = computed(() =>
+  SQL_SNIPPETS.filter(item => item.category === snippetCategory.value),
+)
+
+/** 打开弹窗时默认选中该分类的第一项 */
+function openSnippetPicker() {
+  const first = visibleSnippets.value[0]
+  if (first) {
+    selectedSnippet.value = first
+  }
+  snippetVisible.value = true
 }
 
 /**
- * ESC 关闭窗口。
- * Element Plus 的弹层（弹窗/下拉）打开时 ESC 优先用于关闭弹层，不关闭窗口。
+ * 把片段插入到光标处。
+ * 插入后编辑器会触发 change，由防抖逻辑自动重新解析变量。
  */
-function handleKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Escape') {
+function insertSnippet(snippet: SqlSnippet) {
+  if (!sqlEditorRef.value?.insertText(snippet.code)) {
+    ElMessage.warning('编辑器尚未就绪，请稍后再试')
     return
   }
-  if (document.querySelector('.el-overlay, .el-popper[aria-hidden="false"]')) {
-    return
-  }
-  closeSelf()
+  snippetVisible.value = false
 }
 
 // ------------------------------------------------------------ 初始化
 
-// 独立窗口：挂载即加载全部数据（不再依赖弹窗打开时机）
+// 标签页挂载即加载数据（标签关闭重开时会重新加载）
 onMounted(async () => {
-  window.addEventListener('keydown', handleKeydown)
-  await Promise.all([loadTemplates(), loadConnections()])
-  handleCreate()
-})
+  try {
+    await Promise.all([loadTemplates(), loadConnections()])
 
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', handleKeydown)
+    // 默认选中列表第一项；没有模板时才进入「新建」状态
+    if (templates.value.length > 0) {
+      await loadTemplate(templates.value[0].id)
+    }
+    else {
+      handleCreate()
+    }
+  }
+  finally {
+    // 失败也要上报，否则遮罩会一直盖住界面
+    emit('ready')
+  }
 })
 </script>
 
 <template>
-  <div class="tpl-window">
-    <!-- 自定义标题栏：与主窗口一致的观感 -->
-    <TitleBar
-      title="SQL 模板管理"
-      :show-settings="false"
-      @close="closeSelf"
-    />
-
+  <div class="tpl-workspace">
     <div class="tpl-mgr">
       <!-- 左：模板列表 -->
       <aside class="tpl-mgr__list">
@@ -445,8 +413,17 @@ onBeforeUnmount(() => {
               用 <code>&#123;&#123; 变量名 &#125;&#125;</code> 插入变量；
               支持 <code>&#123;&#123;if 变量&#125;&#125;...&#123;&#123;end&#125;&#125;</code> 条件拼接
             </small>
+            <el-button
+              class="tpl-mgr__sql-insert"
+              size="small"
+              @click="openSnippetPicker"
+            >
+              <el-icon><Plus /></el-icon>
+              <span>插入模板</span>
+            </el-button>
           </div>
           <MonacoEditor
+            ref="sqlEditorRef"
             v-model="form.sqlText"
             language="sql"
             height="100%"
@@ -511,34 +488,99 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <!-- 无边框窗口的四周缩放宽边热区 -->
-    <WindowResizeEdges />
+    <!-- 插入模板片段：左侧选择，右侧预览 -->
+    <el-dialog
+      v-model="snippetVisible"
+      title="插入模板片段"
+      width="860px"
+      top="8vh"
+      append-to-body
+      class="snippet-dlg"
+    >
+      <div class="snippet">
+        <!-- 左：分类 + 片段列表 -->
+        <aside class="snippet__list">
+          <el-radio-group v-model="snippetCategory" size="small" class="snippet__cats">
+            <el-radio-button
+              v-for="category in SNIPPET_CATEGORIES"
+              :key="category"
+              :value="category"
+            >
+              {{ category }}
+            </el-radio-button>
+          </el-radio-group>
+
+          <ul class="snippet__items">
+            <li
+              v-for="item in visibleSnippets"
+              :key="item.id"
+              class="snippet__item"
+              :class="{ 'is-active': selectedSnippet.id === item.id }"
+              @click="selectedSnippet = item"
+              @dblclick="insertSnippet(item)"
+            >
+              {{ item.name }}
+            </li>
+          </ul>
+        </aside>
+
+        <!-- 右：预览 -->
+        <section v-if="selectedSnippet" class="snippet__preview">
+          <h4 class="snippet__title">{{ selectedSnippet.name }}</h4>
+          <p class="snippet__desc">{{ selectedSnippet.description }}</p>
+
+          <div class="snippet__block">
+            <div class="snippet__block-label">插入内容</div>
+            <pre class="snippet__code">{{ selectedSnippet.code }}</pre>
+          </div>
+
+          <div class="snippet__block">
+            <div class="snippet__block-label">示例</div>
+            <pre class="snippet__code snippet__code--example">{{ selectedSnippet.example }}</pre>
+          </div>
+
+          <p class="snippet__tip">
+            双击左侧列表项可直接插入；插入后片段中的「变量」会被自动选中，可直接改写。
+          </p>
+        </section>
+      </div>
+
+      <template #footer>
+        <el-button @click="snippetVisible = false">关闭</el-button>
+        <el-button type="primary" @click="insertSnippet(selectedSnippet)">
+          插入
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
-/* 独立窗口：标题栏 + 内容纵向排布，铺满视口 */
-.tpl-window {
+/* 标签页内：内容铺满可用区域，各分区内部自行滚动 */
+.tpl-workspace {
   display: flex;
-  flex-direction: column;
-  height: 100vh;
-  box-sizing: border-box;
+  height: 100%;
+  overflow: hidden;
 }
 
 .tpl-mgr {
   display: flex;
   gap: 12px;
   flex: 1;
+  min-width: 0;
   min-height: 0;
+  width: 100%;
   padding: 12px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
-/* 左侧列表 */
+/* 左侧列表：固定宽度、占满高度，条目超出自带滚动条 */
 .tpl-mgr__list {
   display: flex;
   flex-direction: column;
   flex: 0 0 260px;
+  min-height: 0;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -548,9 +590,10 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex: 0 0 auto;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-color);
-  font-size: 13px;
+  font-size: var(--app-font-size);
   font-weight: 600;
 }
 
@@ -586,7 +629,7 @@ onBeforeUnmount(() => {
 
 .tpl-mgr__item-name {
   display: block;
-  font-size: 13px;
+  font-size: var(--app-font-size);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -597,7 +640,7 @@ onBeforeUnmount(() => {
   margin-top: 3px;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--app-font-size-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -620,16 +663,18 @@ onBeforeUnmount(() => {
 .tpl-mgr__empty {
   padding: 20px 10px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--app-font-size-sm);
   text-align: center;
 }
 
-/* 右侧编辑区 */
+/* 右侧编辑区：头部固定，SQL 区按比例，配置区吃掉剩余空间 */
 .tpl-mgr__editor {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   gap: 10px;
 }
 
@@ -637,6 +682,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
 }
 
 .tpl-mgr__name {
@@ -647,7 +693,7 @@ onBeforeUnmount(() => {
   width: 200px;
 }
 
-/* SQL 区约 40% 高度 */
+/* SQL 区固定占编辑区高度的 40% */
 .tpl-mgr__sql {
   display: flex;
   flex-direction: column;
@@ -664,14 +710,122 @@ onBeforeUnmount(() => {
   gap: 10px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--border-color);
-  font-size: 12px;
+  font-size: var(--app-font-size-sm);
   font-weight: 600;
 }
 
 .tpl-mgr__sql-label small {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--app-font-size-xs);
   font-weight: 400;
+}
+
+/* 「插入模板」按钮靠标题行最右侧 */
+.tpl-mgr__sql-insert {
+  margin-left: auto;
+}
+
+.tpl-mgr__sql-insert .el-icon {
+  margin-right: 4px;
+}
+
+/* 片段选择弹窗：左列表 / 右预览 */
+.snippet {
+  display: flex;
+  gap: 14px;
+  min-height: 380px;
+}
+
+.snippet__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 300px;
+}
+
+.snippet__cats {
+  flex: 0 0 auto;
+}
+
+.snippet__cats :deep(.el-radio-button__inner) {
+  padding: 6px 10px;
+  font-size: var(--app-font-size-sm);
+}
+
+.snippet__items {
+  flex: 1;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.snippet__item {
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: var(--app-font-size);
+}
+
+.snippet__item:hover {
+  background: var(--hover-bg);
+}
+
+.snippet__item.is-active {
+  background: var(--active-bg);
+}
+
+.snippet__preview {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.snippet__title {
+  margin: 0;
+  font-size: var(--app-font-size-lg);
+}
+
+.snippet__desc {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-sm);
+  line-height: 1.6;
+}
+
+.snippet__block-label {
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.snippet__code {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-color);
+  color: var(--text-color);
+  font-family: var(--font-mono);
+  font-size: var(--app-font-size-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.snippet__code--example {
+  color: var(--text-muted);
+}
+
+.snippet__tip {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+  line-height: 1.6;
 }
 
 .tpl-mgr__sql-label code,
@@ -692,11 +846,11 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-/* 配置 Tab 区填满剩余空间 */
+/* 配置 Tab 区吃掉剩余空间，内容超出自带滚动条 */
 .tpl-mgr__config {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 1 1 0%;
   min-height: 0;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -709,25 +863,34 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--border-color);
-  font-size: 12px;
+  font-size: var(--app-font-size-sm);
   font-weight: 600;
 }
 
+/* Tab 区：表头固定，内容区占满剩余空间并内部滚动 */
 .tpl-mgr__tabs {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   padding: 0 12px;
 }
 
+.tpl-mgr__tabs :deep(.el-tabs__header) {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
 .tpl-mgr__tabs :deep(.el-tabs__content) {
-  height: calc(100% - 40px);
+  flex: 1;
+  min-height: 0;
   overflow: auto;
 }
 
 .tpl-mgr__hint {
   margin: 0 0 8px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--app-font-size-xs);
 }
 
 /* 基础配置：纵向排列的配置行 */
@@ -758,13 +921,13 @@ onBeforeUnmount(() => {
 }
 
 .tpl-mgr__basic-label > span {
-  font-size: 13px;
+  font-size: var(--app-font-size);
   font-weight: 600;
 }
 
 .tpl-mgr__basic-label small {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--app-font-size-xs);
   font-weight: 400;
 }
 </style>

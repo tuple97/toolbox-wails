@@ -83,7 +83,7 @@ watch(() => logStore.entries.length, async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 30px;
+  height: calc(30px * var(--app-control-scale));
   padding: 0 12px;
 }
 
@@ -95,7 +95,7 @@ watch(() => logStore.entries.length, async () => {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--app-font-size-sm);
   cursor: pointer;
 }
 

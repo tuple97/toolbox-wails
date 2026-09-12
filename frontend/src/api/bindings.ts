@@ -57,10 +57,11 @@ export const GetAllSettings = App.GetAllSettings
 export const SaveSetting = App.SaveSetting
 
 // ---- 窗口控制 ----
+export const ListSystemFonts = App.ListSystemFonts
+
 export const WindowMinimise = App.WindowMinimise
 export const WindowToggleMaximise = App.WindowToggleMaximise
 export const WindowIsMaximised = App.WindowIsMaximised
 export const WindowClose = App.WindowClose
 
 // ---- 多窗口管理 ----
-export const OpenTemplatesWindow = App.OpenTemplatesWindow

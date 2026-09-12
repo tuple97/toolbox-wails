@@ -11,7 +11,7 @@
     "dev": "vite",
     "dev:app": "cd .. && set \"FRONTEND_DEVSERVER_URL=http://127.0.0.1:5173\" && go run .",
     "build": "vue-tsc --noEmit && vite build",
-    "build:app": "cd .. && go build -tags production",
+    "build:app": "pnpm build && cd .. && go build -tags production -ldflags \"-w -s -H=windowsgui\" -o build/bin/toolbox.exe",
     "gen:bindings": "cd .. && wails3 generate bindings",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit"
