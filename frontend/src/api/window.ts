@@ -52,6 +52,19 @@ export function toggleMaximiseWindow(): void {
   void WindowToggleMaximise()
 }
 
+/**
+ * 打开 WebView 的开发者工具（F12 那个检查器），方便调试样式。
+ *
+ * 可用性取决于构建方式：后端 `openDevTools()` 的构建约束是
+ * `windows && !server && (!production || devtools)`，即
+ *  - `wails dev` / `go run .`（未加 production 标签）→ 可用；
+ *  - 打包的 exe（`-tags production`）→ 是空实现，点了没反应；
+ *    需要调试打包版时改用 `-tags "production devtools"`。
+ */
+export function openDevTools(): void {
+  void Window.OpenDevTools()
+}
+
 /** 查询窗口是否处于最大化状态 */
 export async function isWindowMaximised(): Promise<boolean> {
   return await WindowIsMaximised()

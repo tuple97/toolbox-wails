@@ -27,17 +27,24 @@ export const useLogStore = defineStore('logs', () => {
 
   /**
    * 记录一次请求。
-   * 格式：`>> [时间] [连接名] 执行SQL: <单行 SQL>`
+   * 格式：`>> [时间] [连接名@库] 执行SQL: <单行 SQL>`
+   * 带上库名，是为了让「这条 SQL 到底打在哪个库上」一目了然——
+   * 不带库名的语句（`SELECT * FROM t`）取的就是这里显示的库。
    * SQL 压成单行便于按行阅读；过长时由编辑器自动换行。
    */
-  function logRequest(connName: string, sql: string) {
+  function logRequest(connName: string, sql: string, database = '') {
     const time = now()
-    append(`>> [${time}] [${connName}] 执行SQL: ${flattenSql(sql)}`)
+    const target = database ? `[${connName}@${database}]` : `[${connName}]`
+    append(`>> [${time}] ${target} 执行SQL: ${flattenSql(sql)}`)
   }
 
-  /** 记录执行成功 */
-  function logSuccess(rowCount: number, elapsedMs: number) {
-    append(`<< [${now()}] 成功: 共 ${rowCount} 行, 耗时 ${elapsedMs}ms`)
+  /**
+   * 记录执行成功。
+   * 带上实际生效的库：0 行时能一眼看出「查的是哪个库」，避免误以为是语句写错。
+   */
+  function logSuccess(rowCount: number, elapsedMs: number, database = '') {
+    const where = database ? ` · 库 ${database}` : ''
+    append(`<< [${now()}] 成功: 共 ${rowCount} 行, 耗时 ${elapsedMs}ms${where}`)
   }
 
   /** 记录执行错误 */

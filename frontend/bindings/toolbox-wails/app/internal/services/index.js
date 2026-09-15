@@ -5,7 +5,11 @@
 export {
     ColumnMeta,
     ExecuteRequest,
+    ExecutorColumn,
+    ExecutorRequest,
+    ExecutorResult,
     QueryResult,
+    SystemMetrics,
     TemplateExecuteRequest,
     TemplateListItem
 } from "./models.js";

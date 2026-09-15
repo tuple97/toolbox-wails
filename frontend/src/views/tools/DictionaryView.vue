@@ -531,6 +531,15 @@ onMounted(async () => {
   margin-left: auto;
 }
 
+/*
+ * Element Plus 会给「相邻按钮」加 margin-left: 12px（.el-button + .el-button），
+ * 与这里的 gap 叠加后变成 20px（比同一行其它内容的 8px 宽）。
+ * 本项目按钮行一律用 flex + gap 排版，所以清掉默认外边距。
+ */
+.dict-view__detail-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
 .dict-view__detail :deep(.el-table) {
   flex: 1;
   min-height: 0;

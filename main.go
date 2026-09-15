@@ -14,7 +14,7 @@ var assets embed.FS
 
 // 应用窗口相关配置
 const (
-	appName   = "Toolbox"
+	appName   = "开发工具箱"
 	appWidth  = 1424
 	appHeight = 800
 )
@@ -47,7 +47,7 @@ func main() {
 	service.Attach(wailsApp)
 
 	// 创建主窗口
-	wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     appName,
 		Width:     appWidth,
 		Height:    appHeight,
@@ -58,16 +58,10 @@ func main() {
 		// 与暗色主题 --bg-color(#0f172a) 一致，避免启动首屏黑屏
 		// （BackgroundColour 零值为透明，会渲染成黑色）
 		BackgroundColour: application.RGBA{Red: 15, Green: 23, Blue: 42, Alpha: 255},
-		/*
-		 * 背景类型：透明。
-		 *
-		 * 「背景透明度 / 磨砂」由页面 CSS 控制（#app-backdrop 层负责
-		 * rgba 底色 + backdrop-filter），窗口本身必须透明才能透出桌面。
-		 * 默认 alpha 为 100（页面底色不透明），观感与不透明窗口一致；
-		 * 注意 v3 没有运行时切换 BackgroundType 的 API，只能在创建时确定。
-		 */
-		BackgroundType: application.BackgroundTypeTransparent,
 	})
+
+	// 注入主窗口：绑定后端服务
+	service.AttachWindow(mainWindow)
 
 	if err := wailsApp.Run(); err != nil {
 		log.Fatal(err)

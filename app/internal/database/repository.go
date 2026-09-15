@@ -131,7 +131,7 @@ func (r *Repository) SaveTabs(tabs []Tab) ([]Tab, error) {
 // ListConnections 返回全部数据库连接。
 func (r *Repository) ListConnections() ([]DBConnection, error) {
 	rows, err := r.db.conn.Query(`
-		SELECT id, name, db_type, host, port, database, username, password, extra
+		SELECT ` + connectionColumns + `
 		FROM db_connections ORDER BY id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询 db_connections 失败: %w", err)
@@ -152,7 +152,7 @@ func (r *Repository) ListConnections() ([]DBConnection, error) {
 // GetConnection 按 ID 返回单个连接。
 func (r *Repository) GetConnection(id int64) (*DBConnection, error) {
 	row := r.db.conn.QueryRow(`
-		SELECT id, name, db_type, host, port, database, username, password, extra
+		SELECT `+connectionColumns+`
 		FROM db_connections WHERE id = ?`, id)
 
 	item, err := scanConnection(row)
@@ -170,9 +170,17 @@ func (r *Repository) SaveConnection(c DBConnection) (int64, error) {
 	if c.ID > 0 {
 		_, err := r.db.conn.Exec(`
 			UPDATE db_connections
-			SET name = ?, db_type = ?, host = ?, port = ?, database = ?, username = ?, password = ?, extra = ?
+			SET name = ?, db_type = ?, host = ?, port = ?, database = ?, username = ?, password = ?, extra = ?,
+			    note = ?, color = ?, charset = ?, default_schema = ?,
+			    connect_timeout_secs = ?, query_timeout_secs = ?, keepalive_secs = ?,
+			    ssl_mode = ?, ssl_ca_path = ?, ssl_cert_path = ?, ssl_key_path = ?, url_params = ?,
+			    read_only = ?, is_production = ?
 			WHERE id = ?`,
-			c.Name, c.DBType, c.Host, c.Port, c.Database, c.Username, c.Password, c.Extra, c.ID)
+			c.Name, c.DBType, c.Host, c.Port, c.Database, c.Username, c.Password, c.Extra,
+			c.Note, c.Color, c.Charset, c.DefaultSchema,
+			c.ConnectTimeoutSecs, c.QueryTimeoutSecs, c.KeepaliveSecs,
+			c.SSLMode, c.SSLCaPath, c.SSLCertPath, c.SSLKeyPath, c.URLParams,
+			boolToInt(c.ReadOnly), boolToInt(c.IsProduction), c.ID)
 		if err != nil {
 			return 0, fmt.Errorf("更新连接失败: %w", err)
 		}
@@ -180,9 +188,19 @@ func (r *Repository) SaveConnection(c DBConnection) (int64, error) {
 	}
 
 	res, err := r.db.conn.Exec(`
-		INSERT INTO db_connections (name, db_type, host, port, database, username, password, extra)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.Name, c.DBType, c.Host, c.Port, c.Database, c.Username, c.Password, c.Extra)
+		INSERT INTO db_connections (
+			name, db_type, host, port, database, username, password, extra,
+			note, color, charset, default_schema,
+			connect_timeout_secs, query_timeout_secs, keepalive_secs,
+			ssl_mode, ssl_ca_path, ssl_cert_path, ssl_key_path, url_params,
+			read_only, is_production
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.Name, c.DBType, c.Host, c.Port, c.Database, c.Username, c.Password, c.Extra,
+		c.Note, c.Color, c.Charset, c.DefaultSchema,
+		c.ConnectTimeoutSecs, c.QueryTimeoutSecs, c.KeepaliveSecs,
+		c.SSLMode, c.SSLCaPath, c.SSLCertPath, c.SSLKeyPath, c.URLParams,
+		boolToInt(c.ReadOnly), boolToInt(c.IsProduction))
 	if err != nil {
 		return 0, fmt.Errorf("新增连接失败: %w", err)
 	}
@@ -402,13 +420,20 @@ type rowScanner interface {
 // scanConnection 从一行结果解析连接信息。
 func scanConnection(s rowScanner) (DBConnection, error) {
 	var c DBConnection
-	// host/database/username/password/extra 允许为 NULL，用 NullString 承接
+	// 允许为 NULL 的列统一用 Null* 承接，避免老库缺列时扫描失败
 	var host, database, username, password, extra sql.NullString
-	var port sql.NullInt64
+	var note, color, charset, defaultSchema sql.NullString
+	var sslMode, sslCa, sslCert, sslKey, urlParams sql.NullString
+	var port, connectTimeout, queryTimeout, keepalive sql.NullInt64
+	var readOnly, isProduction sql.NullInt64
 
 	if err := s.Scan(
 		&c.ID, &c.Name, &c.DBType, &host, &port,
 		&database, &username, &password, &extra,
+		&note, &color, &charset, &defaultSchema,
+		&connectTimeout, &queryTimeout, &keepalive,
+		&sslMode, &sslCa, &sslCert, &sslKey, &urlParams,
+		&readOnly, &isProduction,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return c, err
@@ -422,8 +447,29 @@ func scanConnection(s rowScanner) (DBConnection, error) {
 	c.Username = username.String
 	c.Password = password.String
 	c.Extra = extra.String
+	c.Note = note.String
+	c.Color = color.String
+	c.Charset = charset.String
+	c.DefaultSchema = defaultSchema.String
+	c.ConnectTimeoutSecs = int(connectTimeout.Int64)
+	c.QueryTimeoutSecs = int(queryTimeout.Int64)
+	c.KeepaliveSecs = int(keepalive.Int64)
+	c.SSLMode = sslMode.String
+	c.SSLCaPath = sslCa.String
+	c.SSLCertPath = sslCert.String
+	c.SSLKeyPath = sslKey.String
+	c.URLParams = urlParams.String
+	c.ReadOnly = readOnly.Int64 != 0
+	c.IsProduction = isProduction.Int64 != 0
 	return c, nil
 }
+
+// connectionColumns 是连接表在所有查询里统一使用的列清单（顺序与 scanConnection 一致）。
+const connectionColumns = `id, name, db_type, host, port, database, username, password, extra,
+	note, color, charset, default_schema,
+	connect_timeout_secs, query_timeout_secs, keepalive_secs,
+	ssl_mode, ssl_ca_path, ssl_cert_path, ssl_key_path, url_params,
+	read_only, is_production`
 
 // boolToInt 将布尔值转为 SQLite 的 0/1。
 func boolToInt(b bool) int {

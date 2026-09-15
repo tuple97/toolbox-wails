@@ -4,13 +4,35 @@
  * 应用启动时由 configStore 根据后端配置切换该类名。
  */
 :root {
-  --radius-lg: 16px;
-  --radius-md: 10px;
+  /*
+   * 圆角：小控件用 sm、卡片/面板用 md、大容器用 lg。
+   * 整体偏克制（Linear / Vercel 风格，不用大圆角）。
+   */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  /*
+   * 间距阶梯：自定义组件的 margin / padding / gap 统一用这些，
+   * 避免各处散落魔法数字（容器骨架的固定高度仍按规范写死）。
+   */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
   /* 等宽字体栈：优先本机可能安装的中文等宽/编程字体，末尾补中文避免出现方块 */
   --font-mono: "Sarasa Mono SC", "JetBrains Mono", Consolas, "Microsoft YaHei", "PingFang SC", monospace;
-  /* 界面字体栈，由设置面板动态写入；此处为默认值 */
-  --app-font-family: "Nunito", "Microsoft YaHei", "PingFang SC", sans-serif;
-  --titlebar-height: 40px;
+  /*
+   * 界面字体栈，由设置面板动态写入；此处为默认值。
+   * Inter 未随包内置（离线应用不引网络字体），本机没装时回退中文系统字体。
+   */
+  --app-font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* 窗口标题栏高度，与实际标题栏组件保持一致 */
+  --titlebar-height: 48px;
+  /* 侧边栏宽度：展开 240px；收起为 64px 图标栏（见 AppSidebar.vue） */
+  --sidebar-width: 240px;
+  --sidebar-width-collapsed: 64px;
   /* 界面字体大小，由设置面板动态写入 */
   --app-font-size: 13px;
   /*
@@ -30,13 +52,17 @@
    * 注意只缩放控件自身，容器高度（窗口标题栏、面板、内容区）保持固定。
    */
   --app-control-scale: 1;
-  /* 窗口背景：透明度（0~1）与磨砂模糊半径，由设置面板动态写入 */
-  --app-bg-alpha: 1;
-  --app-bg-blur: 0px;
   /* 弹窗遮罩颜色 */
   --app-mask: rgba(2, 6, 23, 0.45);
-  --titlebar-bg: rgba(255, 255, 255, 0.85);
-  --panel-bg: rgba(255, 255, 255, 0.7);
+  --titlebar-bg: #ffffff;
+  --panel-bg: #ffffff;
+  /*
+   * 浮层（弹窗 / 抽屉 / 消息框 / 下拉 / 右键菜单）底色：不透明。
+   *
+   * 2026-09-14 起窗口与浮层都不再透明，「背景透明度」与系统毛玻璃（Acrylic）
+   * 功能已移除；浮层与主界面之间只靠边框和阴影区分层级。
+   */
+  --overlay-bg: #ffffff;
 }
 
 /* 暗色主题 */
@@ -49,20 +75,23 @@ html.dark {
   --border-color: rgba(255, 255, 255, 0.1);
   --text-color: #e2e8f0;
   --text-muted: #94a3b8;
-  --brand-color: #38bdf8;
-  --brand-color-strong: #6366f1;
+  /* 主交互色：靛蓝（去青偏中性）；信息类强调色见 --accent-color */
+  --brand-color: #6e79f4;
+  --accent-color: #818cf8;
+  /* 兼容既有引用：--brand-color-strong 的语义已由 --accent-color 承担 */
+  --brand-color-strong: var(--accent-color);
   --danger-color: #f87171;
-  --shadow-md: 0 18px 40px rgba(2, 6, 23, 0.45);
-  /*
-   * 各面板底色按「面板自带透明度 × 全局背景透明度」计算，
-   * 这样调低背景透明度时，标题栏、执行记录、菜单会一起透出桌面。
-   */
-  --titlebar-bg: rgb(12 18 34 / calc(var(--app-bg-alpha) * 0.82));
-  --panel-bg: rgb(8 13 26 / calc(var(--app-bg-alpha) * 0.6));
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --titlebar-bg: rgb(12 18 34);
+  --panel-bg: rgb(8 13 26);
   /* 悬浮高亮：亮暗主题方向相反，统一由变量提供 */
   --hover-bg: rgba(255, 255, 255, 0.07);
-  --active-bg: rgba(56, 189, 248, 0.14);
-  --menu-bg: rgb(var(--bg-rgb) / calc(var(--app-bg-alpha) * 0.98));
+  /* 选中/激活底色：始终取自 --brand-color 的色相（rgba(110,121,244) = #6e79f4） */
+  --active-bg: rgba(110, 121, 244, 0.16);
+  /* 右键菜单底色：不透明（菜单要求清晰） */
+  --menu-bg: rgb(var(--bg-rgb));
+  /* 弹窗底色：不透明 */
+  --overlay-bg: rgb(30 42 72);
 }
 
 /* 亮色主题 */
@@ -74,15 +103,18 @@ html:not(.dark) {
   --border-color: rgba(15, 23, 42, 0.12);
   --text-color: #1e293b;
   --text-muted: #64748b;
-  --brand-color: #0284c7;
-  --brand-color-strong: #4f46e5;
+  --brand-color: #4f46e5;
+  --accent-color: #6366f1;
+  --brand-color-strong: var(--accent-color);
   --danger-color: #dc2626;
-  --shadow-md: 0 18px 40px rgba(15, 23, 42, 0.12);
-  --titlebar-bg: rgb(255 255 255 / calc(var(--app-bg-alpha) * 0.85));
-  --panel-bg: rgb(248 250 252 / calc(var(--app-bg-alpha) * 0.8));
+  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --titlebar-bg: rgb(255 255 255);
+  --panel-bg: rgb(248 250 252);
   --hover-bg: rgba(15, 23, 42, 0.06);
-  --active-bg: rgba(2, 132, 199, 0.12);
-  --menu-bg: rgb(255 255 255 / calc(var(--app-bg-alpha) * 0.98));
+  /* 与 --brand-color(#4f46e5 → 79,70,229) 同色调 */
+  --active-bg: rgba(79, 70, 229, 0.12);
+  --menu-bg: rgb(255 255 255);
+  --overlay-bg: rgb(255 255 255);
   --app-mask: rgba(15, 23, 42, 0.28);
 }
 
@@ -101,12 +133,14 @@ html[data-theme='midnight'] {
   --border-color: rgba(255, 255, 255, 0.12);
   --text-color: #e8e8ea;
   --text-muted: #8b8b93;
-  --brand-color: #7dd3fc;
-  --brand-color-strong: #818cf8;
+  --brand-color: #8b93fa;
+  --accent-color: #a5b4fc;
+  --brand-color-strong: var(--accent-color);
   --danger-color: #f87171;
-  --titlebar-bg: rgb(14 14 16 / calc(var(--app-bg-alpha) * 0.82));
-  --panel-bg: rgb(18 18 21 / calc(var(--app-bg-alpha) * 0.62));
-  --menu-bg: rgb(var(--bg-rgb) / calc(var(--app-bg-alpha) * 0.98));
+  --titlebar-bg: rgb(14 14 16);
+  --panel-bg: rgb(18 18 21);
+  --menu-bg: rgb(var(--bg-rgb));
+  --overlay-bg: rgb(28 28 32);
 }
 
 /* IDEA Darcula 风格：经典深灰 + 橙色强调 */
@@ -119,11 +153,13 @@ html[data-theme='idea'] {
   --text-color: #d6d6d6;
   --text-muted: #9a9a9a;
   --brand-color: #cc7832;
-  --brand-color-strong: #ffc66d;
+  --accent-color: #ffc66d;
+  --brand-color-strong: var(--accent-color);
   --danger-color: #e05561;
-  --titlebar-bg: rgb(60 63 65 / calc(var(--app-bg-alpha) * 0.85));
-  --panel-bg: rgb(50 52 54 / calc(var(--app-bg-alpha) * 0.65));
-  --menu-bg: rgb(43 43 43 / calc(var(--app-bg-alpha) * 0.98));
+  --titlebar-bg: rgb(60 63 65);
+  --panel-bg: rgb(50 52 54);
+  --menu-bg: rgb(43 43 43);
+  --overlay-bg: rgb(60 63 65);
   --hover-bg: rgba(255, 255, 255, 0.08);
   --active-bg: rgba(204, 120, 50, 0.18);
 }
@@ -139,7 +175,8 @@ html.dark,
 html:not(.dark) {
   --el-bg-color: var(--bg-color);
   --el-bg-color-page: var(--bg-color);
-  --el-bg-color-overlay: var(--bg-color-soft);
+  /* 浮层（弹窗/下拉/浮框）底色：跟随主题，固定不透明度（不跟窗口透明度） */
+  --el-bg-color-overlay: var(--overlay-bg);
   --el-text-color-primary: var(--text-color);
   --el-text-color-regular: var(--text-color);
   --el-text-color-secondary: var(--text-muted);
@@ -182,7 +219,7 @@ body {
   /* 字体由设置面板通过 --app-font-family 控制（见 utils/fonts.ts） */
   font-family: var(
     --app-font-family,
-    "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
     "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
     "Microsoft YaHei", sans-serif
   );
@@ -229,34 +266,34 @@ textarea,
 /*
  * 主题化背景：暗色用深蓝渐变，亮色用浅灰渐变。
  *
- * 背景画在独立的 #app-backdrop 层上（而非 body），原因：
- *  1. 窗口是透明的（BackgroundTypeTransparent），底色必须能被 alpha 控制，
- *     才能透出桌面实现「背景透明度」；
- *  2. 磨砂用 backdrop-filter 实现，放在独立层上不会影响内容里的
- *     position: fixed 元素（backdrop-filter 会让元素成为固定定位的包含块）。
+ * 背景画在独立的 #app-backdrop 层上（而非 body），且始终不透明——
+ * 窗口透明与系统毛玻璃功能已移除，这一层只负责主题着色。
  */
 #app-backdrop {
   position: fixed;
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  backdrop-filter: blur(var(--app-bg-blur));
 }
 
 html.dark #app-backdrop {
   background:
-    radial-gradient(1000px 600px at 15% -10%, rgba(56, 189, 248, 0.18), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(99, 102, 241, 0.2), transparent 55%),
-    rgb(var(--bg-rgb) / var(--app-bg-alpha));
+    radial-gradient(1000px 600px at 15% -10%, rgba(110, 121, 244, 0.1), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(139, 147, 250, 0.12), transparent 55%),
+    rgb(var(--bg-rgb));
 }
 
 html:not(.dark) #app-backdrop {
   background:
-    radial-gradient(1000px 600px at 15% -10%, rgba(2, 132, 199, 0.1), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(79, 70, 229, 0.08), transparent 55%),
-    rgb(var(--bg-rgb) / var(--app-bg-alpha));
+    radial-gradient(1000px 600px at 15% -10%, rgba(79, 70, 229, 0.06), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(99, 102, 241, 0.05), transparent 55%),
+    rgb(var(--bg-rgb));
 }
 
+/*
+ * Nunito：保留声明与字体文件（用户在「设置 → 字体」里仍可显式选到），
+ * 但已不再是默认字体 —— 默认为 Inter（见 utils/fonts.ts 的 DEFAULT_FONT_STACK）。
+ */
 @font-face {
   font-family: "Nunito";
   font-style: normal;
@@ -294,19 +331,20 @@ html:not(.dark) #app-backdrop {
  *       非激活状态，保证亮色主题也能正常显示。
  */
 html.dark {
-  --el-color-primary: #38bdf8;
-  --el-color-primary-light-3: #2ea6d8;
-  --el-color-primary-light-5: #2285ad;
-  --el-color-primary-light-7: #176483;
-  --el-color-primary-light-8: #114257;
-  --el-color-primary-light-9: #0b2130;
-  --el-color-primary-dark-2: #5ccbfa;
-  --el-color-danger: #f87171;
+  /*
+   * 主色系列刻意不再硬编码：由上面的语义映射统一提供
+   * （--el-color-primary → var(--brand-color)，light-3/5/7/8 → var(--brand-color-strong)，
+   * light-9 → var(--active-bg)）。
+   * 历史坑：这里曾硬编码过 #38bdf8 一组，会静默覆盖前面的映射，
+   * 导致「只改 --brand-color 换不了 EP 组件颜色」。
+   */
+  --el-color-danger: var(--danger-color);
   --el-color-success: #34d399;
   --el-color-warning: #fbbf24;
 
   --el-bg-color: #0f172a;
-  --el-bg-color-overlay: #16213c;
+  /* 注意：不要在这里写死 --el-bg-color-overlay，
+     否则 midnight / idea 等主题会被迫用深蓝色（弹窗看起来"没跟主题换"） */
   --el-bg-color-page: #0b1120;
   --el-text-color-primary: #e2e8f0;
   --el-text-color-regular: #cbd5e1;
@@ -320,11 +358,7 @@ html.dark {
   --el-mask-color: rgba(2, 6, 23, 0.7);
 }
 
-/* 亮色下主色调调整为更深的蓝，保证在白底上的对比度 */
-html:not(.dark) {
-  --el-color-primary: #0284c7;
-  --el-bg-color-overlay: #ffffff;
-}
+/* 亮色主色来自 --brand-color(#4f46e5)，在白底上对比度足够，无需单独覆盖 */
 
 /*
  * 字号与控件尺寸跟随「设置 → 字体大小 / 控件大小」。
@@ -360,22 +394,91 @@ html:not(.dark) {
   background: transparent;
 }
 
-/* 弹窗与抽屉统一圆角与背景 */
-.el-dialog,
-.el-drawer {
-  --el-dialog-bg-color: var(--el-bg-color-overlay);
-  --el-drawer-bg-color: var(--el-bg-color-overlay);
+/*
+ * 弹窗 / 抽屉 / 消息框：底色统一用 --overlay-bg（各主题的固定不透明度版本）。
+ *
+ * EP 的背景来源各不相同——弹窗取 --el-dialog-bg-color、抽屉取 --el-drawer-bg-color、
+ * 消息框直接取 --el-bg-color——所以这里统一改掉并显式给 background-color 兜底。
+ *
+ * 浮层底色一律不透明（--overlay-bg，2026-09-14 起窗口与浮层都不再透明），
+ * 与主界面之间靠边框和阴影区分层级；EP 自带的入场动画
+ * （动 .el-overlay / .el-overlay-dialog 的 opacity/transform）可以照常保留。
+ *
+ * 选择器必须带 `html ` 前缀抬高特异性：EP 自己的样式里就有
+ * `.el-dialog{--el-dialog-bg-color:var(--el-bg-color);background:var(--el-dialog-bg-color)}`
+ * （特异性与裸 `.el-dialog` 相同，谁在后面谁赢）。而 --el-bg-color 是不透明的，
+ * 一旦按打包顺序落到我们后面，弹窗就永远是实心的「不跟主题走」。
+ * 加上 html 前缀后无论顺序如何都由我们说了算。
+ */
+html .el-dialog,
+html .el-drawer,
+html .el-message-box {
+  --el-dialog-bg-color: var(--overlay-bg);
+  --el-drawer-bg-color: var(--overlay-bg);
+  background-color: var(--overlay-bg);
 }
 
 /*
- * 彻底隐藏 Monaco 的概览标尺（滚动条旁的「全文预览」标记）。
- * options 里的 overviewRulerLanes: 0 负责从源头关闭，
- * 这里再兜底一次：热更新时已存在的编辑器实例不会重建，仅改 options 可能不生效。
+ * 弹窗遮罩：完全透明，弹窗以外的主界面保持原样。
+ *
+ * EP 默认的遮罩是固定的 50% 黑（--el-overlay-color-lighter），会把主界面压暗；
+ * 这里关掉它。若想让弹窗外压暗，把 background-color 改成 var(--app-mask)。
+ * 同样带 `html ` 前缀：EP 自己也有 `.el-overlay{background-color:var(--el-overlay-color-lighter)}`。
  */
-.monaco-editor .decorationsOverviewRuler,
-.monaco-editor .monaco-scrollable-element > .decorationsOverviewRuler {
-  display: none !important;
-  width: 0 !important;
+html .el-overlay {
+  background-color: transparent;
+}
+
+/*
+ * 应用自己的小提示（替代原生 title，见 utils/tooltip.ts）。
+ *
+ * 原生 title 的样式由系统决定、CSS 管不到，和应用的浮层观感对不上，
+ * 因此全局代理成这个元素：不透明底色（--overlay-bg）+ 边框 + 轻阴影；
+ * fixed 定位由脚本按元素位置计算，不受容器 overflow 裁切影响。
+ */
+#app-tip {
+  position: fixed;
+  z-index: 4000;
+  max-width: 320px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--overlay-bg);
+  box-shadow: var(--shadow-md);
+  color: var(--text-color);
+  font-size: var(--app-font-size-xs);
+  line-height: 1.5;
+  word-break: break-word;
+  pointer-events: none;
+  user-select: none;
+  animation: app-tip-in 0.12s ease-out;
+}
+
+#app-tip[hidden] {
+  display: none;
+}
+
+@keyframes app-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/*
+ * 编辑器（CodeMirror 6）背景透明由 utils/logLanguage.ts 的 EditorView.theme 负责，
+ * 这里只补一条兜底：CM6 的 gutter 与 content 默认不带背景，
+ * 但容器若被其它全局规则染色，统一在这里压掉，保证融入所在容器 / 面板。
+ */
+.cm-editor,
+.cm-editor .cm-gutters,
+.cm-editor .cm-content {
+  background-color: transparent;
 }
 
 /* 滚动条美化，贴近原生观感 */

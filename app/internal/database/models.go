@@ -15,6 +15,14 @@ type Tab struct {
 
 // DBConnection 对应 db_connections 表，描述一个外部数据库连接。
 // Password 在数据库中为密文，对外返回时保持密文，由前端按需解密展示。
+//
+// 字段按本项目只支持的 mysql/postgres 两种方言裁剪，分为以下几组：
+//   - 基本：Name / DBType / Host / Port / Database / Username / Password；
+//   - 展示：Note（备注）、Color（颜色标记）、IsProduction（生产库标记，界面提示用）；
+//   - 方言：Charset（MySQL 字符集）、DefaultSchema（PostgreSQL 默认 schema）；
+//   - 超时：ConnectTimeoutSecs / QueryTimeoutSecs / KeepaliveSecs（0 表示用默认值）；
+//   - 加密：SSLMode + 三个证书路径（MySQL 映射到 tls，PostgreSQL 映射到 sslmode 等）；
+//   - 其它：URLParams（追加到连接串的自定义参数）、ReadOnly（拒绝写操作）、Extra（预留 JSON）。
 type DBConnection struct {
 	ID       int64  `json:"id"`
 	Name     string `json:"name"`
@@ -25,6 +33,35 @@ type DBConnection struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Extra    string `json:"extra"`
+
+	// Note 备注（连接列表悬停展示）
+	Note string `json:"note"`
+	// Color 颜色标记（列表与标签着色，空表示不标记）
+	Color string `json:"color"`
+	// Charset MySQL 字符集，空表示 utf8mb4
+	Charset string `json:"charset"`
+	// DefaultSchema PostgreSQL 默认 schema（MySQL 留空，库由 Database 决定）
+	DefaultSchema string `json:"defaultSchema"`
+	// ConnectTimeoutSecs 建立连接超时（秒），0 表示默认 10
+	ConnectTimeoutSecs int `json:"connectTimeoutSecs"`
+	// QueryTimeoutSecs 单条语句超时（秒），0 表示默认 60
+	QueryTimeoutSecs int `json:"queryTimeoutSecs"`
+	// KeepaliveSecs 空闲连接回收时间（秒），0 表示默认 30
+	KeepaliveSecs int `json:"keepaliveSecs"`
+	// SSLMode SSL 模式：disable / prefer / require / verify-ca / verify-full，空表示 disable
+	SSLMode string `json:"sslMode"`
+	// SSLCaPath CA 证书路径（verify-ca / verify-full 时必填）
+	SSLCaPath string `json:"sslCaPath"`
+	// SSLCertPath 客户端证书路径（双向认证时填）
+	SSLCertPath string `json:"sslCertPath"`
+	// SSLKeyPath 客户端私钥路径（双向认证时填）
+	SSLKeyPath string `json:"sslKeyPath"`
+	// URLParams 追加到连接串的自定义参数，形如 key=value&key2=value2（同名时覆盖上面的默认值）
+	URLParams string `json:"urlParams"`
+	// ReadOnly 只读连接：拒绝执行写操作
+	ReadOnly bool `json:"readOnly"`
+	// IsProduction 生产库标记：界面高亮提示，避免误操作
+	IsProduction bool `json:"isProduction"`
 }
 
 // SQLTemplate 对应 sql_templates 表。

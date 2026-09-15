@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import type { ComponentPublicInstance } from 'vue'
+import type { Component, ComponentPublicInstance } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTabStore } from '@/stores/tabStore'
@@ -10,14 +10,74 @@ import { toolOf } from '@/utils/tools'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ToolPickerDialog from '@/components/ToolPickerDialog.vue'
 import DbQuery from '@/views/tools/DbQuery.vue'
+import CommandExecutorView from '@/views/tools/CommandExecutorView.vue'
 import ConnectionsView from '@/views/tools/ConnectionsView.vue'
 import SqlTemplateView from '@/views/tools/SqlTemplateView.vue'
 import DictionaryView from '@/views/tools/DictionaryView.vue'
 import SettingsView from '@/views/tools/SettingsView.vue'
+import HomeView from '@/views/HomeView.vue'
+import { fetchAppInfo } from '@/api/system'
 import type { ToolType, WorkbenchTab } from '@/types'
 
 const tabStore = useTabStore()
 const dictStore = useDictStore()
+
+/** 状态栏右侧的版本号（取自后端 GetAppInfo，避免前后端各维护一份版本号） */
+const appVersionLabel = ref('')
+
+/** 状态栏左侧：当前展示的视图名（单例视图优先，否则是激活标签名） */
+const activeTabLabel = computed(() => {
+  const singleton = tabStore.activeSingleton
+  if (singleton) {
+    return toolOf(singleton)?.label ?? '首页'
+  }
+  return tabStore.activeTab?.name ?? '首页'
+})
+
+/**
+ * 单例视图清单：类型 → 组件。
+ *
+ * 单例工具（首页 / 连接管理 / SQL 模板 / 词典 / 设置）不进标签栏，
+ * 内容区按 `activeSingleton` 展示其中一个；它们都不需要 payload，
+ * 只有「初始化完成」这一件事要上报，所以用一份清单统一渲染。
+ */
+const singletonViews: Array<{ type: ToolType, component: Component }> = [
+  { type: 'home', component: HomeView },
+  { type: 'connections', component: ConnectionsView },
+  { type: 'sql-template', component: SqlTemplateView },
+  { type: 'dictionary', component: DictionaryView },
+  { type: 'settings', component: SettingsView },
+]
+
+/** 当前展示的单例视图类型；为 null 表示正在看标签 */
+const singletonType = computed(() => tabStore.activeSingleton)
+
+/**
+ * 展示过的单例视图类型：首次切到才挂载，之后常驻。
+ * 与标签同样用 v-show 而非 v-if，否则切走再切回来表单/编辑状态会丢。
+ */
+const visitedSingletons = ref<ToolType[]>([])
+
+/** 已完成初始化的单例视图类型（各视图挂载后会自己去查数据） */
+const readySingletons = ref<ToolType[]>([])
+
+// 切到某个单例视图时标记为「需要挂载」，之后常驻
+watch(
+  () => tabStore.activeSingleton,
+  (type) => {
+    if (type && !visitedSingletons.value.includes(type)) {
+      visitedSingletons.value = [...visitedSingletons.value, type]
+    }
+  },
+  { immediate: true },
+)
+
+/** 单例视图完成初始化 */
+function handleSingletonReady(type: ToolType) {
+  if (!readySingletons.value.includes(type)) {
+    readySingletons.value = [...readySingletons.value, type]
+  }
+}
 
 /** 左侧菜单是否收起 */
 const sidebarCollapsed = ref(false)
@@ -91,6 +151,13 @@ let offQuit: (() => void) | null = null
 // ------------------------------------------------------------ 初始加载
 
 onMounted(async () => {
+  // 版本号不阻塞首屏：拿到后写状态栏
+  void fetchAppInfo().then((info) => {
+    if (info.version) {
+      appVersionLabel.value = `v${info.version}`
+    }
+  })
+
   await Promise.all([
     tabStore.load(),
     dictStore.loadAll(),
@@ -393,8 +460,12 @@ watch(
  */
 const readyTabUids = ref<string[]>([])
 
-/** 激活标签是否已就绪；未绑定功能的空白标签没有初始化过程，直接视为就绪 */
+/** 当前展示的视图是否已就绪；未绑定功能的空白标签没有初始化过程，直接视为就绪 */
 const activeReady = computed(() => {
+  const singleton = tabStore.activeSingleton
+  if (singleton) {
+    return readySingletons.value.includes(singleton)
+  }
   const tab = tabStore.activeTab
   if (!tab || !toolOf(tab.toolType)) {
     return true
@@ -519,21 +590,26 @@ function handleTabReady(uid: string) {
       </div>
 
       <!--
-        内容区：已打开过的标签全部常驻挂载，用 v-show 切换显隐。
-        用 v-if 按激活标签渲染会卸载组件，切换标签后查询结果、表单内容都会丢失。
+        内容区：单例视图与标签二选一展示（见 tabStore 的 activeSingleton / activeId 互斥）。
+        两者各自「已访问过就常驻挂载」，用 v-show 切换显隐——
+        用 v-if 按当前视图渲染会卸载组件，切换后查询结果、表单内容都会丢失。
       -->
       <div class="workbench__body">
+        <!-- 单例视图：不进标签栏，由侧边栏直接切换 -->
+        <template v-for="view in singletonViews" :key="view.type">
+          <component
+            :is="view.component"
+            v-if="visitedSingletons.includes(view.type)"
+            v-show="singletonType === view.type"
+            @ready="handleSingletonReady(view.type)"
+          />
+        </template>
+
         <template v-if="mountedTabs.length">
           <template v-for="tab in mountedTabs" :key="tab.uid">
-            <!-- 历史遗留的空白标签 -->
-            <el-empty
-              v-if="!toolOf(tab.toolType)"
-              v-show="tab.id === tabStore.activeId"
-              description="该标签没有绑定功能，可从左侧菜单打开需要的功能"
-            />
-
+            <!-- 标签只可能是多例工具（单例已进内容区，见上面的单例视图） -->
             <DbQuery
-              v-else-if="tab.toolType === 'db-query'"
+              v-if="tab.toolType === 'db-query'"
               v-show="tab.id === tabStore.activeId"
               :tab-id="tab.id"
               :initial-payload="payloadOf(tab.uid)"
@@ -541,30 +617,16 @@ function handleTabReady(uid: string) {
               @ready="handleTabReady(tab.uid)"
             />
 
-            <ConnectionsView
-              v-else-if="tab.toolType === 'connections'"
+            <CommandExecutorView
+              v-else-if="tab.toolType === 'command-executor'"
               v-show="tab.id === tabStore.activeId"
-              @ready="handleTabReady(tab.uid)"
-            />
-            <SqlTemplateView
-              v-else-if="tab.toolType === 'sql-template'"
-              v-show="tab.id === tabStore.activeId"
-              @ready="handleTabReady(tab.uid)"
-            />
-            <DictionaryView
-              v-else-if="tab.toolType === 'dictionary'"
-              v-show="tab.id === tabStore.activeId"
-              @ready="handleTabReady(tab.uid)"
-            />
-            <SettingsView
-              v-else-if="tab.toolType === 'settings'"
-              v-show="tab.id === tabStore.activeId"
+              :tab-id="tab.id"
+              :initial-payload="payloadOf(tab.uid)"
+              @change="handlePayloadChange"
               @ready="handleTabReady(tab.uid)"
             />
           </template>
         </template>
-
-        <el-empty v-else description="暂无标签，可从左侧菜单打开功能" />
 
         <!-- 首次初始化遮罩：盖住「空界面 → 数据到达」的过程，避免闪动 -->
         <Transition name="workbench-loading">
@@ -574,6 +636,13 @@ function handleTabReady(uid: string) {
           </div>
         </Transition>
       </div>
+
+      <!-- 底部状态栏：当前标签（左）+ 版本号（右） -->
+      <footer class="workbench__status">
+        <span class="workbench__status-name">{{ activeTabLabel }}</span>
+        <span class="workbench__status-spacer" aria-hidden="true" />
+        <span class="workbench__status-version">{{ appVersionLabel }}</span>
+      </footer>
     </div>
 
     <!-- 工具选择：标签栏 + 打开，选中后新建/跳转标签 -->
@@ -622,14 +691,53 @@ function handleTabReady(uid: string) {
   overflow: hidden;
 }
 
+/* ------------------------------------------------------------ 状态栏 */
+
+/* 底部状态栏：容器高度固定不随「控件大小」缩放，字号跟随正文派生 */
+.workbench__status {
+  display: flex;
+  align-items: center;
+  flex: 0 0 28px;
+  height: 28px;
+  padding: 0 14px;
+  border-top: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.workbench__status-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench__status-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.workbench__status-version {
+  flex: 0 0 auto;
+  margin-left: var(--space-3);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ------------------------------------------------------------ 标签栏 */
 
+/*
+ * 标签栏属于内容区：透明底 + 一条分隔线，不再有独立的面板底色。
+ * 高度固定 44px（容器不随控件大小缩放）。
+ */
 .workbench__bar {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 44px;
+  height: 44px;
   padding: 0 8px;
-  background: var(--panel-bg);
+  background: transparent;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -816,8 +924,7 @@ function handleTabReady(uid: string) {
   gap: 10px;
   color: var(--text-muted);
   font-size: var(--app-font-size-sm);
-  /* 与应用背景透明度联动，避免透明窗口下遮罩变成一块死色 */
-  background: rgb(var(--bg-rgb) / calc(var(--app-bg-alpha) * 0.96));
+  background: rgb(var(--bg-rgb) / 0.96);
 }
 
 .workbench__loading-spinner {
@@ -884,7 +991,7 @@ function handleTabReady(uid: string) {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background: var(--menu-bg);
-  backdrop-filter: blur(16px);
+  /* 底色不透明，靠阴影区分层级即可 */
   box-shadow: var(--shadow-md);
   user-select: none;
 }

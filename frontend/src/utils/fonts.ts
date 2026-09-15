@@ -19,8 +19,13 @@ export interface FontOption {
 /** 中文回退字体（Windows / macOS 常见内置） */
 const CJK_FALLBACK = '"Microsoft YaHei", "PingFang SC", sans-serif'
 
-/** 内置默认界面字体栈（Nunito 由 assets 本地提供） */
-export const DEFAULT_FONT_STACK = `"Nunito", ${CJK_FALLBACK}`
+/**
+ * 内置默认字体栈。
+ *
+ * 默认字体为 Inter（离线应用不引网络字体，本机没装时回退中文系统字体）。
+ * 历史：原来默认 Nunito（assets 里仍有 @font-face 声明与字体文件，仅不再作为默认）。
+ */
+export const DEFAULT_FONT_STACK = `"Inter", ${CJK_FALLBACK}`
 
 /** 内置字体的配置值 */
 export const BUILTIN_FONT_VALUE = 'system'
@@ -39,7 +44,7 @@ export function buildFontOptions(systemFonts: string[]): FontOption[] {
   const options: FontOption[] = [
     {
       value: BUILTIN_FONT_VALUE,
-      label: 'Nunito（内置默认）',
+      label: 'Inter（内置默认）',
       stack: DEFAULT_FONT_STACK,
     },
   ]

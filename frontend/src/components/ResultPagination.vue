@@ -123,6 +123,15 @@ function go(target: number) {
   flex-wrap: wrap;
 }
 
+/*
+ * Element Plus 会给「相邻按钮」加 margin-left: 12px（.el-button + .el-button），
+ * 与这里的 gap 叠加后翻页按钮之间变成 18px（比与输入框之间的 6px 宽很多）。
+ * 本项目按钮行一律用 flex + gap 排版，所以清掉默认外边距。
+ */
+.result-pagination__actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
 .result-pagination__jump-label {
   color: var(--text-muted);
   font-size: var(--app-font-size-sm);

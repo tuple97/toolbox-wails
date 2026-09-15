@@ -18,6 +18,8 @@ export interface ContextMenuAction {
   danger?: boolean
   /** 该项之后插入分割线 */
   divided?: boolean
+  /** 子菜单项：有值时该项变为「悬浮展开子菜单」的父项 */
+  children?: ContextMenuAction[]
 }
 
 /**
@@ -30,7 +32,11 @@ export type ToolType =
   | 'placeholder'
   // SQL 查询（多例）
   | 'db-query'
+  // 命令执行器（SQL 执行，多例）
+  | 'command-executor'
   // 以下均为单例标签
+  // 工作台首页（欢迎语 / 快捷入口 / 系统监控）
+  | 'home'
   | 'connections'
   | 'sql-template'
   | 'dictionary'
@@ -70,6 +76,34 @@ export interface DBConnection {
   username: string
   password: string
   extra: string
+  /** 备注（连接列表悬停展示） */
+  note: string
+  /** 颜色标记（列表与标签着色，空表示不标记） */
+  color: string
+  /** MySQL 字符集，空表示 utf8mb4 */
+  charset: string
+  /** PostgreSQL 默认 schema（MySQL 留空，库由 database 决定） */
+  defaultSchema: string
+  /** 建立连接超时（秒），0 表示默认 10 */
+  connectTimeoutSecs: number
+  /** 单条语句超时（秒），0 表示默认 60 */
+  queryTimeoutSecs: number
+  /** 空闲连接回收时间（秒），0 表示默认 30 */
+  keepaliveSecs: number
+  /** SSL 模式：disable / prefer / require / verify-ca / verify-full */
+  sslMode: string
+  /** CA 证书路径 */
+  sslCaPath: string
+  /** 客户端证书路径 */
+  sslCertPath: string
+  /** 客户端私钥路径 */
+  sslKeyPath: string
+  /** 追加到连接串的自定义参数：key=value&key2=value2 */
+  urlParams: string
+  /** 只读连接：后端拒绝执行写操作 */
+  readOnly: boolean
+  /** 生产库标记：界面高亮提示 */
+  isProduction: boolean
 }
 
 /** SQL 模板配置，与后端 database.SQLTemplate 对应 */
@@ -95,6 +129,94 @@ export interface Dictionary {
   id: number
   name: string
   description: string
+}
+
+/** 命令执行器 Tab 的持久化状态 */
+export interface ExecutorPayload {
+  /** 选中的数据库连接 */
+  connId: number | null
+  /** 执行时使用的库；空串表示连接默认库 */
+  database: string
+  /** 编辑器中的 SQL */
+  sql: string
+  /** SQL 编辑器高度（px），拖动分栏调整后持久化 */
+  editorHeight?: number
+  /** 执行记录高度（px），拖动分栏调整后持久化 */
+  logHeight?: number
+}
+
+/** 命令执行器：执行请求 */
+export interface ExecutorRequest {
+  connId: number
+  database: string
+  sql: string
+  limit: number
+}
+
+/** 命令执行器：表的字段信息 */
+export interface ExecutorColumn {
+  name: string
+  dataType: string
+  comment: string
+}
+
+/**
+ * 「执行全部」时单条语句的执行记录（摘要页签用）。
+ *
+ * 多条语句必须逐条发送给驱动（拼在一起会报语法错误），
+ * 因此每条都单独计时、单独记录成败。
+ */
+export interface StatementRunRecord {
+  /** 语句序号，从 1 开始 */
+  index: number
+  /** 语句原文 */
+  sql: string
+  /** 执行状态：运行中 / 成功 / 失败 / 已取消 */
+  status: 'running' | 'success' | 'failed' | 'cancelled'
+  /** 开始时间（毫秒时间戳） */
+  startedAt: number
+  /** 结束时间（毫秒时间戳）；未结束为 0 */
+  finishedAt: number
+  /** 本条耗时（ms） */
+  elapsedMs: number
+  /** 结果类型 */
+  kind?: 'query' | 'exec'
+  /** 查询返回行数 */
+  rowCount?: number
+  /** 写操作影响行数 */
+  affectedRows?: number
+  /** 失败原因 / 取消说明 */
+  error?: string
+}
+
+/** 一次「执行全部」的汇总（摘要页签顶部信息） */
+export interface ScriptRunSummary {
+  /** 每条语句的执行记录（按执行顺序） */
+  records: StatementRunRecord[]
+  /** 整体开始时间（毫秒时间戳） */
+  startedAt: number
+  /** 整体结束时间（毫秒时间戳）；执行中为 0 */
+  finishedAt: number
+  /** 总耗时（ms） */
+  totalMs: number
+  /** 成功条数 */
+  successCount: number
+  /** 失败条数（含被取消的语句） */
+  failedCount: number
+}
+
+/** 命令执行器：执行结果（kind 区分查询与写操作） */
+export interface ExecutorResult {
+  kind: 'query' | 'exec'
+  columns: ColumnMeta[]
+  rows: Record<string, unknown>[]
+  sql: string
+  /** 实际生效的库 / 模式（后端在会话上钉住的那个），结果区展示用于核对 */
+  database: string
+  elapsedMs: number
+  rowCount: number
+  truncated: boolean
+  affectedRows: number
 }
 
 /** 词典项，与后端 database.DictionaryItem 对应 */
@@ -129,6 +251,8 @@ export interface QueryResult {
   pageSize: number
   /** 总页数；未分页时为 1 */
   pageCount: number
+  /** 是否为 EXPLAIN 分析结果（结果表格据此给出悬停优化建议） */
+  analysis?: boolean
 }
 
 /** 查询请求，与后端 services.ExecuteRequest 对应 */
@@ -188,9 +312,10 @@ export type SettingKey =
   | 'editor_font_size'
   | 'editor_font_family'
   | 'log_max_lines'
-  | 'background_alpha'
-  | 'background_blur'
+
   | 'font_family'
+  | 'sidebar_config'
+  | 'picker_config'
 
 /**
  * 主题标识。
@@ -290,4 +415,6 @@ export interface DbQueryPayload {
   variableValues?: Record<string, unknown>
   /** 该标签自己的每页条数，不随模板保存 */
   pageSize?: number
+  /** 执行记录高度（px），拖动分栏调整后持久化 */
+  logHeight?: number
 }

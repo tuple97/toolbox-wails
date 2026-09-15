@@ -5,7 +5,7 @@ import {
   minimiseWindow,
   toggleMaximiseWindow,
 } from '@/api/window'
-import logoUrl from '@/assets/images/logo-universal.png'
+import logoUrl from '@/assets/images/logo.png'
 
 withDefaults(defineProps<{
   /** 工具栏左侧显示的应用名称 */
@@ -183,12 +183,11 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 40px;
-  flex: 0 0 40px;
-  padding-left: 12px;
+  height: 48px;
+  flex: 0 0 48px;
+  padding-left: 14px;
   background: var(--titlebar-bg);
   border-bottom: 1px solid var(--border-color);
-  backdrop-filter: blur(12px);
   user-select: none;
   -webkit-user-select: none;
 

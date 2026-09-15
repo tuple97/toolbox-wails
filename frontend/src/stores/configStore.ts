@@ -21,10 +21,10 @@ const DEFAULTS: Record<SettingKey, string> = {
   control_size: 'default',
   editor_font_size: '13',
   log_max_lines: '200',
-  background_alpha: '100',
-  background_blur: '0',
   font_family: DEFAULT_FONT,
   editor_font_family: DEFAULT_FONT,
+  sidebar_config: '{}',
+  picker_config: '{}',
 }
 
 export const useConfigStore = defineStore('config', () => {
@@ -48,30 +48,22 @@ export const useConfigStore = defineStore('config', () => {
     return size === 'large' || size === 'small' ? size : 'default'
   })
 
-  /** Monaco 编辑器字号 */
+  /** 编辑器字号（CodeMirror 6 封装层读取） */
   const editorFontSize = computed(() => toNumber(values.value.editor_font_size, 13))
 
   /** 编辑器字体标识；独立于界面字体，可单独设置 */
   const editorFontFamily = computed(() => values.value.editor_font_family || DEFAULT_FONT)
 
-  /** 编辑器字体栈（供 Monaco 的 fontFamily 使用） */
+  /** 编辑器字体栈（供 CodeEditor 的 fontFamily 使用） */
   const editorFontStack = computed(() => fontStackOf(editorFontFamily.value))
 
   /** 执行日志保留条数 */
   const logMaxLines = computed(() => toNumber(values.value.log_max_lines, 200))
 
-  /** 窗口背景透明度（百分比，100 为不透明） */
-  const backgroundAlpha = computed(() =>
-    clamp(toNumber(values.value.background_alpha, 100), 20, 100),
-  )
-
-  /** 窗口背景磨砂模糊半径（px，0 为关闭） */
-  const backgroundBlur = computed(() => clamp(toNumber(values.value.background_blur, 0), 0, 40))
-
   /** 界面字体标识 */
   const fontFamily = computed(() => values.value.font_family || DEFAULT_FONT)
 
-  /** 界面字体栈（供 CSS 变量与 Monaco 使用） */
+  /** 界面字体栈（供 CSS 变量与编辑器默认字体使用） */
   const fontFamilyStack = computed(() => fontStackOf(fontFamily.value))
 
   /** 按 key 取值 */
@@ -136,11 +128,7 @@ export const useConfigStore = defineStore('config', () => {
         applyFontFamily()
         break
       case 'editor_font_family':
-        // 编辑器字体无需写 CSS 变量：MonacoEditor 直接读 editorFontStack，options 变化即生效
-        break
-      case 'background_alpha':
-      case 'background_blur':
-        applyBackground()
+        // 编辑器字体无需写 CSS 变量：CodeEditor 直接读 editorFontStack，变化时重配置 Compartment
         break
       default:
         break
@@ -167,7 +155,6 @@ export const useConfigStore = defineStore('config', () => {
       applyFontSize()
       applyControlScale()
       applyFontFamily()
-      applyBackground()
     }
   }
 
@@ -220,26 +207,6 @@ export const useConfigStore = defineStore('config', () => {
     document.documentElement.style.setProperty('--app-font-family', fontFamilyStack.value)
   }
 
-  /**
-   * 应用窗口背景效果：写入透明度与磨砂的 CSS 变量。
-   * 底色与 backdrop-filter 都在 #app-backdrop 层上，不作用于内容本身。
-   */
-  function applyBackground() {
-    const root = document.documentElement
-    root.style.setProperty('--app-bg-alpha', String(backgroundAlpha.value / 100))
-    root.style.setProperty('--app-bg-blur', `${backgroundBlur.value}px`)
-
-    /*
-     * 强制背景层重新合成。
-     * backdrop-filter 的模糊结果会被缓存，仅改 CSS 变量时
-     * 部分情况下不会立即重绘，读一次布局属性可触发重新合成。
-     */
-    const backdrop = document.getElementById('app-backdrop')
-    if (backdrop) {
-      void backdrop.offsetHeight
-    }
-  }
-
   return {
     // state
     values,
@@ -253,8 +220,6 @@ export const useConfigStore = defineStore('config', () => {
     editorFontFamily,
     editorFontStack,
     logMaxLines,
-    backgroundAlpha,
-    backgroundBlur,
     fontFamily,
     fontFamilyStack,
     // actions
@@ -265,7 +230,6 @@ export const useConfigStore = defineStore('config', () => {
     applyFontSize,
     applyControlScale,
     applyFontFamily,
-    applyBackground,
   }
 })
 
@@ -276,9 +240,4 @@ function toNumber(raw: string | undefined, fallback: number): number {
   }
   const parsed = Number(raw)
   return Number.isFinite(parsed) ? parsed : fallback
-}
-
-/** 把数值限制在指定区间内 */
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
 }

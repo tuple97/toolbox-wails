@@ -6,7 +6,7 @@ import TitleBar from '@/components/TitleBar.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import WindowResizeEdges from '@/components/WindowResizeEdges.vue'
 import Workbench from '@/layouts/Workbench.vue'
-import { closeWindow, toggleMaximiseWindow } from '@/api/window'
+import { closeWindow, openDevTools, toggleMaximiseWindow } from '@/api/window'
 import { useConfigStore } from '@/stores/configStore'
 import { useLogStore } from '@/stores/logStore'
 import { useTabStore } from '@/stores/tabStore'
@@ -30,6 +30,8 @@ function openSettings() {
 const titleBarMenuItems: ContextMenuAction[] = [
   { key: 'toggle-maximise', label: '最大化 / 还原', shortcut: '双击标题栏' },
   { key: 'reload', label: '重新载入界面', shortcut: 'Ctrl+R', divided: true },
+  // 调试用：打开 WebView 的开发者工具（与 F12 相同），方便查样式
+  { key: 'devtools', label: '检查元素', shortcut: 'F12', divided: true },
   { key: 'close', label: '退出应用', danger: true },
 ]
 
@@ -48,6 +50,9 @@ function handleMenuSelect(item: ContextMenuAction) {
       break
     case 'reload':
       window.location.reload()
+      break
+    case 'devtools':
+      openDevTools()
       break
     case 'close':
       closeWindow()

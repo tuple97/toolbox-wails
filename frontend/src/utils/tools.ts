@@ -24,6 +24,13 @@ export interface ToolDefinition {
 
 export const TOOLS: ToolDefinition[] = [
   {
+    type: 'home',
+    label: '首页',
+    icon: 'HomeFilled',
+    multi: false,
+    description: '工作台首页（单例标签）',
+  },
+  {
     type: 'connections',
     label: '连接管理',
     icon: 'Link',
@@ -43,6 +50,15 @@ export const TOOLS: ToolDefinition[] = [
     icon: 'Search',
     multi: true,
     description: '按模板执行查询（多例标签，可同时打开多个）',
+  },
+  {
+    type: 'command-executor',
+    label: 'SQL 执行',
+    // 注意：图标名必须是 @element-plus/icons-vue 里真实存在的导出
+    // （此前用的 Terminal 并不存在，导致菜单与标签页都没有图标）
+    icon: 'Monitor',
+    multi: true,
+    description: '自由编写并执行 SQL，支持取消与智能补全',
   },
   {
     type: 'dictionary',
@@ -67,12 +83,20 @@ export interface ToolGroup {
 }
 
 export const TOOL_GROUPS: ToolGroup[] = [
-  { label: '数据库', tools: ['connections', 'sql-template', 'db-query'] },
+  { label: '数据库', tools: ['connections', 'sql-template', 'db-query', 'command-executor'] },
   { label: '本地记录', tools: ['dictionary'] },
 ]
 
-/** 顶级（不分组）工具 */
-export const TOP_LEVEL_TOOLS: ToolType[] = ['settings']
+/**
+ * 顶级（不分组）工具。
+ *
+ * 顺序即渲染顺序；其中 `PINNED_TOP_TOOLS` 里的会排在分组菜单**之上**，
+ * 其余顶级工具贴在分组菜单之下（如设置）。
+ */
+export const TOP_LEVEL_TOOLS: ToolType[] = ['home', 'settings']
+
+/** 置顶渲染的顶级工具（首页）：侧边栏最上面一项，先看见它再看见各分组 */
+export const PINNED_TOP_TOOLS: ToolType[] = ['home']
 
 /** 按类型取工具定义 */
 export function toolOf(type: string): ToolDefinition | undefined {

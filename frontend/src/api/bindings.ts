@@ -34,6 +34,12 @@ export const RevealPassword = App.RevealPassword
 export const ExecuteQuery = App.ExecuteQuery
 export const QueryVariableOptions = App.QueryVariableOptions
 
+// ---- 命令执行器 ----
+export const ExecuteStatement = App.ExecuteStatement
+export const ListDatabases = App.ListDatabases
+export const ListTables = App.ListTables
+export const ListTableColumns = App.ListTableColumns
+
 // ---- SQL 模板 ----
 export const ListSqlTemplates = App.ListSqlTemplates
 export const GetSqlTemplate = App.GetSqlTemplate
@@ -58,6 +64,10 @@ export const SaveSetting = App.SaveSetting
 
 // ---- 窗口控制 ----
 export const ListSystemFonts = App.ListSystemFonts
+
+// ---- 应用与系统信息 ----
+export const GetAppInfo = App.GetAppInfo
+export const GetSystemMetrics = App.GetSystemMetrics
 
 export const WindowMinimise = App.WindowMinimise
 export const WindowToggleMaximise = App.WindowToggleMaximise

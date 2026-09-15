@@ -2,14 +2,34 @@
 import { computed } from 'vue'
 import { useDictStore } from '@/stores/dictStore'
 import { buildColumns, createMappingLookup, formatCell } from '@/utils/dictFormatter'
+import { suggestionsForRow } from '@/utils/explainTips'
 import type { FieldMapping, QueryResult } from '@/types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** 查询结果 */
   result: QueryResult
   /** 字段映射配置 */
   mappings: FieldMapping[]
+  /** 是否为 EXPLAIN 分析结果：单元格悬停时给出优化建议 */
+  analysis?: boolean
+}>(), {
+  mappings: () => [],
+  analysis: false,
+})
+
+const emit = defineEmits<{
+  /**
+   * 行右键：带上被点的行与鼠标位置。
+   * 菜单内容与后续动作由调用方决定（结果集「复制为 SQL」是其中一个用途）。
+   */
+  (e: 'row-contextmenu', payload: { row: Record<string, unknown>, x: number, y: number }): void
 }>()
+
+/** 行右键：把鼠标位置一并上报，父级据此弹自定义菜单 */
+function handleRowContextMenu(row: Record<string, unknown>, _column: unknown, event: Event) {
+  const mouse = event as MouseEvent
+  emit('row-contextmenu', { row, x: mouse.clientX, y: mouse.clientY })
+}
 
 const dictStore = useDictStore()
 
@@ -21,10 +41,30 @@ const mappingLookup = computed(() => createMappingLookup(props.mappings))
 
 /**
  * 单元格渲染。
- * 命中词典时按模板展示释义，并把描述作为悬浮提示。
+ * 命中词典时按模板展示释义，并把描述作为悬浮提示；
+ * EXPLAIN 分析结果再把该行的优化建议合并进悬浮提示（多行，见 explainTips）。
  */
 function renderCell(row: Record<string, unknown>, column: string) {
-  return formatCell(row[column], mappingLookup.value(column), dictStore.lookup)
+  const cell = formatCell(row[column], mappingLookup.value(column), dictStore.lookup)
+  if (!props.analysis) {
+    return cell
+  }
+  const advice = suggestionsForRow(row)
+  if (!advice.length) {
+    return cell
+  }
+  const tips = advice.map(item => `【${item.source}】${item.text}`)
+  return { ...cell, tooltip: [cell.tooltip, ...tips].filter(Boolean).join('\n') }
+}
+
+/**
+ * 行号列：跨页连续——第 page 页的第一行接着上一页编号
+ * （offset = (page - 1) * pageSize；未分页时 pageSize 为 0，offset 恒为 0）。
+ */
+function rowIndex(index: number): number {
+  const page = props.result.page ?? 1
+  const size = props.result.pageSize ?? 0
+  return (page - 1) * size + index + 1
 }
 </script>
 
@@ -38,7 +78,12 @@ function renderCell(row: Record<string, unknown>, column: string) {
       border
       stripe
       empty-text="查询成功，但未返回数据"
+      @row-contextmenu="handleRowContextMenu"
     >
+      <!-- 序号列：跨页连续的行号 -->
+      <el-table-column label="#" width="64" align="center">
+        <template #default="{ $index }">{{ rowIndex($index) }}</template>
+      </el-table-column>
       <el-table-column
         v-for="col in columns"
         :key="col.column"
@@ -54,6 +99,7 @@ function renderCell(row: Record<string, unknown>, column: string) {
             :content="renderCell(row, col.column).tooltip"
             placement="top"
             :show-after="300"
+            popper-class="result-table-tip"
           >
             <span
               class="result-table__cell"
@@ -101,5 +147,17 @@ function renderCell(row: Record<string, unknown>, column: string) {
 
 .result-table :deep(.el-table__cell) {
   font-size: var(--app-font-size-sm);
+}
+</style>
+
+<style>
+/*
+ * 分析建议气泡：teleport 到 body，scoped 样式够不到，所以放开为全局类。
+ * 内容是多条建议（换行分隔），必须保留换行。
+ */
+.result-table-tip {
+  max-width: 480px;
+  white-space: pre-line;
+  line-height: 1.7;
 }
 </style>

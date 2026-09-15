@@ -142,6 +142,214 @@ export class ExecuteRequest {
 }
 
 /**
+ * ExecutorColumn 描述一张表的字段（智能补全与元数据用）。
+ */
+export class ExecutorColumn {
+    /**
+     * Creates a new ExecutorColumn instance.
+     * @param {Partial<ExecutorColumn>} [$$source = {}] - The source object to create the ExecutorColumn.
+     */
+    constructor($$source = {}) {
+        if (!("name" in $$source)) {
+            /**
+             * Name 字段名
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("dataType" in $$source)) {
+            /**
+             * DataType 字段类型（如 varchar / bigint）
+             * @member
+             * @type {string}
+             */
+            this["dataType"] = "";
+        }
+        if (!("comment" in $$source)) {
+            /**
+             * Comment 字段注释
+             * @member
+             * @type {string}
+             */
+            this["comment"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ExecutorColumn instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ExecutorColumn}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ExecutorColumn(/** @type {Partial<ExecutorColumn>} */($$parsedSource));
+    }
+}
+
+/**
+ * ExecutorRequest 描述命令执行器的一次执行请求。
+ */
+export class ExecutorRequest {
+    /**
+     * Creates a new ExecutorRequest instance.
+     * @param {Partial<ExecutorRequest>} [$$source = {}] - The source object to create the ExecutorRequest.
+     */
+    constructor($$source = {}) {
+        if (!("connId" in $$source)) {
+            /**
+             * ConnID 数据库连接 ID
+             * @member
+             * @type {number}
+             */
+            this["connId"] = 0;
+        }
+        if (!("database" in $$source)) {
+            /**
+             * Database 执行时使用的库；为空表示连接配置的默认库
+             * @member
+             * @type {string}
+             */
+            this["database"] = "";
+        }
+        if (!("sql" in $$source)) {
+            /**
+             * SQL 待执行的 SQL（多条语句时由前端切出当前语句）
+             * @member
+             * @type {string}
+             */
+            this["sql"] = "";
+        }
+        if (!("limit" in $$source)) {
+            /**
+             * Limit 查询返回行数上限；小于等于 0 时取默认值
+             * @member
+             * @type {number}
+             */
+            this["limit"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ExecutorRequest instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ExecutorRequest}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ExecutorRequest(/** @type {Partial<ExecutorRequest>} */($$parsedSource));
+    }
+}
+
+/**
+ * ExecutorResult 命令执行器的执行结果。
+ */
+export class ExecutorResult {
+    /**
+     * Creates a new ExecutorResult instance.
+     * @param {Partial<ExecutorResult>} [$$source = {}] - The source object to create the ExecutorResult.
+     */
+    constructor($$source = {}) {
+        if (!("kind" in $$source)) {
+            /**
+             * Kind 结果类型："query"（有结果集）或 "exec"（写操作 / DDL）
+             * @member
+             * @type {string}
+             */
+            this["kind"] = "";
+        }
+        if (!("columns" in $$source)) {
+            /**
+             * Columns 结果列元信息（仅 query）
+             * @member
+             * @type {ColumnMeta[]}
+             */
+            this["columns"] = [];
+        }
+        if (!("rows" in $$source)) {
+            /**
+             * Rows 结果集（仅 query）
+             * @member
+             * @type {{ [_ in string]?: any }[]}
+             */
+            this["rows"] = [];
+        }
+        if (!("sql" in $$source)) {
+            /**
+             * SQL 实际执行的 SQL
+             * @member
+             * @type {string}
+             */
+            this["sql"] = "";
+        }
+        if (!("database" in $$source)) {
+            /**
+             * Database 实际生效的库 / 模式（后端在会话上钉住的那个），前端展示用于核对
+             * @member
+             * @type {string}
+             */
+            this["database"] = "";
+        }
+        if (!("elapsedMs" in $$source)) {
+            /**
+             * ElapsedMs 执行耗时
+             * @member
+             * @type {number}
+             */
+            this["elapsedMs"] = 0;
+        }
+        if (!("rowCount" in $$source)) {
+            /**
+             * RowCount 结果集行数（仅 query）
+             * @member
+             * @type {number}
+             */
+            this["rowCount"] = 0;
+        }
+        if (!("truncated" in $$source)) {
+            /**
+             * Truncated 结果是否因行数上限被截断
+             * @member
+             * @type {boolean}
+             */
+            this["truncated"] = false;
+        }
+        if (!("affectedRows" in $$source)) {
+            /**
+             * AffectedRows 写操作影响行数；查询类型恒为 0
+             * @member
+             * @type {number}
+             */
+            this["affectedRows"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ExecutorResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ExecutorResult}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType2;
+        const $$createField2_0 = $$createType3;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("columns" in $$parsedSource) {
+            $$parsedSource["columns"] = $$createField1_0($$parsedSource["columns"]);
+        }
+        if ("rows" in $$parsedSource) {
+            $$parsedSource["rows"] = $$createField2_0($$parsedSource["rows"]);
+        }
+        return new ExecutorResult(/** @type {Partial<ExecutorResult>} */($$parsedSource));
+    }
+}
+
+/**
  * QueryResult 描述一次查询的完整结果。
  */
 export class QueryResult {
@@ -250,6 +458,89 @@ export class QueryResult {
             $$parsedSource["rows"] = $$createField1_0($$parsedSource["rows"]);
         }
         return new QueryResult(/** @type {Partial<QueryResult>} */($$parsedSource));
+    }
+}
+
+/**
+ * SystemMetrics 描述「应用自身 + 所在机器」的一次实时资源采样。
+ * 
+ * 前端首页的监控卡片按秒级轮询本结构即可；
+ * 字段全部为零值表示采样失败（不抛错，避免仪表盘因为一次采样失败而报错）。
+ */
+export class SystemMetrics {
+    /**
+     * Creates a new SystemMetrics instance.
+     * @param {Partial<SystemMetrics>} [$$source = {}] - The source object to create the SystemMetrics.
+     */
+    constructor($$source = {}) {
+        if (!("appMemoryMB" in $$source)) {
+            /**
+             * AppMemoryMB 当前进程内存占用（Windows 为工作集，其它平台为 RSS）
+             * @member
+             * @type {number}
+             */
+            this["appMemoryMB"] = 0;
+        }
+        if (!("memoryTotalMB" in $$source)) {
+            /**
+             * MemoryTotalMB 物理内存总量
+             * @member
+             * @type {number}
+             */
+            this["memoryTotalMB"] = 0;
+        }
+        if (!("memoryUsedMB" in $$source)) {
+            /**
+             * MemoryUsedMB 已用物理内存
+             * @member
+             * @type {number}
+             */
+            this["memoryUsedMB"] = 0;
+        }
+        if (!("memoryPercent" in $$source)) {
+            /**
+             * MemoryPercent 物理内存使用率（0~100）
+             * @member
+             * @type {number}
+             */
+            this["memoryPercent"] = 0;
+        }
+        if (!("cpuPercent" in $$source)) {
+            /**
+             * CPUPercent 全系统 CPU 使用率（0~100）
+             * @member
+             * @type {number}
+             */
+            this["cpuPercent"] = 0;
+        }
+        if (!("cpuCount" in $$source)) {
+            /**
+             * CPUCount 逻辑核心数
+             * @member
+             * @type {number}
+             */
+            this["cpuCount"] = 0;
+        }
+        if (!("timestamp" in $$source)) {
+            /**
+             * Timestamp 采样时刻（Unix 毫秒）
+             * @member
+             * @type {number}
+             */
+            this["timestamp"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SystemMetrics instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {SystemMetrics}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new SystemMetrics(/** @type {Partial<SystemMetrics>} */($$parsedSource));
     }
 }
 

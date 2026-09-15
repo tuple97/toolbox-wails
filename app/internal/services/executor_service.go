@@ -1,0 +1,405 @@
+package services
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	"toolbox-wails/app/internal/database"
+)
+
+// 命令执行器的行数与时长约束。
+const (
+	// 默认返回行数上限
+	defaultExecutorLimit = 1000
+	// 单条语句的兜底时长：调用方取消（ctx）优先于该上限
+	executorMaxDuration = 10 * time.Minute
+	// 元数据查询的超时
+	metaTimeout = 10 * time.Second
+)
+
+// ExecutorRequest 描述命令执行器的一次执行请求。
+type ExecutorRequest struct {
+	// ConnID 数据库连接 ID
+	ConnID int64 `json:"connId"`
+	// Database 执行时使用的库；为空表示连接配置的默认库
+	Database string `json:"database"`
+	// SQL 待执行的 SQL（多条语句时由前端切出当前语句）
+	SQL string `json:"sql"`
+	// Limit 查询返回行数上限；小于等于 0 时取默认值
+	Limit int `json:"limit"`
+}
+
+// ExecutorResult 命令执行器的执行结果。
+type ExecutorResult struct {
+	// Kind 结果类型："query"（有结果集）或 "exec"（写操作 / DDL）
+	Kind string `json:"kind"`
+	// Columns 结果列元信息（仅 query）
+	Columns []ColumnMeta `json:"columns"`
+	// Rows 结果集（仅 query）
+	Rows []map[string]any `json:"rows"`
+	// SQL 实际执行的 SQL
+	SQL string `json:"sql"`
+	// Database 实际生效的库 / 模式（后端在会话上钉住的那个），前端展示用于核对
+	Database string `json:"database"`
+	// ElapsedMs 执行耗时
+	ElapsedMs int64 `json:"elapsedMs"`
+	// RowCount 结果集行数（仅 query）
+	RowCount int `json:"rowCount"`
+	// Truncated 结果是否因行数上限被截断
+	Truncated bool `json:"truncated"`
+	// AffectedRows 写操作影响行数；查询类型恒为 0
+	AffectedRows int64 `json:"affectedRows"`
+}
+
+// ExecutorColumn 描述一张表的字段（智能补全与元数据用）。
+type ExecutorColumn struct {
+	// Name 字段名
+	Name string `json:"name"`
+	// DataType 字段类型（如 varchar / bigint）
+	DataType string `json:"dataType"`
+	// Comment 字段注释
+	Comment string `json:"comment"`
+}
+
+// ExecuteStatement 执行用户输入的任意 SQL（命令执行器）。
+//
+// 与模板链路 Execute 的区别：
+//   - SQL 即用户输入，不做模板渲染与脚本加工；
+//   - ctx 由 Wails 绑定注入，前端「取消」会同步终止数据库端的查询；
+//   - 按首关键字自动区分查询与写操作，写操作返回影响行数；
+//   - Database 非空时临时切换到所选库执行。
+//
+// **所选库怎么生效（关键）**：打开一个固定会话后，在该会话上显式切库
+// （MySQL → `USE`、PostgreSQL → `SET search_path`），而不是只改 DSN 的 dbname。
+// 后者依赖「每次都是新连接 + 驱动按预期解析」，一旦连接池复用或拼装出意外，
+// 语句就会悄悄落在别的库上，现象正是「明明选了库却查不到数据」。
+// 实际生效的库会随结果回带（ExecutorResult.Database），前端展示便于核对。
+func (s *DBService) ExecuteStatement(ctx context.Context, req ExecutorRequest) (*ExecutorResult, error) {
+	sqlText := trimTrailingSemicolon(strings.TrimSpace(req.SQL))
+	if sqlText == "" {
+		return nil, fmt.Errorf("SQL 语句为空")
+	}
+
+	conn, err := s.repo.GetConnection(req.ConnID)
+	if err != nil {
+		return nil, err
+	}
+	/*
+	 * 命令执行器允许临时切换库，但两种方言含义不同：
+	 *  - MySQL：库就是库，覆盖连接配置的默认库（进 DSN 的 dbname），下面再 USE 一次钉住；
+	 *  - PostgreSQL：DSN 的 database 是集群概念，不能拿 schema 去连（见 schemaName 的说明），
+	 *    所以连接仍用连接自身的库，「所选库」按 schema 通过 search_path 生效。
+	 */
+	if req.Database != "" && !isPostgresType(conn.DBType) {
+		conn.Database = req.Database
+	}
+
+	db, err := s.openConnection(*conn)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	// 只读连接：后端兜底拒绝写操作（前端也会提示，但不能只依赖前端）
+	if conn.ReadOnly && !isQueryStatement(sqlText) {
+		return nil, fmt.Errorf("连接「%s」已设为只读，已拒绝执行该写操作", conn.Name)
+	}
+
+	/*
+	 * 语句超时：连接配置优先（QueryTimeoutSecs），但不超过兜底上限，
+	 * 否则一个手滑填大的值会让语句无限挂起。
+	 */
+	timeout := executorMaxDuration
+	if seconds := conn.QueryTimeoutSecs; seconds > 0 {
+		if custom := time.Duration(seconds) * time.Second; custom < timeout {
+			timeout = custom
+		}
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = defaultExecutorLimit
+	}
+	if limit > maxRows {
+		limit = maxRows
+	}
+
+	// 固定会话：切库必须在同一条连接上执行，查询 / 写操作也都走它
+	session, err := db.Conn(runCtx)
+	if err != nil {
+		return nil, fmt.Errorf("获取数据库连接失败: %w", err)
+	}
+	defer session.Close()
+
+	effectiveDB, err := pinDatabase(runCtx, session, *conn, req.Database)
+	if err != nil {
+		return nil, err
+	}
+
+	start := time.Now()
+	if isQueryStatement(sqlText) {
+		rows, columns, truncated, err := queryRowsLimited(runCtx, session, sqlText, limit)
+		if err != nil {
+			return nil, hintDatabaseError(err)
+		}
+		return &ExecutorResult{
+			Kind:      "query",
+			Columns:   columns,
+			Rows:      rows,
+			SQL:       sqlText,
+			Database:  effectiveDB,
+			ElapsedMs: time.Since(start).Milliseconds(),
+			RowCount:  len(rows),
+			Truncated: truncated,
+		}, nil
+	}
+
+	result, err := session.ExecContext(runCtx, sqlText)
+	if err != nil {
+		return nil, hintDatabaseError(fmt.Errorf("执行 SQL 失败: %w", err))
+	}
+	affected, _ := result.RowsAffected()
+	return &ExecutorResult{
+		Kind:         "exec",
+		SQL:          sqlText,
+		Database:     effectiveDB,
+		ElapsedMs:    time.Since(start).Milliseconds(),
+		AffectedRows: affected,
+	}, nil
+}
+
+// pinDatabase 在会话上切换到目标库 / 模式，返回实际生效的名字（用于回带前端）。
+//
+// 目标取「本次请求指定的库」，为空时回落到连接配置里的默认库；
+// 两者都为空时 MySQL 会明确报错，而不是让语句带着「没有默认库」的状态去撞 1046。
+func pinDatabase(ctx context.Context, session *sql.Conn, conn database.DBConnection, requested string) (string, error) {
+	target := requested
+	if target == "" {
+		target = conn.Database
+	}
+
+	if isPostgresType(conn.DBType) {
+		if target == "" {
+			// 没指定模式时用连接配置里的默认 schema（DefaultSchema）
+			target = conn.DefaultSchema
+		}
+		if target == "" {
+			// 仍然没有：清掉可能残留在池化连接上的 search_path，避免结果取决于连接复用
+			if _, err := session.ExecContext(ctx, "RESET search_path"); err != nil {
+				return "", fmt.Errorf("重置 search_path 失败: %w", err)
+			}
+			return conn.Database, nil
+		}
+		if _, err := session.ExecContext(ctx, "SET search_path TO "+quoteLiteralIdentifier(target, conn.DBType)); err != nil {
+			return "", fmt.Errorf("切换到模式 %s 失败: %w", target, err)
+		}
+		return target, nil
+	}
+
+	if target == "" {
+		/*
+		 * 没有任何库可切：不再直接报错。
+		 * 带库名的语句（`库`.`表`）并不需要默认库，直接放行；
+		 * 不带库名的语句会撞上 MySQL 的 1046，由 hintDatabaseError
+		 * 补上「请在上方选择库 / 加库名 / 配置默认库」的可操作提示。
+		 * （此前在这里硬报错，导致「分析带库名的语句」也被拦下。）
+		 */
+		return "", nil
+	}
+	if _, err := session.ExecContext(ctx, "USE "+quoteLiteralIdentifier(target, conn.DBType)); err != nil {
+		return "", fmt.Errorf("切换到数据库 %s 失败: %w", target, err)
+	}
+	return target, nil
+}
+
+// hintDatabaseError 把「没有默认库」这类底层报错补上可操作的提示。
+func hintDatabaseError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	if strings.Contains(message, "No database selected") || strings.Contains(message, "1046") {
+		return fmt.Errorf("%w（当前会话没有默认库：请在上方下拉框选择库，给表名加上 `库`.`表`，或在连接配置里设置默认库）", err)
+	}
+	return err
+}
+
+// quoteLiteralIdentifier 按方言给标识符加引号（MySQL 反引号 / 其他双引号）。
+func quoteLiteralIdentifier(name string, dbType string) string {
+	if isPostgresType(dbType) {
+		return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+	}
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+// isQueryStatement 按首关键字判断语句是否返回结果集。
+// WITH 开头的 CTE 大多以 SELECT 收尾，按查询处理；
+// 判断失误时最坏情况是写操作返回 0 行结果集，不影响数据正确性。
+func isQueryStatement(sqlText string) bool {
+	lower := strings.ToLower(sqlText)
+	for _, keyword := range []string{"select", "show", "describe", "desc", "explain", "with", "table", "values"} {
+		if !strings.HasPrefix(lower, keyword) {
+			continue
+		}
+		rest := lower[len(keyword):]
+		if rest == "" {
+			return true
+		}
+		switch rest[0] {
+		case ' ', '\n', '\r', '\t', '(':
+			return true
+		}
+	}
+	return false
+}
+
+// ListDatabases 返回连接可见的所有数据库（库选择下拉）。
+func (s *DBService) ListDatabases(ctx context.Context, connID int64) ([]string, error) {
+	conn, err := s.repo.GetConnection(connID)
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := s.openConnection(*conn)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	queryCtx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
+
+	rows, err := db.QueryContext(queryCtx, "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name")
+	if err != nil {
+		return nil, fmt.Errorf("读取数据库列表失败: %w", err)
+	}
+	return scanStringRows(rows)
+}
+
+// ListTables 返回指定库（PostgreSQL 下为 schema）下的表与视图名。
+func (s *DBService) ListTables(ctx context.Context, connID int64, database string) ([]string, error) {
+	// 元数据查询是按 schema 过滤的，连接本身仍用连接配置的库：
+	// PostgreSQL 下把 schema 当库名传给驱动会连到不存在的库。
+	conn, db, closeDB, err := s.openExecutorConn(connID, "")
+	if err != nil {
+		return nil, err
+	}
+	defer closeDB()
+
+	queryCtx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
+
+	query := "SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name"
+	rows, err := db.QueryContext(queryCtx, query, schemaName(database, conn.DBType))
+	if err != nil {
+		return nil, fmt.Errorf("读取表列表失败: %w", err)
+	}
+	return scanStringRows(rows)
+}
+
+// ListTableColumns 返回指定表的字段信息（名称 / 类型 / 注释）。
+// database 在 MySQL 下是库名、PostgreSQL 下是 schema（见 schemaName）。
+func (s *DBService) ListTableColumns(ctx context.Context, connID int64, database string, table string) ([]ExecutorColumn, error) {
+	// 同 ListTables：连接用连接自身的库，库/schema 只作为查询条件
+	conn, db, closeDB, err := s.openExecutorConn(connID, "")
+	if err != nil {
+		return nil, err
+	}
+	defer closeDB()
+
+	queryCtx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
+
+	// 只有 MySQL 的 information_schema.columns 带注释列
+	var query string
+	if isPostgresType(conn.DBType) {
+		query = `SELECT column_name, data_type, ''
+		         FROM information_schema.columns
+		         WHERE table_schema = ? AND table_name = ?
+		         ORDER BY ordinal_position`
+	} else {
+		query = `SELECT column_name, data_type, column_comment
+		         FROM information_schema.columns
+		         WHERE table_schema = ? AND table_name = ?
+		         ORDER BY ordinal_position`
+	}
+
+	rows, err := db.QueryContext(queryCtx, query, schemaName(database, conn.DBType), table)
+	if err != nil {
+		return nil, fmt.Errorf("读取字段信息失败: %w", err)
+	}
+	defer rows.Close()
+
+	columns := make([]ExecutorColumn, 0, 32)
+	for rows.Next() {
+		var col ExecutorColumn
+		if err := rows.Scan(&col.Name, &col.DataType, &col.Comment); err != nil {
+			return nil, fmt.Errorf("读取字段信息失败: %w", err)
+		}
+		columns = append(columns, col)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历字段信息失败: %w", err)
+	}
+	return columns, nil
+}
+
+// openExecutorConn 打开命令执行器元数据查询用的连接，并按所选库覆盖默认库。
+func (s *DBService) openExecutorConn(connID int64, dbName string) (*database.DBConnection, *sql.DB, func(), error) {
+	conn, err := s.repo.GetConnection(connID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if dbName != "" && dbName != conn.Database {
+		conn.Database = dbName
+	}
+
+	db, err := s.openConnection(*conn)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return conn, db, func() { _ = db.Close() }, nil
+}
+
+// scanStringRows 把单列结果集扫描为字符串列表。
+func scanStringRows(rows *sql.Rows) ([]string, error) {
+	defer rows.Close()
+
+	names := make([]string, 0, 16)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("读取结果失败: %w", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历结果失败: %w", err)
+	}
+	return names, nil
+}
+
+// isPostgresType 判断连接类型是否为 PostgreSQL 系。
+func isPostgresType(dbType string) bool {
+	switch strings.ToLower(dbType) {
+	case "postgres", "postgresql":
+		return true
+	default:
+		return false
+	}
+}
+
+// schemaName 把元数据接口的「库」参数按方言解释：
+// MySQL 直接是库名；PostgreSQL 的 database 是集群概念，这里当 schema 用
+// （为空时回落到 public），前端补全的「库名.」因此能覆盖不同 schema。
+func schemaName(database string, dbType string) string {
+	if database == "" && isPostgresType(dbType) {
+		return "public"
+	}
+	return database
+}

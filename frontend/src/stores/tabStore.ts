@@ -11,10 +11,23 @@ const SAVE_DEBOUNCE_MS = 1000
 const DEFAULT_TAB_NAME = '新建标签'
 
 export const useTabStore = defineStore('tabs', () => {
-  /** 全部 Tab，顺序即为展示顺序 */
+  /**
+   * 标签列表，顺序即为展示顺序。
+   *
+   * **只装多例工具**：单例工具（首页 / 连接管理 / SQL 模板 / 词典 / 设置）
+   * 不进标签栏，改为内容区的「单例视图」，见 `activeSingleton`。
+   */
   const tabs = ref<WorkbenchTab[]>([])
   /** 当前激活的 Tab ID */
   const activeId = ref<number | null>(null)
+  /**
+   * 当前展示的单例视图（工具类型）。
+   *
+   * 与 `activeId` **互斥**：内容区同一时刻要么展示某个单例视图、要么展示激活标签，
+   * 所以激活标签时会清掉它、打开单例视图时会清掉 activeId。
+   * 默认首页：应用刚启动、标签全关掉时都有落脚点，不留空白。
+   */
+  const activeSingleton = ref<ToolType | null>('home')
   /** 是否已完成首次加载 */
   const loaded = ref(false)
   /** 保存状态，供界面提示 */
@@ -119,17 +132,20 @@ export const useTabStore = defineStore('tabs', () => {
   async function load(): Promise<void> {
     try {
       const list = await fetchTabs()
-      // 后端按 sort_order 返回，这里再按字段显式排序确保顺序稳定
-      tabs.value = [...list].sort((a, b) => a.sortOrder - b.sortOrder)
-
-      // 单例标签不允许改名，历史数据里被改过的名称在这里纠正回工具名
-      const renamed = normalizeSingletonNames()
+      /*
+       * 只保留多例标签：单例工具现在不走标签，历史库里可能还留着它们的记录
+       * （以及没有绑定功能的空白标签），这里直接过滤掉并回写一次，把库清干净。
+       */
+      const multiOnly = list.filter(tab => toolOf(tab.toolType)?.multi ?? false)
+      tabs.value = [...multiOnly].sort((a, b) => a.sortOrder - b.sortOrder)
 
       const active = tabs.value.find(tab => tab.isActive)
       activeId.value = active?.id ?? tabs.value[0]?.id ?? null
+      // 没有标签可展示时落到首页单例视图
+      activeSingleton.value = activeId.value === null ? 'home' : null
       loaded.value = true
 
-      if (renamed) {
+      if (multiOnly.length !== list.length) {
         scheduleSave()
       }
     }
@@ -137,26 +153,6 @@ export const useTabStore = defineStore('tabs', () => {
       saveError.value = e instanceof Error ? e.message : String(e)
       loaded.value = true
     }
-  }
-
-  /**
-   * 把单例标签的名称纠正回工具默认名。
-   *
-   * 单例标签的名称就是功能名（全局只有一个），设计上不允许改名，
-   * 因此加载时统一纠正历史数据里被改过的名称。
-   *
-   * @returns 是否有名称被纠正（有则需要回写）
-   */
-  function normalizeSingletonNames(): boolean {
-    let changed = false
-    for (const tab of tabs.value) {
-      const definition = toolOf(tab.toolType)
-      if (definition && !definition.multi && tab.name !== definition.label) {
-        tab.name = definition.label
-        changed = true
-      }
-    }
-    return changed
   }
 
   // ------------------------------------------------------------ 增删改
@@ -198,7 +194,14 @@ export const useTabStore = defineStore('tabs', () => {
     // 激活态处理：关闭的是当前 Tab 时，顺延到相邻项
     if (activeId.value === id) {
       const next = tabs.value[index] ?? tabs.value[index - 1] ?? null
-      activeId.value = next?.id ?? null
+      if (next) {
+        activeId.value = next.id
+      }
+      else {
+        // 最后一条标签也关掉了：回到首页单例视图，不留空白内容区
+        activeId.value = null
+        activeSingleton.value = 'home'
+      }
     }
     scheduleSave()
     return true
@@ -208,6 +211,7 @@ export const useTabStore = defineStore('tabs', () => {
   function closeOthers(id: number): void {
     tabs.value = tabs.value.filter(tab => tab.id === id || tab.isLocked)
     activeId.value = id
+    activeSingleton.value = null
     scheduleSave()
   }
 
@@ -215,6 +219,8 @@ export const useTabStore = defineStore('tabs', () => {
   function closeAll(): void {
     tabs.value = tabs.value.filter(tab => tab.isLocked)
     activeId.value = tabs.value[0]?.id ?? null
+    // 全关之后没有标签可展示，落到首页单例视图
+    activeSingleton.value = activeId.value === null ? 'home' : null
     scheduleSave()
   }
 
@@ -242,12 +248,13 @@ export const useTabStore = defineStore('tabs', () => {
     scheduleSave()
   }
 
-  /** 切换激活 Tab */
+  /** 切换激活 Tab（激活标签即退出单例视图） */
   function setActive(id: number): void {
-    if (activeId.value === id) {
+    if (activeId.value === id && activeSingleton.value === null) {
       return
     }
     activeId.value = id
+    activeSingleton.value = null
     scheduleSave()
   }
 
@@ -258,34 +265,37 @@ export const useTabStore = defineStore('tabs', () => {
   }
 
   /**
-   * 打开工具标签。
+   * 打开工具。
    *
-   * 单例工具：已有标签则直接跳转（不新建）；
-   * 多例工具：每次调用新建一个实例（菜单上的 + 与标签栏的 + 都走这里）。
+   * 单例工具：**不建标签**，直接把内容区切到它的单例视图（再点只是切回去），返回 null；
+   * 多例工具：每次调用新建一个实例标签并激活（侧边栏的 +、标签栏的 +、快捷入口都走这里）。
    *
    * @param type 工具类型
    * @param options.newInstance 强制新建（多例工具右键/下拉新建时使用）
    */
-  function openTool(type: ToolType, options: { newInstance?: boolean } = {}): WorkbenchTab {
+  function openTool(type: ToolType, options: { newInstance?: boolean } = {}): WorkbenchTab | null {
     const definition = toolOf(type)
-    const isMulti = definition?.multi ?? false
 
-    // 单例：已存在则跳转
-    if (!isMulti && !options.newInstance) {
-      const existing = tabs.value.find(tab => tab.toolType === type)
-      if (existing) {
-        activeId.value = existing.id
-        scheduleSave()
-        return existing
-      }
+    if (!(definition?.multi ?? false)) {
+      showSingleton(type)
+      return null
     }
 
-    // 多例：名称带序号，便于区分
+    // 多例：名称带序号，便于区分；同时退出单例视图
+    activeSingleton.value = null
     const label = definition?.label ?? '新建标签'
     const sameKind = tabs.value.filter(tab => tab.toolType === type).length
-    const name = isMulti ? `${label} ${sameKind + 1}` : label
+    return addTab(type, `${label} ${sameKind + 1}`)
+  }
 
-    return addTab(type, name)
+  /** 切到某个单例视图（内容区展示它，同时退出标签视图） */
+  function showSingleton(type: ToolType): void {
+    const changed = activeSingleton.value !== type || activeId.value !== null
+    activeSingleton.value = type
+    activeId.value = null
+    if (changed) {
+      scheduleSave()
+    }
   }
 
   /**
@@ -325,6 +335,7 @@ export const useTabStore = defineStore('tabs', () => {
     // state
     tabs,
     activeId,
+    activeSingleton,
     loaded,
     saving,
     lastSavedAt,
@@ -336,6 +347,7 @@ export const useTabStore = defineStore('tabs', () => {
     load,
     saveNow,
     scheduleSave,
+    showSingleton,
     addTab,
     openTool,
     closeTab,

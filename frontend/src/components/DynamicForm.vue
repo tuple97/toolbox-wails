@@ -358,7 +358,7 @@ watch(
 .dynamic-form__empty code {
   padding: 1px 5px;
   border-radius: 4px;
-  background: rgba(56, 189, 248, 0.12);
+  background: var(--active-bg);
   color: var(--brand-color);
   font-family: var(--font-mono);
 }

@@ -9,6 +9,14 @@ import { Create as $Create } from "@wailsio/runtime";
 /**
  * DBConnection 对应 db_connections 表，描述一个外部数据库连接。
  * Password 在数据库中为密文，对外返回时保持密文，由前端按需解密展示。
+ * 
+ * 字段按本项目只支持的 mysql/postgres 两种方言裁剪，分为以下几组：
+ *   - 基本：Name / DBType / Host / Port / Database / Username / Password；
+ *   - 展示：Note（备注）、Color（颜色标记）、IsProduction（生产库标记，界面提示用）；
+ *   - 方言：Charset（MySQL 字符集）、DefaultSchema（PostgreSQL 默认 schema）；
+ *   - 超时：ConnectTimeoutSecs / QueryTimeoutSecs / KeepaliveSecs（0 表示用默认值）；
+ *   - 加密：SSLMode + 三个证书路径（MySQL 映射到 tls，PostgreSQL 映射到 sslmode 等）；
+ *   - 其它：URLParams（追加到连接串的自定义参数）、ReadOnly（拒绝写操作）、Extra（预留 JSON）。
  */
 export class DBConnection {
     /**
@@ -78,6 +86,118 @@ export class DBConnection {
              * @type {string}
              */
             this["extra"] = "";
+        }
+        if (!("note" in $$source)) {
+            /**
+             * Note 备注（连接列表悬停展示）
+             * @member
+             * @type {string}
+             */
+            this["note"] = "";
+        }
+        if (!("color" in $$source)) {
+            /**
+             * Color 颜色标记（列表与标签着色，空表示不标记）
+             * @member
+             * @type {string}
+             */
+            this["color"] = "";
+        }
+        if (!("charset" in $$source)) {
+            /**
+             * Charset MySQL 字符集，空表示 utf8mb4
+             * @member
+             * @type {string}
+             */
+            this["charset"] = "";
+        }
+        if (!("defaultSchema" in $$source)) {
+            /**
+             * DefaultSchema PostgreSQL 默认 schema（MySQL 留空，库由 Database 决定）
+             * @member
+             * @type {string}
+             */
+            this["defaultSchema"] = "";
+        }
+        if (!("connectTimeoutSecs" in $$source)) {
+            /**
+             * ConnectTimeoutSecs 建立连接超时（秒），0 表示默认 10
+             * @member
+             * @type {number}
+             */
+            this["connectTimeoutSecs"] = 0;
+        }
+        if (!("queryTimeoutSecs" in $$source)) {
+            /**
+             * QueryTimeoutSecs 单条语句超时（秒），0 表示默认 60
+             * @member
+             * @type {number}
+             */
+            this["queryTimeoutSecs"] = 0;
+        }
+        if (!("keepaliveSecs" in $$source)) {
+            /**
+             * KeepaliveSecs 空闲连接回收时间（秒），0 表示默认 30
+             * @member
+             * @type {number}
+             */
+            this["keepaliveSecs"] = 0;
+        }
+        if (!("sslMode" in $$source)) {
+            /**
+             * SSLMode SSL 模式：disable / prefer / require / verify-ca / verify-full，空表示 disable
+             * @member
+             * @type {string}
+             */
+            this["sslMode"] = "";
+        }
+        if (!("sslCaPath" in $$source)) {
+            /**
+             * SSLCaPath CA 证书路径（verify-ca / verify-full 时必填）
+             * @member
+             * @type {string}
+             */
+            this["sslCaPath"] = "";
+        }
+        if (!("sslCertPath" in $$source)) {
+            /**
+             * SSLCertPath 客户端证书路径（双向认证时填）
+             * @member
+             * @type {string}
+             */
+            this["sslCertPath"] = "";
+        }
+        if (!("sslKeyPath" in $$source)) {
+            /**
+             * SSLKeyPath 客户端私钥路径（双向认证时填）
+             * @member
+             * @type {string}
+             */
+            this["sslKeyPath"] = "";
+        }
+        if (!("urlParams" in $$source)) {
+            /**
+             * URLParams 追加到连接串的自定义参数，形如 key=value&key2=value2（同名时覆盖上面的默认值）
+             * @member
+             * @type {string}
+             */
+            this["urlParams"] = "";
+        }
+        if (!("readOnly" in $$source)) {
+            /**
+             * ReadOnly 只读连接：拒绝执行写操作
+             * @member
+             * @type {boolean}
+             */
+            this["readOnly"] = false;
+        }
+        if (!("isProduction" in $$source)) {
+            /**
+             * IsProduction 生产库标记：界面高亮提示，避免误操作
+             * @member
+             * @type {boolean}
+             */
+            this["isProduction"] = false;
         }
 
         Object.assign(this, $$source);

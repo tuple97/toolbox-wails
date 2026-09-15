@@ -1,6 +1,8 @@
 package app
 
-import "github.com/wailsapp/wails/v3/pkg/application"
+import (
+	"github.com/wailsapp/wails/v3/pkg/application"
+)
 
 // 本文件集中封装窗口控制能力，供前端自定义工具栏调用。
 //

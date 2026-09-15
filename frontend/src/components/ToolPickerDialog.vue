@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { TOOLS } from '@/utils/tools'
+import { computed, ref, watch } from 'vue'
+import { VueDraggable } from 'vue-draggable-plus'
+import { TOOLS, toolOf } from '@/utils/tools'
+import { useConfigStore } from '@/stores/configStore'
+import type { ToolDefinition } from '@/utils/tools'
 import type { ToolType } from '@/types'
 
 /**
- * 工具选择弹窗。
+ * 新建标签弹窗（3×3 网格）。
  *
- * 入口：标签栏左侧的 + 按钮。
- * 多例工具：选择后新建一个实例标签并自动命名（如「SQL 查询 2」）；
- * 单例工具：选择后跳转到已有标签（不存在则新建）。
+ * 入口：标签栏左侧的 + 按钮。**只列多例工具**——单例工具（首页、连接管理、
+ * SQL 模板、词典、设置）不进标签栏，由侧边菜单直接切换视图，所以这里不出现。
+ *
+ * 选择后新建一个实例标签并自动命名（如「SQL 查询 2」）。
+ * 左下角「编辑」进入编辑态：拖动卡片排序、卡片右上角眼睛控制显示，
+ * 点「完成」落盘到 settings.picker_config（独立于侧边菜单的 sidebar_config）。
  */
 
 const props = defineProps<{
@@ -20,18 +26,121 @@ const emit = defineEmits<{
   (e: 'select', type: ToolType): void
 }>()
 
+const configStore = useConfigStore()
+
 const dialogVisible = computed({
   get: () => props.visible,
   set: (value: boolean) => emit('update:visible', value),
 })
 
-/** 多例工具排前面，单例在后，便于快速找到可新建的功能 */
-const tools = computed(() => [
-  ...TOOLS.filter(tool => tool.multi),
-  ...TOOLS.filter(tool => !tool.multi),
-])
+// ------------------------------------------------------------ 配置（排序 / 显示）
+
+/**
+ * 弹窗自己的配置，持久化在 settings.picker_config（JSON）。
+ * 与侧边菜单的 sidebar_config 相互独立，互不影响。
+ */
+interface PickerConfig {
+  /** 全部工具的展示顺序 */
+  order: ToolType[]
+  /** 被隐藏的工具 */
+  hidden: ToolType[]
+}
+
+/** 可选工具 = 多例工具（单例不走标签，不在这里出现） */
+const DEFAULT_ORDER: ToolType[] = TOOLS.filter(tool => tool.multi).map(tool => tool.type)
+
+/** 解析并校正：未知工具剔除，缺失的按默认顺序补齐 */
+function parsePickerConfig(raw: string | undefined): PickerConfig {
+  const config: PickerConfig = { order: [...DEFAULT_ORDER], hidden: [] }
+  try {
+    const parsed = JSON.parse(raw || '{}') as Partial<PickerConfig>
+    const saved = Array.isArray(parsed.order) ? parsed.order : []
+    config.order = [
+      ...saved.filter(type => DEFAULT_ORDER.includes(type)),
+      ...DEFAULT_ORDER.filter(type => !saved.includes(type)),
+    ]
+    const hidden = Array.isArray(parsed.hidden) ? parsed.hidden : []
+    config.hidden = hidden.filter(type => DEFAULT_ORDER.includes(type))
+  }
+  catch {
+    // 配置损坏时回退默认结构
+  }
+  return config
+}
+
+function serializePickerConfig(config: PickerConfig): string {
+  return JSON.stringify({ order: config.order, hidden: config.hidden })
+}
+
+/** 持久化配置，普通态渲染依据 */
+const pickerConfig = computed(() => parsePickerConfig(configStore.values.picker_config))
+
+/** 普通态展示的卡片：按配置顺序、剔除隐藏项 */
+const visibleTools = computed<ToolDefinition[]>(() => {
+  const tools: ToolDefinition[] = []
+  for (const type of pickerConfig.value.order) {
+    if (pickerConfig.value.hidden.includes(type)) {
+      continue
+    }
+    const definition = toolOf(type)
+    if (definition) {
+      tools.push(definition)
+    }
+  }
+  return tools
+})
+
+// ------------------------------------------------------------ 编辑态
+
+const editing = ref(false)
+/** 编辑草稿：点「完成」才落盘，避免拖一半就把半成品配置持久化 */
+const draftOrder = ref<ToolType[]>([])
+const draftHidden = ref<ToolType[]>([])
+
+function enterEdit() {
+  const config = parsePickerConfig(configStore.values.picker_config)
+  draftOrder.value = config.order
+  draftHidden.value = [...config.hidden]
+  editing.value = true
+}
+
+/** 草稿恢复为默认：默认顺序 + 全部显示 */
+function resetDraft() {
+  draftOrder.value = [...DEFAULT_ORDER]
+  draftHidden.value = []
+}
+
+function finishEdit() {
+  editing.value = false
+  configStore.set('picker_config', serializePickerConfig({
+    order: draftOrder.value,
+    hidden: draftHidden.value,
+  }))
+}
+
+/** 编辑态切换某工具的显示 / 隐藏 */
+function toggleDraftHidden(type: ToolType) {
+  draftHidden.value = draftHidden.value.includes(type)
+    ? draftHidden.value.filter(item => item !== type)
+    : [...draftHidden.value, type]
+}
+
+function isDraftHidden(type: ToolType): boolean {
+  return draftHidden.value.includes(type)
+}
+
+/** 关闭弹窗即放弃未完成的编辑 */
+watch(dialogVisible, (visible) => {
+  if (!visible) {
+    editing.value = false
+  }
+})
 
 function handlePick(type: ToolType) {
+  // 编辑态点卡片不选择，防误触
+  if (editing.value) {
+    return
+  }
   emit('select', type)
   dialogVisible.value = false
 }
@@ -40,17 +149,51 @@ function handlePick(type: ToolType) {
 <template>
   <el-dialog
     v-model="dialogVisible"
-    title="选择工具"
-    width="560px"
+    title="新建标签"
+    width="680px"
     class="tool-picker"
   >
     <p class="tool-picker__hint">
-      多例工具每次都会新建一个标签；单例工具会跳转到已打开的标签。
+      每次选择都会新建一个实例标签；首页、连接管理、词典等单例功能由左侧菜单直接切换，不出现在这里。
+      <span v-if="editing" class="tool-picker__hint-editing">
+        编辑中：拖动卡片排序，右上角眼睛控制是否显示。
+      </span>
     </p>
 
-    <div class="tool-picker__grid">
+    <!-- 编辑态：可拖动排序的草稿网格 -->
+    <VueDraggable
+      v-if="editing"
+      v-model="draftOrder"
+      class="tool-picker__grid is-editing"
+      :animation="220"
+      easing="cubic-bezier(0.22, 1, 0.36, 1)"
+    >
+      <div
+        v-for="type in draftOrder"
+        :key="type"
+        class="tool-picker__card is-editing"
+        :class="{ 'is-hidden': isDraftHidden(type) }"
+      >
+        <button
+          class="tool-picker__eye"
+          type="button"
+          :title="isDraftHidden(type) ? '显示工具' : '隐藏工具'"
+          @click.stop="toggleDraftHidden(type)"
+        >
+          <el-icon><Hide v-if="isDraftHidden(type)" /><View v-else /></el-icon>
+        </button>
+        <el-icon class="tool-picker__icon">
+          <component :is="toolOf(type)?.icon" />
+        </el-icon>
+        <span class="tool-picker__name">{{ toolOf(type)?.label }}</span>
+        <span class="tool-picker__desc">{{ toolOf(type)?.description }}</span>
+      </div>
+    </VueDraggable>
+
+    <!-- 普通态：按配置顺序渲染可见工具 -->
+    <div v-else class="tool-picker__grid">
       <button
-        v-for="tool in tools"
+        v-for="tool in visibleTools"
         :key="tool.type"
         class="tool-picker__card"
         type="button"
@@ -59,21 +202,39 @@ function handlePick(type: ToolType) {
         <el-icon class="tool-picker__icon">
           <component :is="tool.icon" />
         </el-icon>
-        <span class="tool-picker__name">
-          {{ tool.label }}
-          <span
-            class="tool-picker__badge"
-            :class="{ 'is-multi': tool.multi }"
-          >
-            {{ tool.multi ? '多例' : '单例' }}
-          </span>
-        </span>
+        <span class="tool-picker__name">{{ tool.label }}</span>
         <span class="tool-picker__desc">{{ tool.description }}</span>
       </button>
     </div>
 
     <template #footer>
-      <el-button @click="dialogVisible = false">关闭</el-button>
+      <div class="tool-picker__footer">
+        <div class="tool-picker__footer-left">
+          <template v-if="editing">
+            <button class="tool-picker__footer-btn" type="button" @click="resetDraft">
+              恢复默认
+            </button>
+            <button
+              class="tool-picker__footer-btn is-primary"
+              type="button"
+              title="保存排序与显示设置"
+              @click="finishEdit"
+            >
+              完成
+            </button>
+          </template>
+          <button
+            v-else
+            class="tool-picker__footer-btn"
+            type="button"
+            title="编辑工具排序与显示"
+            @click="enterEdit"
+          >
+            <el-icon><Edit /></el-icon>
+          </button>
+        </div>
+        <el-button @click="dialogVisible = false">关闭</el-button>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -86,13 +247,19 @@ function handlePick(type: ToolType) {
   line-height: 1.6;
 }
 
+.tool-picker__hint-editing {
+  color: var(--brand-color);
+}
+
+/* 3×3 网格：三列，行数随工具数量自适应 */
 .tool-picker__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
 }
 
 .tool-picker__card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -104,7 +271,11 @@ function handlePick(type: ToolType) {
   color: var(--text-color);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.15s ease, background-color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease,
+    background-color 0.15s ease,
+    opacity 0.2s ease;
 }
 
 .tool-picker__card:hover {
@@ -127,25 +298,97 @@ function handlePick(type: ToolType) {
   font-weight: 600;
 }
 
-/* 多例/单例标记 */
-.tool-picker__badge {
-  padding: 0 6px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  color: var(--text-muted);
-  font-size: var(--app-font-size-2xs);
-  font-weight: 400;
-  line-height: 1.6;
-}
-
-.tool-picker__badge.is-multi {
-  border-color: var(--brand-color);
-  color: var(--brand-color);
-}
-
 .tool-picker__desc {
   color: var(--text-muted);
   font-size: var(--app-font-size-xs);
   line-height: 1.5;
+}
+
+/* ------------------------------------------------------------ 编辑态 */
+
+/* 编辑态整卡可拖 */
+.tool-picker__card.is-editing {
+  cursor: grab;
+  /*
+   * 不能保留 transform 过渡：Sortable 的排序动画是
+   * 「inline transform 瞬移回旧位置 → inline transition 滑向新位置」，
+   * 若 transform 在过渡列表里，瞬移会先变成动画、随后又被重定向，
+   * 两次相互抵消，排序动画看起来就是完全没有效果。
+   */
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    opacity 0.2s ease;
+}
+
+.tool-picker__card.is-editing:active {
+  cursor: grabbing;
+}
+
+.tool-picker__card.is-editing:hover {
+  transform: none;
+}
+
+/* 隐藏的卡片整体变淡 */
+.tool-picker__card.is-hidden {
+  opacity: 0.45;
+}
+
+/* 卡片右上角的显示/隐藏开关 */
+.tool-picker__eye {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(24px * var(--app-control-scale));
+  height: calc(24px * var(--app-control-scale));
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: var(--hover-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.tool-picker__eye:hover {
+  color: var(--text-color);
+}
+
+/* 底部操作区：左编辑、右关闭 */
+.tool-picker__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.tool-picker__footer-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-picker__footer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-sm);
+  cursor: pointer;
+}
+
+.tool-picker__footer-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-color);
+}
+
+.tool-picker__footer-btn.is-primary {
+  color: var(--brand-color);
 }
 </style>

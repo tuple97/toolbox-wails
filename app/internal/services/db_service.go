@@ -248,7 +248,11 @@ func (s *DBService) TestConnection(conn database.DBConnection) error {
 	}
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// 超时按连接配置走（ConnectTimeoutSecs，默认 10 秒）
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		time.Duration(secondsOrDefault(conn.ConnectTimeoutSecs, defaultConnectTimeoutSecs))*time.Second,
+	)
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
@@ -405,11 +409,18 @@ func (s *DBService) openConnection(conn database.DBConnection) (*sql.DB, error) 
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(10 * time.Minute)
+	// 空闲连接回收时间可由连接配置调整（KeepaliveSecs，默认 30 秒）
+	db.SetConnMaxIdleTime(time.Duration(secondsOrDefault(conn.KeepaliveSecs, defaultKeepaliveSecs)) * time.Second)
 
 	return db, nil
 }
 
 // buildDSN 根据数据库类型生成驱动名与连接串。
+//
+// 连接参数（见 database.DBConnection）落到各方言：
+//   - 通用：连接/查询超时、URLParams 追加的自定义参数（同名时用户填的优先）；
+//   - MySQL：charset（默认 utf8mb4）、tls（由 SSLMode 映射）；
+//   - PostgreSQL：sslmode + 证书路径、connect_timeout、client_encoding。
 func buildDSN(conn database.DBConnection, password string) (string, string, error) {
 	port := conn.Port
 
@@ -418,10 +429,25 @@ func buildDSN(conn database.DBConnection, password string) (string, string, erro
 		if port == 0 {
 			port = 3306
 		}
-		// parseTime 让时间类型正确映射；charset 保证中文不出乱码
+		charset := conn.Charset
+		if charset == "" {
+			charset = "utf8mb4"
+		}
+		params := url.Values{}
+		// parseTime 让时间类型正确映射；loc=Local 保证时区与本地一致
+		params.Set("charset", charset)
+		params.Set("parseTime", "true")
+		params.Set("loc", "Local")
+		params.Set("timeout", fmt.Sprintf("%ds", secondsOrDefault(conn.ConnectTimeoutSecs, defaultConnectTimeoutSecs)))
+		params.Set("readTimeout", fmt.Sprintf("%ds", secondsOrDefault(conn.QueryTimeoutSecs, defaultQueryTimeoutSecs)))
+		params.Set("writeTimeout", fmt.Sprintf("%ds", secondsOrDefault(conn.QueryTimeoutSecs, defaultQueryTimeoutSecs)))
+		if tlsMode := mysqlTLSMode(conn.SSLMode); tlsMode != "" {
+			params.Set("tls", tlsMode)
+		}
+		applyExtraParams(params, conn.URLParams)
 		dsn := fmt.Sprintf(
-			"%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local&timeout=10s",
-			conn.Username, password, conn.Host, port, conn.Database,
+			"%s:%s@tcp(%s:%d)/%s?%s",
+			conn.Username, password, conn.Host, port, conn.Database, params.Encode(),
 		)
 		return "mysql", dsn, nil
 
@@ -429,12 +455,29 @@ func buildDSN(conn database.DBConnection, password string) (string, string, erro
 		if port == 0 {
 			port = 5432
 		}
+		params := url.Values{}
+		params.Set("connect_timeout", fmt.Sprintf("%d", secondsOrDefault(conn.ConnectTimeoutSecs, defaultConnectTimeoutSecs)))
+		params.Set("sslmode", pgSSLMode(conn.SSLMode))
+		params.Set("application_name", "toolbox-wails")
+		if conn.Charset != "" {
+			params.Set("client_encoding", conn.Charset)
+		}
+		if conn.SSLCaPath != "" {
+			params.Set("sslrootcert", conn.SSLCaPath)
+		}
+		if conn.SSLCertPath != "" {
+			params.Set("sslcert", conn.SSLCertPath)
+		}
+		if conn.SSLKeyPath != "" {
+			params.Set("sslkey", conn.SSLKeyPath)
+		}
+		applyExtraParams(params, conn.URLParams)
 		// 使用 URL 形式并对账号密码做转义，避免特殊字符破坏连接串
 		dsn := fmt.Sprintf(
-			"postgres://%s:%s@%s:%d/%s?sslmode=disable",
+			"postgres://%s:%s@%s:%d/%s?%s",
 			url.QueryEscape(conn.Username),
 			url.QueryEscape(password),
-			conn.Host, port, conn.Database,
+			conn.Host, port, conn.Database, params.Encode(),
 		)
 		return "postgres", dsn, nil
 
@@ -443,8 +486,84 @@ func buildDSN(conn database.DBConnection, password string) (string, string, erro
 	}
 }
 
-// queryRows 执行查询并返回列元信息与结果集。
-func queryRows(ctx context.Context, db *sql.DB, query string) ([]map[string]any, []ColumnMeta, bool, error) {
+// 连接参数的默认值（与 database.DBConnection 的注释保持一致）
+const (
+	defaultConnectTimeoutSecs = 10
+	defaultQueryTimeoutSecs   = 60
+	defaultKeepaliveSecs      = 30
+)
+
+// secondsOrDefault 取配置的秒数，未配置（<=0）时用默认值
+func secondsOrDefault(value, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
+// mysqlTLSMode 把统一的 SSLMode 映射到 go-sql-driver/mysql 的 tls 取值。
+// 返回空串表示不带该参数（不加密）。
+func mysqlTLSMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "prefer", "preferred":
+		return "preferred"
+	case "require", "skip-verify":
+		return "skip-verify"
+	case "verify", "verify-ca", "verify-full":
+		return "true"
+	default:
+		return ""
+	}
+}
+
+// pgSSLMode 把统一的 SSLMode 映射到 PostgreSQL 的 sslmode，未知值按 disable 处理。
+func pgSSLMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "allow", "prefer", "require", "verify-ca", "verify-full":
+		return strings.ToLower(strings.TrimSpace(mode))
+	case "verify":
+		return "verify-full"
+	default:
+		return "disable"
+	}
+}
+
+// applyExtraParams 合并用户填写的附加连接参数（形如 `key=value&key2=value2`）。
+// 同名参数以用户填的为准；解析失败时忽略，避免整条 DSN 因一个笔误而不可用。
+func applyExtraParams(params url.Values, raw string) {
+	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "?"))
+	if raw == "" {
+		return
+	}
+	parsed, err := url.ParseQuery(raw)
+	if err != nil {
+		return
+	}
+	for key, values := range parsed {
+		params.Del(key)
+		for _, value := range values {
+			params.Add(key, value)
+		}
+	}
+}
+
+// rowQueryer 只依赖 QueryContext：让查询既能跑在连接池（*sql.DB）上，
+// 也能跑在固定会话（*sql.Conn）上——后者是「切库能生效」的前提。
+type rowQueryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// queryRows 执行查询并返回列元信息与结果集（行数上限取全局默认）。
+func queryRows(ctx context.Context, db rowQueryer, query string) ([]map[string]any, []ColumnMeta, bool, error) {
+	return queryRowsLimited(ctx, db, query, maxRows)
+}
+
+// queryRowsLimited 执行查询并返回列元信息与结果集，行数超过 limit 时截断。
+func queryRowsLimited(ctx context.Context, db rowQueryer, query string, limit int) ([]map[string]any, []ColumnMeta, bool, error) {
+	if limit <= 0 {
+		limit = maxRows
+	}
+
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("执行 SQL 失败: %w", err)
@@ -470,7 +589,7 @@ func queryRows(ctx context.Context, db *sql.DB, query string) ([]map[string]any,
 	truncated := false
 
 	for rows.Next() {
-		if len(result) >= maxRows {
+		if len(result) >= limit {
 			truncated = true
 			break
 		}

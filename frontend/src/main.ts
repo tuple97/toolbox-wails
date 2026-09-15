@@ -4,8 +4,8 @@ import ElementPlus from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
-import { setupMonaco } from './utils/monaco'
 import { syncWindowBackground } from './api/window'
+import { installTitleTooltip } from './utils/tooltip'
 import { useConfigStore } from './stores/configStore'
 
 import 'element-plus/dist/index.css'
@@ -14,9 +14,6 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 import './styles/global.css'
 // 模板管理弹窗内面板的表单样式规范（变量配置 / 字段映射共用）
 import './styles/template-panels.css'
-
-// Monaco 使用本地打包资源，必须在渲染编辑器前完成配置
-setupMonaco()
 
 const app = createApp(App)
 
@@ -36,7 +33,7 @@ document.documentElement.classList.add('dark')
  * 全局屏蔽浏览器默认右键菜单。
  *
  * 只有「真正的输入场景」保留原生菜单（便于复制/粘贴），
- * Monaco 内部的隐藏输入框不算输入场景，它自带的右键菜单也一并关闭。
+ * 编辑器（CM6）内部的 contenteditable 不算输入场景，其右键菜单一并关闭。
  * 后续需要右键菜单的位置，由对应组件自行渲染自定义菜单。
  */
 document.addEventListener('contextmenu', (event) => {
@@ -51,13 +48,17 @@ function shouldKeepNativeMenu(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false
   }
-  if (target.closest('.monaco-editor')) {
+  // CM6 的编辑区是 contenteditable，必须显式排除，否则会命中下面的输入豁免
+  if (target.closest('.cm-editor')) {
     return false
   }
   return Boolean(target.closest('input, textarea, [contenteditable="true"]'))
 }
 
 app.mount('#app')
+
+// 把原生 title 提示换成应用自己的小提示（样式见 global.css 的 #app-tip）
+installTitleTooltip()
 
 // 主题变化时同步窗口底色：窗口重绘时擦出的底色与页面一致，避免闪黑/闪白
 // （配置由 App.vue 加载，这里只跟随结果，不重复请求）

@@ -1,0 +1,18 @@
+{
+  "name": "toolbox-wails",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.17.0",
+  "description": "根目录脚本入口：实际前端命令都转发到 frontend/（Vite 项目在那边），这里只为让 VS Code 的「NPM 脚本」视图在打开项目时直接可用",
+  "scripts": {
+    "install:frontend": "pnpm --dir frontend install",
+    "dev": "pnpm --dir frontend dev",
+    "dev:app": "set \"FRONTEND_DEVSERVER_URL=http://127.0.0.1:5173\" && go run .",
+    "build": "pnpm --dir frontend build",
+    "typecheck": "pnpm --dir frontend typecheck",
+    "preview": "pnpm --dir frontend preview",
+    "gen:bindings": "wails3 generate bindings",
+    "gen:icon": "wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info build/windows/info.json -out toolbox-wails.syso",
+    "build:app": "pnpm gen:icon && pnpm --dir frontend build && go build -tags production -ldflags \"-w -s -H=windowsgui\" -o build/bin/toolbox.exe"
+  }
+}

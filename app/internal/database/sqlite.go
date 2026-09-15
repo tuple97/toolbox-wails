@@ -52,7 +52,21 @@ CREATE TABLE IF NOT EXISTS db_connections (
   database TEXT,
   username TEXT,
   password TEXT,
-  extra    TEXT
+  extra    TEXT,
+  note                 TEXT,
+  color                TEXT,
+  charset              TEXT,
+  default_schema       TEXT,
+  connect_timeout_secs INTEGER NOT NULL DEFAULT 10,
+  query_timeout_secs   INTEGER NOT NULL DEFAULT 60,
+  keepalive_secs       INTEGER NOT NULL DEFAULT 30,
+  ssl_mode             TEXT,
+  ssl_ca_path          TEXT,
+  ssl_cert_path        TEXT,
+  ssl_key_path         TEXT,
+  url_params           TEXT,
+  read_only            INTEGER NOT NULL DEFAULT 0,
+  is_production        INTEGER NOT NULL DEFAULT 0
 );
 
 -- 3. SQL 模板配置表
@@ -177,6 +191,21 @@ type columnMigration struct {
 var columnMigrations = []columnMigration{
 	{table: "sql_templates", column: "pagination_enabled", ddl: "pagination_enabled INTEGER NOT NULL DEFAULT 0"},
 	{table: "sql_templates", column: "page_size", ddl: "page_size INTEGER NOT NULL DEFAULT 50"},
+	// 连接参数扩展（2026-09-14）：备注/颜色/方言/超时/SSL/自定义参数/只读与生产标记
+	{table: "db_connections", column: "note", ddl: "note TEXT"},
+	{table: "db_connections", column: "color", ddl: "color TEXT"},
+	{table: "db_connections", column: "charset", ddl: "charset TEXT"},
+	{table: "db_connections", column: "default_schema", ddl: "default_schema TEXT"},
+	{table: "db_connections", column: "connect_timeout_secs", ddl: "connect_timeout_secs INTEGER NOT NULL DEFAULT 10"},
+	{table: "db_connections", column: "query_timeout_secs", ddl: "query_timeout_secs INTEGER NOT NULL DEFAULT 60"},
+	{table: "db_connections", column: "keepalive_secs", ddl: "keepalive_secs INTEGER NOT NULL DEFAULT 30"},
+	{table: "db_connections", column: "ssl_mode", ddl: "ssl_mode TEXT"},
+	{table: "db_connections", column: "ssl_ca_path", ddl: "ssl_ca_path TEXT"},
+	{table: "db_connections", column: "ssl_cert_path", ddl: "ssl_cert_path TEXT"},
+	{table: "db_connections", column: "ssl_key_path", ddl: "ssl_key_path TEXT"},
+	{table: "db_connections", column: "url_params", ddl: "url_params TEXT"},
+	{table: "db_connections", column: "read_only", ddl: "read_only INTEGER NOT NULL DEFAULT 0"},
+	{table: "db_connections", column: "is_production", ddl: "is_production INTEGER NOT NULL DEFAULT 0"},
 }
 
 // ensureColumn 在表缺少指定列时执行 ALTER TABLE ADD COLUMN。

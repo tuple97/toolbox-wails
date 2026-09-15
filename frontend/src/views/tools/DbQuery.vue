@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import DynamicForm from '@/components/DynamicForm.vue'
 import ResultTable from '@/components/ResultTable.vue'
 import ResultPagination from '@/components/ResultPagination.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
+import ContextMenu from '@/components/ContextMenu.vue'
+import { copyRowSql, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/utils/rowSql'
 import { DEFAULT_PAGE_SIZE, executeTemplateQuery, fetchTemplate, fetchTemplateList } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
 import { EventsOn } from '@/api/runtime'
 import { useLogStore } from '@/stores/logStore'
 import { useTabStore } from '@/stores/tabStore'
 import type {
+  ContextMenuAction,
   DBConnection,
   DbQueryPayload,
   FieldMapping,
@@ -75,6 +78,103 @@ const lastTotal = ref(0)
 // 连接管理与 SQL 模板已改为独立标签页，这里不再维护弹窗状态
 
 const formRef = ref<{ getValues: () => Record<string, unknown> } | null>(null)
+
+// -------------------------------------------------- 执行记录高度 / 结果行右键菜单
+
+/** 根容器：拖动执行记录时用它的高度做边界钳制 */
+const rootRef = ref<HTMLDivElement | null>(null)
+/** 条件区容器：钳制执行记录高度时扣掉它的高度 */
+const formPanelRef = ref<HTMLElement | null>(null)
+
+/** 执行记录高度（px）：拖动分栏调整，随 Tab 持久化 */
+const logHeight = ref(150)
+
+/** 拖动分栏的高度约束 */
+const MIN_LOG = 80
+const MIN_RESULT = 140
+/** 执行记录标题栏高度，参与总高计算 */
+const LOG_HEAD = 34
+
+/** 数值钳制 */
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+/** 扣掉条件区与结果区最低高度后，执行记录可用的最大高度 */
+function maxLogHeight(): number {
+  const root = rootRef.value
+  if (!root) {
+    return logHeight.value
+  }
+  const form = formPanelRef.value?.clientHeight ?? 0
+  return Math.max(MIN_LOG, root.clientHeight - form - MIN_RESULT - LOG_HEAD)
+}
+
+/** 按容器高度重新钳制执行记录高度（窗口缩放后调用） */
+function clampHeights() {
+  logHeight.value = Math.min(logHeight.value, maxLogHeight())
+}
+
+/**
+ * 拖动执行记录上边界调整高度。
+ * 拖动过程只改本地状态（保证跟手），松手才上报持久化，
+ * 避免每移动一个像素就写一次 Tab payload。
+ */
+function startResizeLog(event: MouseEvent) {
+  event.preventDefault()
+  const startY = event.clientY
+  const startLog = logHeight.value
+  const max = maxLogHeight()
+
+  const onMove = (moveEvent: MouseEvent) => {
+    logHeight.value = clamp(startLog - (moveEvent.clientY - startY), MIN_LOG, max)
+  }
+
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    notifyChange()
+  }
+
+  document.body.style.cursor = 'row-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
+/** 结果表格右键菜单：位置与被点的行 */
+const rowMenuVisible = ref(false)
+const rowMenuX = ref(0)
+const rowMenuY = ref(0)
+const rowMenuRow = ref<Record<string, unknown> | null>(null)
+
+/** 打开结果行右键菜单（内容为「复制为 INSERT / UPDATE / DELETE」） */
+function openRowMenu(payload: { row: Record<string, unknown>, x: number, y: number }) {
+  rowMenuRow.value = payload.row
+  rowMenuX.value = payload.x
+  rowMenuY.value = payload.y
+  rowMenuVisible.value = true
+}
+
+/** 处理「复制为…」：UPDATE / DELETE 以主键为条件，生成的 SQL 带库名 */
+async function handleRowMenuSelect(item: ContextMenuAction) {
+  const kind = kindOfMenuItem(item.key)
+  const row = rowMenuRow.value
+  const data = result.value
+  if (!kind || !row || !data) {
+    return
+  }
+  await copyRowSql(kind, {
+    connId: connId.value,
+    database: currentConnection.value?.database ?? '',
+    dbType: currentConnection.value?.dbType ?? 'mysql',
+    sql: data.sql,
+    columns: data.columns.map(column => column.name),
+    row,
+  })
+}
 
 /** 当前选中的模板项 */
 const currentTemplate = computed(
@@ -258,6 +358,7 @@ function notifyChange() {
     connId: connId.value,
     variableValues: values,
     pageSize: pageSize.value,
+    logHeight: Math.round(logHeight.value),
   }
 
   const signature = JSON.stringify(payload)
@@ -310,6 +411,7 @@ const offConnectionsChanged = EventsOn('connections:changed', async () => {
 onBeforeUnmount(() => {
   offTemplatesChanged()
   offConnectionsChanged()
+  window.removeEventListener('resize', clampHeights)
 })
 
 // ------------------------------------------------------------ 生命周期
@@ -324,12 +426,20 @@ onMounted(async () => {
     // 每页条数是本标签的私有状态，从 payload 恢复
     const savedPageSize = Number(props.initialPayload.pageSize)
     pageSize.value = savedPageSize > 0 ? savedPageSize : DEFAULT_PAGE_SIZE
+    // 执行记录高度同样是本标签的私有状态
+    const savedLogHeight = Number(props.initialPayload.logHeight)
+    logHeight.value = savedLogHeight > 0 ? savedLogHeight : logHeight.value
 
     await Promise.all([loadTemplates(), loadConnections()])
 
     if (templateId.value) {
       await loadTemplateConfig(templateId.value)
     }
+
+    // 恢复的高度可能超过当前窗口：先钳制再上报就绪，避免结果区被挤没
+    await nextTick()
+    clampHeights()
+    window.addEventListener('resize', clampHeights)
   }
   finally {
     // 失败也要上报，否则遮罩会一直盖住界面
@@ -339,7 +449,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="db-query">
+  <div ref="rootRef" class="db-query">
     <!-- 顶部操作栏：选模板 → 选连接 → 执行 -->
     <header class="db-query__toolbar">
       <div class="db-query__toolbar-left">
@@ -401,7 +511,7 @@ onMounted(async () => {
 
     <!-- 主体：上为查询条件，下为查询结果 -->
     <div class="db-query__body">
-      <section class="db-query__form">
+      <section ref="formPanelRef" class="db-query__form">
         <div class="db-query__section-title">
           <span class="db-query__section-bar" aria-hidden="true" />
           <span>查询条件</span>
@@ -446,6 +556,7 @@ onMounted(async () => {
           v-if="result"
           :result="result"
           :mappings="fieldMappings"
+          @row-contextmenu="openRowMenu"
         />
         <el-empty v-else description="尚未执行查询" />
 
@@ -462,8 +573,25 @@ onMounted(async () => {
       </section>
     </div>
 
-    <!-- 底部：执行记录 -->
-    <ExecutionLog />
+    <!-- 结果区 / 执行记录分界：仅记录展开时可拖 -->
+    <div
+      v-if="logStore.expanded"
+      class="db-query__splitter"
+      title="拖动调整执行记录高度"
+      @mousedown="startResizeLog"
+    />
+
+    <!-- 底部：执行记录（高度随分栏调整并持久化） -->
+    <ExecutionLog :height="logHeight" />
+
+    <!-- 结果行右键菜单：复制为 INSERT / UPDATE / DELETE -->
+    <ContextMenu
+      v-model:visible="rowMenuVisible"
+      :x="rowMenuX"
+      :y="rowMenuY"
+      :items="ROW_SQL_MENU_ITEMS"
+      @select="handleRowMenuSelect"
+    />
   </div>
 </template>
 
@@ -494,6 +622,16 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/*
+ * Element Plus 会给「相邻按钮」加 margin-left: 12px（.el-button + .el-button），
+ * 和这里的 gap 叠加后两个图标按钮之间变成 20px（与 select 的 8px 不一致）。
+ * 本项目按钮行一律用 flex + gap 排版，所以清掉默认外边距。
+ */
+.db-query__toolbar-left :deep(.el-button + .el-button),
+.db-query__toolbar-right :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 
 /* 条件区在上、结果区在下 */
@@ -548,6 +686,19 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* 结果区 / 执行记录分界：6px 命中区，悬浮高亮 */
+.db-query__splitter {
+  flex: 0 0 auto;
+  height: 6px;
+  cursor: row-resize;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.db-query__splitter:hover {
+  background: var(--brand-color);
 }
 
 .db-query__result-head {

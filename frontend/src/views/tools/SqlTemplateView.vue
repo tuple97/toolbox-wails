@@ -456,7 +456,7 @@ onMounted(async () => {
               </div>
             </el-tab-pane>
 
-            <!-- lazy：未激活不挂载，避免隐藏的 Monaco/面板在每次选模板时被无谓更新 -->
+            <!-- lazy：未激活不挂载，避免隐藏的编辑器/面板在每次选模板时被无谓更新 -->
             <el-tab-pane label="变量配置" name="variables" lazy>
               <VariableConfigPanel
                 v-model="variableConfigs"
@@ -832,12 +832,12 @@ onMounted(async () => {
 .tpl-mgr__hint code {
   padding: 1px 4px;
   border-radius: 4px;
-  background: rgba(56, 189, 248, 0.12);
+  background: var(--active-bg);
   color: var(--brand-color);
   font-family: var(--font-mono);
 }
 
-.tpl-mgr__sql :deep(.monaco-editor) {
+.tpl-mgr__sql :deep(.cm-editor) {
   height: 100% !important;
 }
 

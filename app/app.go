@@ -33,6 +33,10 @@ type App struct {
 	// 由 main 在创建应用后通过 Attach 注入。
 	wailsApp *application.App
 
+	// mainWindow 为主窗口引用，由 main 通过 AttachWindow 注入。
+	// 启动早期 Window.Current() 可能返回 nil，因此显式持有。
+	mainWindow *application.WebviewWindow
+
 	// 基础设施
 	db     *database.DB
 	cipher *utils.Cipher
@@ -44,6 +48,7 @@ type App struct {
 	dicts     *services.DictService
 	dbService *services.DBService
 	settings  *services.SettingService
+	system    *services.SystemService
 }
 
 // NewApp 创建 App 实例。依赖在 ServiceStartup 中惰性初始化，
@@ -56,6 +61,12 @@ func NewApp() *App {
 // 必须在 application.New 之后、app.Run 之前调用。
 func (a *App) Attach(wailsApp *application.App) {
 	a.wailsApp = wailsApp
+}
+
+// AttachWindow 注入主窗口引用，供窗口背景材质等需要原生句柄的操作使用。
+// 必须在 app.Run 之前调用（与 Attach 一起）。
+func (a *App) AttachWindow(window *application.WebviewWindow) {
+	a.mainWindow = window
 }
 
 // ServiceStartup 实现 application.ServiceStartup 接口，在应用启动时被调用。
@@ -124,6 +135,7 @@ func (a *App) init() error {
 	a.dicts = services.NewDictService(repo)
 	a.dbService = services.NewDBService(repo, cipher, engine)
 	a.settings = services.NewSettingService(repo)
+	a.system = services.NewSystemService()
 
 	return nil
 }

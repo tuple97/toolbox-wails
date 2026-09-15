@@ -86,18 +86,6 @@ const logMaxLines = computed({
   },
 })
 
-/** 窗口背景透明度（百分比） */
-const backgroundAlpha = computed({
-  get: () => configStore.backgroundAlpha,
-  set: (value: number) => configStore.set('background_alpha', String(value)),
-})
-
-/** 窗口背景磨砂半径（px） */
-const backgroundBlur = computed({
-  get: () => configStore.backgroundBlur,
-  set: (value: number) => configStore.set('background_blur', String(value)),
-})
-
 onMounted(async () => {
   try {
     systemFonts.value = await fetchSystemFonts()
@@ -216,38 +204,6 @@ onMounted(async () => {
       </section>
 
       <!-- 窗口背景 -->
-      <section class="settings-view__section">
-        <h3 class="settings-view__section-title">窗口背景</h3>
-
-        <el-form label-width="110px" label-position="right">
-          <el-form-item label="背景透明度">
-            <div class="settings-view__slider">
-              <el-slider v-model="backgroundAlpha" :min="20" :max="100" :step="1" />
-              <span class="settings-view__value">{{ backgroundAlpha }}%</span>
-            </div>
-          </el-form-item>
-
-          <el-form-item label="背景磨砂">
-            <div class="settings-view__slider">
-              <el-slider v-model="backgroundBlur" :min="0" :max="40" :step="1" />
-              <span class="settings-view__value">{{ backgroundBlur }} px</span>
-            </div>
-          </el-form-item>
-
-          <el-form-item label="效果预览">
-            <div class="settings-view__preview">
-              <div class="settings-view__preview-pattern"></div>
-              <div class="settings-view__preview-glass"></div>
-            </div>
-          </el-form-item>
-
-          <el-form-item label="">
-            <small class="settings-view__tip">
-              透明度越低越能透出桌面，配合磨砂即为毛玻璃效果；100% 为不透明。
-            </small>
-          </el-form-item>
-        </el-form>
-      </section>
     </div>
   </div>
 </template>
@@ -321,30 +277,5 @@ onMounted(async () => {
   color: var(--text-muted);
   font-size: var(--app-font-size-xs);
   line-height: 1.6;
-}
-
-/* 背景效果实时预览：底纹 + 与实际背景层同参数的效果层 */
-.settings-view__preview {
-  position: relative;
-  width: 100%;
-  height: 64px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.settings-view__preview-pattern {
-  position: absolute;
-  inset: 0;
-  background:
-    repeating-linear-gradient(45deg, #f97316 0 12px, #0ea5e9 12px 24px),
-    linear-gradient(#22c55e, #a855f7);
-}
-
-.settings-view__preview-glass {
-  position: absolute;
-  inset: 0;
-  background: rgb(var(--bg-rgb) / var(--app-bg-alpha));
-  backdrop-filter: blur(var(--app-bg-blur));
 }
 </style>
