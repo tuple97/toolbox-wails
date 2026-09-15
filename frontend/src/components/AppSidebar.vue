@@ -4,6 +4,7 @@ import { VueDraggable } from 'vue-draggable-plus'
 import { useTabStore } from '@/stores/tabStore'
 import { useConfigStore } from '@/stores/configStore'
 import { PINNED_TOP_TOOLS, TOOL_GROUPS, TOP_LEVEL_TOOLS, toolOf } from '@/utils/tools'
+import { parseSidebarView, serializeSidebarView } from '@/utils/sidebarView'
 import type { ToolType } from '@/types'
 
 defineProps<{
@@ -128,14 +129,23 @@ function toggleDraftHidden(type: ToolType) {
     : [...draftHidden.value, type]
 }
 
-/** 展开的分组标签，默认全部展开 */
-const expandedGroups = ref<string[]>(TOOL_GROUPS.map(group => group.label))
+/**
+ * 展开的分组标签，持久化在 settings.sidebar_view（见 utils/sidebarView.ts）。
+ * 未记录在「已收起」列表里的分组一律视为展开，所以新增分组默认展开。
+ */
+const expandedGroups = computed(() =>
+  TOOL_GROUPS
+    .map(group => group.label)
+    .filter(label => !parseSidebarView(configStore.values.sidebar_view).collapsedGroups.includes(label)),
+)
 
-/** 切换分组展开状态 */
+/** 切换分组展开状态并落盘 */
 function toggleGroup(label: string) {
-  expandedGroups.value = expandedGroups.value.includes(label)
-    ? expandedGroups.value.filter(item => item !== label)
-    : [...expandedGroups.value, label]
+  const state = parseSidebarView(configStore.values.sidebar_view)
+  state.collapsedGroups = state.collapsedGroups.includes(label)
+    ? state.collapsedGroups.filter(item => item !== label)
+    : [...state.collapsedGroups, label]
+  configStore.set('sidebar_view', serializeSidebarView(state))
 }
 
 /** 当前激活标签承载的工具类型 */

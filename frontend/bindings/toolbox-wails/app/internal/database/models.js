@@ -391,18 +391,9 @@ export class SQLTemplate {
              */
             this["postScript"] = "";
         }
-        if (!("paginationEnabled" in $$source)) {
-            /**
-             * PaginationEnabled 是否对查询结果分页。
-             * 开启后执行时会自动统计总数据量，并按 PageSize 切页。
-             * @member
-             * @type {boolean}
-             */
-            this["paginationEnabled"] = false;
-        }
         if (!("pageSize" in $$source)) {
             /**
-             * PageSize 每页条数，仅在 PaginationEnabled 为真时生效
+             * PageSize 每页条数保留字段：实际页大小由各标签页的翻页控件决定
              * @member
              * @type {number}
              */

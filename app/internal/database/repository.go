@@ -222,7 +222,7 @@ func (r *Repository) ListTemplates() ([]SQLTemplate, error) {
 	rows, err := r.db.conn.Query(`
 		SELECT id, conn_id, name, sql_text, variables, field_mappings,
 		       COALESCE(pre_script, ''), COALESCE(post_script, ''),
-		       COALESCE(pagination_enabled, 0), COALESCE(page_size, 50)
+		       COALESCE(page_size, 50)
 		FROM sql_templates ORDER BY id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询 sql_templates 失败: %w", err)
@@ -235,7 +235,7 @@ func (r *Repository) ListTemplates() ([]SQLTemplate, error) {
 		if scanErr := rows.Scan(
 			&t.ID, &t.ConnID, &t.Name, &t.SQLText, &t.Variables,
 			&t.FieldMappings, &t.PreScript, &t.PostScript,
-			&t.PaginationEnabled, &t.PageSize,
+			&t.PageSize,
 		); scanErr != nil {
 			return nil, fmt.Errorf("解析模板行失败: %w", scanErr)
 		}
@@ -249,14 +249,14 @@ func (r *Repository) GetTemplate(id int64) (*SQLTemplate, error) {
 	row := r.db.conn.QueryRow(`
 		SELECT id, conn_id, name, sql_text, variables, field_mappings,
 		       COALESCE(pre_script, ''), COALESCE(post_script, ''),
-		       COALESCE(pagination_enabled, 0), COALESCE(page_size, 50)
+		       COALESCE(page_size, 50)
 		FROM sql_templates WHERE id = ?`, id)
 
 	var t SQLTemplate
 	err := row.Scan(
 		&t.ID, &t.ConnID, &t.Name, &t.SQLText, &t.Variables,
 		&t.FieldMappings, &t.PreScript, &t.PostScript,
-		&t.PaginationEnabled, &t.PageSize,
+		&t.PageSize,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("模板不存在: %d", id)
@@ -273,10 +273,10 @@ func (r *Repository) SaveTemplate(t SQLTemplate) (int64, error) {
 		_, err := r.db.conn.Exec(`
 			UPDATE sql_templates
 			SET conn_id = ?, name = ?, sql_text = ?, variables = ?, field_mappings = ?, pre_script = ?, post_script = ?,
-			    pagination_enabled = ?, page_size = ?
+			    page_size = ?
 			WHERE id = ?`,
 			t.ConnID, t.Name, t.SQLText, t.Variables, t.FieldMappings, t.PreScript, t.PostScript,
-			boolToInt(t.PaginationEnabled), normalizePageSize(t.PageSize), t.ID)
+			normalizePageSize(t.PageSize), t.ID)
 		if err != nil {
 			return 0, fmt.Errorf("更新模板失败: %w", err)
 		}
@@ -285,10 +285,10 @@ func (r *Repository) SaveTemplate(t SQLTemplate) (int64, error) {
 
 	res, err := r.db.conn.Exec(`
 		INSERT INTO sql_templates (conn_id, name, sql_text, variables, field_mappings, pre_script, post_script,
-		                           pagination_enabled, page_size)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                           page_size)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ConnID, t.Name, t.SQLText, t.Variables, t.FieldMappings, t.PreScript, t.PostScript,
-		boolToInt(t.PaginationEnabled), normalizePageSize(t.PageSize))
+		normalizePageSize(t.PageSize))
 	if err != nil {
 		return 0, fmt.Errorf("新增模板失败: %w", err)
 	}

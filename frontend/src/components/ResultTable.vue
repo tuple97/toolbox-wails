@@ -92,6 +92,10 @@ function rowIndex(index: number): number {
         :align="col.align"
         show-overflow-tooltip
       >
+        <!-- 列头不换行：长列名截断为省略号，完整名称走 title（应用内小提示） -->
+        <template #header>
+          <span class="result-table__head" :title="col.label">{{ col.label }}</span>
+        </template>
         <template #default="{ row }">
           <!-- 每格只计算一次渲染结果，避免重复调用 -->
           <el-tooltip
@@ -120,6 +124,23 @@ function rowIndex(index: number): number {
   flex: 1;
   min-height: 0;
   padding: 0 16px 12px;
+}
+
+/*
+ * 列头一律单行：默认 .cell 会换行，长列名会把表头撑成多行、挤掉结果区高度。
+ * 这里改为省略号截断（宽度仍由列宽决定，不会自动加宽）。
+ */
+.result-table :deep(.el-table__header .cell) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-table__head {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .result-table__cell {

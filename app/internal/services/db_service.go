@@ -129,34 +129,32 @@ func (s *DBService) Execute(req ExecuteRequest) (*QueryResult, error) {
 
 	// 3.1 分页：先确定总量，再按页取数。
 	//
+	// 分页判定与改写走共用的 preparePagination（哪些语句能分页、怎么拼都由它决定），
+	// 因此这里必须先留下「未加分页」的原文——统计总数要对它做，否则会被页大小截断。
+	//
 	// 总量的获取有两种途径：
 	//   - CountTotal 为真（首次执行或查询条件变化）：真实统计一次；
 	//   - 否则沿用调用方带回的上次总数（翻页场景），省掉一次全量扫描。
 	// 翻页复用总数属于「最终一致」：期间数据有增删时页数可能略有偏差，
 	// 用户重新执行查询（CountTotal 为真）即会刷新。
+	countableSQL := finalSQL
+	finalSQL, pageSize := preparePagination(countableSQL, req.Page, req.PageSize)
+
 	total := int64(0)
 	page := 1
-	pageSize := 0
-	if req.Page > 0 {
-		pageSize = req.PageSize
-		if pageSize <= 0 {
-			pageSize = defaultPageSize
-		}
-		if pageSize > maxPageSize {
-			pageSize = maxPageSize
-		}
+	if pageSize > 0 {
 		page = req.Page
-
 		if req.CountTotal || req.Total <= 0 {
-			total, err = queryTotal(ctx, db, finalSQL)
+			total, err = queryTotal(ctx, db, countableSQL)
 			if err != nil {
 				return nil, err
 			}
 		} else {
 			total = req.Total
 		}
-		finalSQL = applyPagination(finalSQL, pageSize, (page-1)*pageSize)
 	}
+	// 未分页（用户没要求，或语句不支持分页）时 pageSize 为 0，
+	// Total 保持「本次行数」由下面回填。
 
 	start := time.Now()
 	rows, columns, truncated, err := queryRows(ctx, db, finalSQL)
@@ -325,9 +323,9 @@ type TemplateExecuteRequest struct {
 	TemplateID int64          `json:"templateId"`
 	ConnID     int64          `json:"connId"`
 	Variables  map[string]any `json:"variables"`
-	// Page 请求的页码，从 1 开始；仅在模板开启分页时生效
+	// Page 请求的页码，从 1 开始；小于等于 0 表示本次不分页
 	Page int `json:"page"`
-	// PageSize 每页条数；小于等于 0 时取模板配置值
+	// PageSize 每页条数；小于等于 0 时取默认值
 	PageSize int `json:"pageSize"`
 	// Total 上一次返回的总数；翻页时带回可避免重复统计
 	Total int64 `json:"total"`
@@ -340,8 +338,8 @@ type TemplateExecuteRequest struct {
 // 与 Execute 的区别：SQL、脚本等均从模板表读取，前端只传模板 ID 与变量值。
 // 这样模板更新后，引用它的 Tab 无需同步即可在下次执行时生效。
 //
-// 分页完全由模板配置决定：模板开启分页时才传页码与页大小，
-// 未开启时清零分页参数，行为与从前一致。
+// 分页不再有开关：前端传页码即分页（页大小缺省取 defaultPageSize），
+// 传 Page <= 0 表示本次不分页（对应界面上把页大小设为 0）。
 func (s *DBService) ExecuteTemplateQuery(req TemplateExecuteRequest) (*QueryResult, error) {
 	tpl, err := s.repo.GetTemplate(req.TemplateID)
 	if err != nil {
@@ -357,20 +355,16 @@ func (s *DBService) ExecuteTemplateQuery(req TemplateExecuteRequest) (*QueryResu
 		return nil, fmt.Errorf("模板未关联数据库连接，请先选择连接")
 	}
 
-	page := 0
-	pageSize := 0
-	if tpl.PaginationEnabled {
-		page = req.Page
-		if page <= 0 {
-			page = 1
-		}
-		pageSize = req.PageSize
-		if pageSize <= 0 {
-			pageSize = defaultPageSize
-		}
-		if pageSize > maxPageSize {
-			pageSize = maxPageSize
-		}
+	page := req.Page
+	if page < 0 {
+		page = 0
+	}
+	pageSize := req.PageSize
+	if page > 0 && pageSize <= 0 {
+		pageSize = defaultPageSize
+	}
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
 	}
 
 	return s.Execute(ExecuteRequest{
@@ -627,9 +621,21 @@ func trimTrailingSemicolon(query string) string {
 // queryTotal 统计查询的总数据量。
 // 先用 buildCountSQL 尽量把原 SQL 改写成 COUNT(*)（能去掉无用的 ORDER BY、
 // 避免派生表物化），改写不安全时再退回「包一层子查询」的通用做法。
-func queryTotal(ctx context.Context, db *sql.DB, query string) (int64, error) {
+//
+// 参数用 rowQueryer 而非 *sql.DB：执行器的分页跑在固定会话（*sql.Conn）上，
+// 统计总数也必须走同一条连接，否则切库 / search_path 不生效。
+func queryTotal(ctx context.Context, db rowQueryer, query string) (int64, error) {
+	rows, err := db.QueryContext(ctx, buildCountSQL(query))
+	if err != nil {
+		return 0, fmt.Errorf("统计总数据量失败: %w", err)
+	}
+	defer rows.Close()
+
 	var total int64
-	if err := db.QueryRowContext(ctx, buildCountSQL(query)).Scan(&total); err != nil {
+	if !rows.Next() {
+		return 0, fmt.Errorf("统计总数据量失败: 未返回结果")
+	}
+	if err := rows.Scan(&total); err != nil {
 		return 0, fmt.Errorf("统计总数据量失败: %w", err)
 	}
 	return total, nil
@@ -783,6 +789,8 @@ func isSQLIdentChar(c byte) bool {
 // 否则追加的 LIMIT 会改变原有语义（例如模板里已写死 LIMIT 10）。
 //
 // 末尾若存在行注释（-- ...），换行后追加的 LIMIT 落在新行，不会被注释掉。
+//
+// 调用前必须先用 canPaginateStatement 判断语句是否支持分页（见 preparePagination）。
 func applyPagination(query string, pageSize, offset int) string {
 	if offset < 0 {
 		offset = 0
@@ -803,6 +811,110 @@ func applyPagination(query string, pageSize, offset int) string {
 		return fmt.Sprintf("%s\nLIMIT %d", base, pageSize)
 	}
 	return fmt.Sprintf("%s\nLIMIT %d OFFSET %d", base, pageSize, offset)
+}
+
+// paginableKeywords 可以安全追加 LIMIT / OFFSET 的语句首关键字。
+//
+// 判定依据是两点同时成立：语句返回结果集，且语法接受 LIMIT / OFFSET。
+//   - SELECT / TABLE / VALUES：均可；
+//   - WITH … SELECT：由主语句关键字决定（见 mainStatementKeyword）。
+//
+// 不在表内的语句一律不分页：
+//   - SHOW / DESCRIBE / DESC / EXPLAIN：MySQL 的 SHOW 只接受 LIMIT 不支持 OFFSET
+//     （第 2 页必然语法错误），EXPLAIN 也不接受外层 LIMIT，
+//     且这类语句无法包成派生表统计总数；
+//   - INSERT / UPDATE / DELETE / DDL：不返回结果集，也没有分页概念。
+var paginableKeywords = map[string]bool{
+	"select": true,
+	"table":  true,
+	"values": true,
+}
+
+// canPaginateStatement 判断语句能否安全地追加分页。
+//
+// 模板查询与命令执行器共用这一判定，避免两边规则不一致
+// （分页写法则由 applyPagination 统一负责）。
+func canPaginateStatement(query string) bool {
+	return paginableKeywords[mainStatementKeyword(query)]
+}
+
+// preparePagination 按分页参数改写语句。
+//
+// 返回改写后的 SQL 与实际页大小：页大小 0 表示本次不分页
+// （用户没要求分页，或该语句不支持分页，两种情况下 SQL 原样返回）。
+// 页大小上限统一收敛到 maxPageSize，与界面上限保持一致。
+func preparePagination(query string, page, pageSize int) (string, int) {
+	if page <= 0 {
+		return query, 0
+	}
+	if pageSize <= 0 {
+		pageSize = defaultPageSize
+	}
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
+	if !canPaginateStatement(query) {
+		return query, 0
+	}
+	return applyPagination(query, pageSize, (page-1)*pageSize), pageSize
+}
+
+// mainStatementKeyword 取语句的主关键字（小写）。
+//
+// WITH 开头的语句要穿过 CTE 定义再看主语句：
+// `WITH x AS (…) SELECT …` → select（可分页）；
+// `WITH x AS (…) UPDATE/INSERT/DELETE …` → 写操作（不分页）。
+// 取不到关键字时返回空串。
+func mainStatementKeyword(query string) string {
+	text := trimLeadingComments(query)
+	head := leadingWord(text)
+	if head != "with" {
+		return head
+	}
+
+	// CTE 主体在括号内（深度 > 0），所以最外层出现的关键字就是主语句
+	best := -1
+	keyword := ""
+	for _, candidate := range []string{"select", "insert", "update", "delete", "merge", "table", "values"} {
+		index := indexOfTopLevelKeyword(text, candidate)
+		if index >= 0 && (best < 0 || index < best) {
+			best = index
+			keyword = candidate
+		}
+	}
+	return keyword
+}
+
+// trimLeadingComments 去掉 SQL 开头的空白与注释（-- / # / 块注释）。
+func trimLeadingComments(query string) string {
+	text := strings.TrimSpace(query)
+	for {
+		switch {
+		case strings.HasPrefix(text, "--"), strings.HasPrefix(text, "#"):
+			next := strings.IndexByte(text, '\n')
+			if next < 0 {
+				return ""
+			}
+			text = strings.TrimSpace(text[next+1:])
+		case strings.HasPrefix(text, "/*"):
+			end := strings.Index(text, "*/")
+			if end < 0 {
+				return ""
+			}
+			text = strings.TrimSpace(text[end+2:])
+		default:
+			return text
+		}
+	}
+}
+
+// leadingWord 取行首的标识符词（小写），如 "select"、"show"；取不到返回空串。
+func leadingWord(text string) string {
+	end := 0
+	for end < len(text) && isSQLIdentChar(text[end]) {
+		end++
+	}
+	return strings.ToLower(text[:end])
 }
 
 // normalizeValue 把驱动返回的原始值转为 JSON 友好的类型。

@@ -35,6 +35,8 @@ var defaultSettings = []database.Setting{
 	{Key: "sidebar_config", Type: SettingTypeJSON, Value: "{}"},
 	// 工具选择弹窗配置：排序与隐藏项（JSON，结构见前端 ToolPickerDialog.vue）
 	{Key: "picker_config", Type: SettingTypeJSON, Value: "{}"},
+	// 侧边菜单视图状态：整体收起与分组折叠（JSON，结构见前端 utils/sidebarView.ts）
+	{Key: "sidebar_view", Type: SettingTypeJSON, Value: "{}"},
 }
 
 // SettingService 负责全局配置的读写。

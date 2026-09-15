@@ -398,9 +398,6 @@ export function SaveDictionaryItems(dictionaryID, items) {
 
 /**
  * SaveSetting 写入单个配置项。
- * 
- * 「窗口毛玻璃」开关要立刻作用到原生窗口（DWM 背景材质），
- * 因此在写库成功后同步应用一次。
  * @param {string} key
  * @param {string} value
  * @returns {$CancellablePromise<void>}

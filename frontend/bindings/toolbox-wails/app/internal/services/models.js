@@ -230,6 +230,38 @@ export class ExecutorRequest {
              */
             this["limit"] = 0;
         }
+        if (!("page" in $$source)) {
+            /**
+             * Page 页码，从 1 开始；小于等于 0 表示不分页
+             * @member
+             * @type {number}
+             */
+            this["page"] = 0;
+        }
+        if (!("pageSize" in $$source)) {
+            /**
+             * PageSize 每页条数；小于等于 0 时取默认值；为 0 且 Page 大于 0 时按默认页大小
+             * @member
+             * @type {number}
+             */
+            this["pageSize"] = 0;
+        }
+        if (!("total" in $$source)) {
+            /**
+             * Total 调用方缓存的总数；翻页时带回可跳过统计
+             * @member
+             * @type {number}
+             */
+            this["total"] = 0;
+        }
+        if (!("countTotal" in $$source)) {
+            /**
+             * CountTotal 是否重新统计总数；首次执行与页大小变化时应置真
+             * @member
+             * @type {boolean}
+             */
+            this["countTotal"] = false;
+        }
 
         Object.assign(this, $$source);
     }
@@ -280,7 +312,7 @@ export class ExecutorResult {
         }
         if (!("sql" in $$source)) {
             /**
-             * SQL 实际执行的 SQL
+             * SQL 实际执行的 SQL（分页时含追加的 LIMIT）
              * @member
              * @type {string}
              */
@@ -325,6 +357,38 @@ export class ExecutorResult {
              * @type {number}
              */
             this["affectedRows"] = 0;
+        }
+        if (!("total" in $$source)) {
+            /**
+             * Total 满足条件的数据总量；未分页时等于 RowCount
+             * @member
+             * @type {number}
+             */
+            this["total"] = 0;
+        }
+        if (!("page" in $$source)) {
+            /**
+             * Page 当前页码，从 1 开始；未分页时为 1
+             * @member
+             * @type {number}
+             */
+            this["page"] = 0;
+        }
+        if (!("pageSize" in $$source)) {
+            /**
+             * PageSize 每页条数；未分页时为 0
+             * @member
+             * @type {number}
+             */
+            this["pageSize"] = 0;
+        }
+        if (!("pageCount" in $$source)) {
+            /**
+             * PageCount 总页数；未分页时为 1
+             * @member
+             * @type {number}
+             */
+            this["pageCount"] = 0;
         }
 
         Object.assign(this, $$source);
@@ -576,7 +640,7 @@ export class TemplateExecuteRequest {
         }
         if (!("page" in $$source)) {
             /**
-             * Page 请求的页码，从 1 开始；仅在模板开启分页时生效
+             * Page 请求的页码，从 1 开始；小于等于 0 表示本次不分页
              * @member
              * @type {number}
              */
@@ -584,7 +648,7 @@ export class TemplateExecuteRequest {
         }
         if (!("pageSize" in $$source)) {
             /**
-             * PageSize 每页条数；小于等于 0 时取模板配置值
+             * PageSize 每页条数；小于等于 0 时取默认值
              * @member
              * @type {number}
              */

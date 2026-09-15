@@ -55,7 +55,6 @@ const form = reactive({
   fieldMappings: '[]',
   preScript: '',
   postScript: '',
-  paginationEnabled: false,
 })
 
 /** 变量配置与字段映射（解析后的对象形式） */
@@ -64,8 +63,8 @@ const fieldMappings = ref<FieldMapping[]>([])
 
 /** 检测到的变量名 */
 const detectedVariables = ref<string[]>([])
-/** 配置区当前页签，默认落在基础配置 */
-const configTab = ref('basic')
+/** 配置区当前页签，默认落在变量配置 */
+const configTab = ref('variables')
 
 // ------------------------------------------------------------ 加载
 
@@ -98,7 +97,6 @@ async function loadTemplate(id: number) {
     editingId.value = tpl.id
     form.name = tpl.name
     form.connId = tpl.connId
-    form.paginationEnabled = tpl.paginationEnabled
     form.sqlText = tpl.sqlText
     form.preScript = tpl.preScript
     form.postScript = tpl.postScript
@@ -197,7 +195,6 @@ function handleCreate() {
   form.sqlText = ''
   form.preScript = ''
   form.postScript = ''
-  form.paginationEnabled = false
   variableConfigs.value = []
   fieldMappings.value = []
   detectedVariables.value = []
@@ -239,7 +236,6 @@ async function handleSave() {
       fieldMappings: JSON.stringify(fieldMappings.value),
       preScript: form.preScript,
       postScript: form.postScript,
-      paginationEnabled: form.paginationEnabled,
     }
 
     const id = await persistTemplate(payload)
@@ -441,21 +437,6 @@ onMounted(async () => {
           </div>
 
           <el-tabs v-model="configTab" class="tpl-mgr__tabs">
-            <el-tab-pane label="基础配置" name="basic">
-              <div class="tpl-mgr__basic">
-                <div class="tpl-mgr__basic-row">
-                  <div class="tpl-mgr__basic-label">
-                    <span>结果分页</span>
-                    <small>
-                      开启后查询结果按页展示，并自动统计总数据量；
-                      每页条数在结果下方的翻页控件上设置，按标签页各自保存
-                    </small>
-                  </div>
-                  <el-switch v-model="form.paginationEnabled" />
-                </div>
-              </div>
-            </el-tab-pane>
-
             <!-- lazy：未激活不挂载，避免隐藏的编辑器/面板在每次选模板时被无谓更新 -->
             <el-tab-pane label="变量配置" name="variables" lazy>
               <VariableConfigPanel
@@ -891,43 +872,5 @@ onMounted(async () => {
   margin: 0 0 8px;
   color: var(--text-muted);
   font-size: var(--app-font-size-xs);
-}
-
-/* 基础配置：纵向排列的配置行 */
-.tpl-mgr__basic {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 520px;
-  padding-top: 4px;
-}
-
-.tpl-mgr__basic-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--surface-color);
-}
-
-.tpl-mgr__basic-label {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.tpl-mgr__basic-label > span {
-  font-size: var(--app-font-size);
-  font-weight: 600;
-}
-
-.tpl-mgr__basic-label small {
-  color: var(--text-muted);
-  font-size: var(--app-font-size-xs);
-  font-weight: 400;
 }
 </style>

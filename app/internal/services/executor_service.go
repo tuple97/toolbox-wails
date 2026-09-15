@@ -30,6 +30,14 @@ type ExecutorRequest struct {
 	SQL string `json:"sql"`
 	// Limit 查询返回行数上限；小于等于 0 时取默认值
 	Limit int `json:"limit"`
+	// Page 页码，从 1 开始；小于等于 0 表示不分页
+	Page int `json:"page"`
+	// PageSize 每页条数；小于等于 0 时取默认值；为 0 且 Page 大于 0 时按默认页大小
+	PageSize int `json:"pageSize"`
+	// Total 调用方缓存的总数；翻页时带回可跳过统计
+	Total int64 `json:"total"`
+	// CountTotal 是否重新统计总数；首次执行与页大小变化时应置真
+	CountTotal bool `json:"countTotal"`
 }
 
 // ExecutorResult 命令执行器的执行结果。
@@ -40,7 +48,7 @@ type ExecutorResult struct {
 	Columns []ColumnMeta `json:"columns"`
 	// Rows 结果集（仅 query）
 	Rows []map[string]any `json:"rows"`
-	// SQL 实际执行的 SQL
+	// SQL 实际执行的 SQL（分页时含追加的 LIMIT）
 	SQL string `json:"sql"`
 	// Database 实际生效的库 / 模式（后端在会话上钉住的那个），前端展示用于核对
 	Database string `json:"database"`
@@ -52,6 +60,14 @@ type ExecutorResult struct {
 	Truncated bool `json:"truncated"`
 	// AffectedRows 写操作影响行数；查询类型恒为 0
 	AffectedRows int64 `json:"affectedRows"`
+	// Total 满足条件的数据总量；未分页时等于 RowCount
+	Total int64 `json:"total"`
+	// Page 当前页码，从 1 开始；未分页时为 1
+	Page int `json:"page"`
+	// PageSize 每页条数；未分页时为 0
+	PageSize int `json:"pageSize"`
+	// PageCount 总页数；未分页时为 1
+	PageCount int `json:"pageCount"`
 }
 
 // ExecutorColumn 描述一张表的字段（智能补全与元数据用）。
@@ -143,11 +159,37 @@ func (s *DBService) ExecuteStatement(ctx context.Context, req ExecutorRequest) (
 
 	start := time.Now()
 	if isQueryStatement(sqlText) {
+		/*
+		 * 分页：与模板查询链路共用 preparePagination——
+		 * 「哪些语句能分页、怎么拼 LIMIT」两边完全一致。
+		 * 统计总数必须用未加分页的原文，否则会被页大小截断。
+		 */
+		countableSQL := sqlText
+		pageSize := 0
+		page := 1
+		total := int64(0)
+		sqlText, pageSize = preparePagination(countableSQL, req.Page, req.PageSize)
+		if pageSize > 0 {
+			page = req.Page
+			if req.CountTotal || req.Total <= 0 {
+				total, err = queryTotal(runCtx, session, countableSQL)
+				if err != nil {
+					return nil, hintDatabaseError(err)
+				}
+			} else {
+				total = req.Total
+			}
+			// 页大小可能大于默认行数上限，抬高上限以免分页结果被截断
+			if pageSize > limit {
+				limit = pageSize
+			}
+		}
+
 		rows, columns, truncated, err := queryRowsLimited(runCtx, session, sqlText, limit)
 		if err != nil {
 			return nil, hintDatabaseError(err)
 		}
-		return &ExecutorResult{
+		result := &ExecutorResult{
 			Kind:      "query",
 			Columns:   columns,
 			Rows:      rows,
@@ -156,7 +198,17 @@ func (s *DBService) ExecuteStatement(ctx context.Context, req ExecutorRequest) (
 			ElapsedMs: time.Since(start).Milliseconds(),
 			RowCount:  len(rows),
 			Truncated: truncated,
-		}, nil
+			Total:     int64(len(rows)),
+			Page:      1,
+			PageCount: 1,
+		}
+		if pageSize > 0 {
+			result.Total = total
+			result.Page = page
+			result.PageSize = pageSize
+			result.PageCount = calcPageCount(total, pageSize)
+		}
+		return result, nil
 	}
 
 	result, err := session.ExecContext(runCtx, sqlText)
@@ -237,23 +289,15 @@ func quoteLiteralIdentifier(name string, dbType string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
-// isQueryStatement 按首关键字判断语句是否返回结果集。
-// WITH 开头的 CTE 大多以 SELECT 收尾，按查询处理；
+// isQueryStatement 判断语句是否返回结果集。
+//
+// 关键字取自共用的 mainStatementKeyword：WITH 开头会穿透 CTE 看主语句，
+// 因此 `WITH x AS (…) INSERT …` 会被正确判为写操作（以前一律当查询）。
 // 判断失误时最坏情况是写操作返回 0 行结果集，不影响数据正确性。
 func isQueryStatement(sqlText string) bool {
-	lower := strings.ToLower(sqlText)
-	for _, keyword := range []string{"select", "show", "describe", "desc", "explain", "with", "table", "values"} {
-		if !strings.HasPrefix(lower, keyword) {
-			continue
-		}
-		rest := lower[len(keyword):]
-		if rest == "" {
-			return true
-		}
-		switch rest[0] {
-		case ' ', '\n', '\r', '\t', '(':
-			return true
-		}
+	switch mainStatementKeyword(sqlText) {
+	case "select", "show", "describe", "desc", "explain", "table", "values":
+		return true
 	}
 	return false
 }

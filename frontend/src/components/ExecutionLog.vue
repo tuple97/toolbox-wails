@@ -9,30 +9,10 @@ import { useLogStore } from '@/stores/logStore'
 import { LOG_LANGUAGE_ID } from '@/utils/logLanguage'
 import type { ContextMenuAction } from '@/types'
 
-const props = withDefaults(defineProps<{
-  /**
-   * 日志区高度（px，展开时生效）。
-   * 由宿主（如命令执行器）拖动分栏调整，默认 150。
-   */
-  height?: number
-  /**
-   * 嵌入模式：作为宿主页签的内容展示——
-   * 不渲染自己的标题栏（页签就是标题），高度占满宿主容器，
-   * 也不再受「展开 / 收起」状态控制。
-   */
-  embedded?: boolean
-}>(), {
-  height: 150,
-  embedded: false,
-})
-
 const logStore = useLogStore()
 
 /** 日志文本：把多行记录拼成完整文本交给编辑器展示 */
 const logText = computed(() => logStore.entries.join('\n'))
-
-/** 日志编辑器高度：嵌入模式占满容器，独立模式跟随可调高度 */
-const panelHeight = computed(() => (props.embedded ? '100%' : `${props.height}px`))
 
 /** 日志编辑器实例（只读展示，仅用于取选中内容 / 复制） */
 const viewRef = shallowRef<EditorView | null>(null)
@@ -47,12 +27,16 @@ const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
 
-/** 菜单项：复制（选中内容，没有选中则当前行）与复制全部 */
+/**
+ * 菜单项：复制（选中内容，没有选中则当前行）、复制全部、清空。
+ * 标题栏已由宿主的页签取代，所以「清空」入口放在这里。
+ */
 const menuItems = computed<ContextMenuAction[]>(() => {
   const empty = !logStore.entries.length
   return [
-    { key: 'copy', label: '复制', shortcut: 'Ctrl+C', disabled: empty, divided: true },
+    { key: 'copy', label: '复制', shortcut: 'Ctrl+C', disabled: empty },
     { key: 'copy-all', label: '复制全部', disabled: empty },
+    { key: 'clear', label: '清空日志', disabled: empty, divided: true },
   ]
 })
 
@@ -112,6 +96,11 @@ async function handleMenuSelect(item: ContextMenuAction) {
   }
   if (item.key === 'copy-all') {
     await copyWithToast(logText.value, `已复制全部 ${logStore.entries.length} 行`)
+    return
+  }
+  if (item.key === 'clear') {
+    logStore.clear()
+    ElMessage.success('执行记录已清空')
   }
 }
 
@@ -169,9 +158,6 @@ function scrollToBottom() {
 
 /** 日志变化后自动滚动到底部；宿主切到日志页签时也会调用 */
 watch(() => logStore.entries.length, async () => {
-  if (!props.embedded && !logStore.expanded) {
-    return
-  }
   await nextTick()
   scrollToBottom()
 })
@@ -184,45 +170,16 @@ defineExpose({
 <template>
   <section
     class="log-panel"
-    :class="{
-      'log-panel--collapsed': !logStore.expanded && !props.embedded,
-      'log-panel--embedded': props.embedded,
-    }"
     @contextmenu.prevent="openMenu"
     @keydown="handleKeydown"
   >
-    <!-- 嵌入模式下不渲染标题栏：页签本身就是标题 -->
-    <header v-if="!props.embedded" class="log-panel__head">
-      <button
-        class="log-panel__toggle"
-        type="button"
-        @click="logStore.expanded = !logStore.expanded"
-      >
-        <el-icon>
-          <ArrowUp v-if="logStore.expanded" />
-          <ArrowDown v-else />
-        </el-icon>
-        <span>执行记录</span>
-        <el-badge
-          v-if="logStore.entries.length"
-          :value="logStore.entries.length"
-          type="info"
-          class="log-panel__badge"
-        />
-      </button>
-
-      <el-button link size="small" @click="logStore.clear()">
-        清空
-      </el-button>
-    </header>
-
-    <div v-show="props.embedded || logStore.expanded" class="log-panel__body" :style="{ height: panelHeight }">
+    <div class="log-panel__body">
       <MonacoEditor
         :model-value="logText"
         :language="LOG_LANGUAGE_ID"
         readonly
         disable-suggestions
-        :height="panelHeight"
+        height="100%"
         @mount="handleEditorMount"
       />
     </div>
@@ -239,62 +196,21 @@ defineExpose({
 </template>
 
 <style scoped>
+/*
+ * 日志视图：作为宿主页签的内容展示，占满容器。
+ * 标题由宿主的页签提供，这里不再自带标题栏（清空请用右键菜单 / 宿主提供的入口）。
+ */
 .log-panel {
   display: flex;
   flex-direction: column;
-  flex: 0 0 auto;
-  border-top: 1px solid var(--border-color);
-  background: var(--panel-bg);
-}
-
-.log-panel__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: calc(30px * var(--app-control-scale));
-  padding: 0 12px;
-}
-
-.log-panel__toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: var(--app-font-size-sm);
-  cursor: pointer;
-}
-
-.log-panel__toggle:hover {
-  color: var(--text-color);
-}
-
-.log-panel__badge {
-  margin-left: 4px;
+  flex: 1;
+  min-height: 0;
 }
 
 .log-panel__body {
-  height: 150px;
-  overflow: hidden;
-}
-
-.log-panel--collapsed .log-panel__body {
-  height: 0;
-  display: none;
-}
-
-/* 嵌入模式：占满宿主容器（页签内容区），去掉独立面板的分界线与底色 */
-.log-panel--embedded {
   flex: 1;
   min-height: 0;
-  border-top: none;
-  background: transparent;
-}
-
-.log-panel--embedded .log-panel__body {
-  height: 100%;
+  overflow: hidden;
 }
 
 /*

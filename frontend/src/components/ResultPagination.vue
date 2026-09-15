@@ -1,18 +1,29 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 
 const props = withDefaults(defineProps<{
   /** 当前页码，从 1 开始 */
   page: number
-  /** 每页条数 */
+  /** 每页条数；0 表示不分页 */
   pageSize: number
   /** 数据总量 */
   total: number
   /** 总页数 */
   pageCount: number
+  /**
+   * 后端是否真的按分页执行了本次查询。
+   * 有些语句（SHOW / DESCRIBE / EXPLAIN 等）无法拼 LIMIT / OFFSET，
+   * 此时保持用户设定的页大小，但翻页按钮不可用，并给出说明。
+   */
+  supported?: boolean
+  /** 本次查询耗时（ms），显示在左侧信息最前面 */
+  elapsedMs?: number
   /** 是否正在查询，用于禁用按钮避免重复提交 */
   loading?: boolean
 }>(), {
+  supported: true,
+  elapsedMs: 0,
   loading: false,
 })
 
@@ -21,8 +32,14 @@ const emit = defineEmits<{
   (e: 'size-change', pageSize: number): void
 }>()
 
-/** 可选的每页条数 */
-const PAGE_SIZE_OPTIONS = [20, 50, 100, 200, 500]
+/** 可选的每页条数（下拉里还会额外提供「不分页」，见模板） */
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200, 500, 1000]
+
+/**
+ * 每页条数上限，与后端 maxPageSize 保持一致。
+ * 上限外的输入在这里就收紧，避免「填了 5000 实际按 1000 查」的静默差异。
+ */
+const MAX_PAGE_SIZE = 1000
 
 /** 跳转输入框的临时页码 */
 const jumpPage = ref(props.page)
@@ -41,54 +58,100 @@ function go(target: number) {
   }
   emit('change', next)
 }
+
+/**
+ * 页大小变化：下拉选项与手动输入共用。
+ *
+ * 下拉允许直接输入数字（allow-create 会给出字符串），
+ * 0 表示不分页；非法输入与超上限的值在这里拦下。
+ */
+function handleSizeChange(value: unknown) {
+  let size = Math.trunc(Number(value))
+  if (!Number.isFinite(size) || size < 0) {
+    ElMessage.warning('每页条数请填不小于 0 的整数（0 表示不分页）')
+    return
+  }
+  if (size > MAX_PAGE_SIZE) {
+    ElMessage.warning(`每页最多 ${MAX_PAGE_SIZE} 条，已按上限处理`)
+    size = MAX_PAGE_SIZE
+  }
+  if (size === props.pageSize) {
+    return
+  }
+  emit('size-change', size)
+}
 </script>
 
 <template>
   <div class="result-pagination">
+    <!-- 左侧信息：耗时在最前，其次是总量与分页状态 -->
     <span class="result-pagination__info">
-      共 {{ total }} 条 · 第 {{ page }} / {{ pageCount }} 页 · 每页 {{ pageSize }} 条
+      <span v-if="elapsedMs > 0" class="result-pagination__elapsed">
+        耗时 {{ elapsedMs }} ms
+      </span>
+      <template v-if="!supported">
+        <span v-if="elapsedMs > 0" class="result-pagination__sep">·</span>
+        共 {{ total }} 条 · 该语句不支持分页
+      </template>
+      <template v-else-if="pageSize > 0">
+        <span v-if="elapsedMs > 0" class="result-pagination__sep">·</span>
+        共 {{ total }} 条 · 第 {{ page }} / {{ pageCount }} 页 · 每页 {{ pageSize }} 条
+      </template>
+      <template v-else>
+        <span v-if="elapsedMs > 0" class="result-pagination__sep">·</span>
+        共 {{ total }} 条 · 不分页
+      </template>
     </span>
 
     <div class="result-pagination__actions">
-      <el-button size="small" :disabled="loading || page <= 1" @click="go(1)">
-        首页
-      </el-button>
-      <el-button size="small" :disabled="loading || page <= 1" @click="go(page - 1)">
-        上一页
-      </el-button>
-      <el-button size="small" :disabled="loading || page >= pageCount" @click="go(page + 1)">
-        下一页
-      </el-button>
-      <el-button size="small" :disabled="loading || page >= pageCount" @click="go(pageCount)">
-        尾页
-      </el-button>
+      <!-- 翻页按钮与跳转仅在分页状态下可用 -->
+      <template v-if="supported && pageSize > 0">
+        <el-button size="small" :disabled="loading || page <= 1" @click="go(1)">
+          首页
+        </el-button>
+        <el-button size="small" :disabled="loading || page <= 1" @click="go(page - 1)">
+          上一页
+        </el-button>
+        <el-button size="small" :disabled="loading || page >= pageCount" @click="go(page + 1)">
+          下一页
+        </el-button>
+        <el-button size="small" :disabled="loading || page >= pageCount" @click="go(pageCount)">
+          尾页
+        </el-button>
 
-      <span class="result-pagination__jump-label">跳至</span>
-      <el-input-number
-        v-model="jumpPage"
-        class="result-pagination__jump-input"
-        :min="1"
-        :max="pageCount > 0 ? pageCount : 1"
-        size="small"
-        controls-position="right"
-        @keydown.enter.prevent="go(jumpPage)"
-      />
-      <span class="result-pagination__jump-label">页</span>
-      <el-button
-        size="small"
-        type="primary"
-        :disabled="loading"
-        @click="go(jumpPage)"
-      >
-        跳转
-      </el-button>
+        <span class="result-pagination__jump-label">跳至</span>
+        <el-input-number
+          v-model="jumpPage"
+          class="result-pagination__jump-input"
+          :min="1"
+          :max="pageCount > 0 ? pageCount : 1"
+          size="small"
+          controls-position="right"
+          @keydown.enter.prevent="go(jumpPage)"
+        />
+        <span class="result-pagination__jump-label">页</span>
+        <el-button
+          size="small"
+          type="primary"
+          :disabled="loading"
+          @click="go(jumpPage)"
+        >
+          跳转
+        </el-button>
+      </template>
 
+      <!-- 页大小：可选可输入，0 表示不分页 -->
       <el-select
         :model-value="pageSize"
         class="result-pagination__size"
         size="small"
-        @update:model-value="emit('size-change', Number($event))"
+        filterable
+        allow-create
+        default-first-option
+        placeholder="每页条数"
+        @change="handleSizeChange"
       >
+        <el-option label="不分页" :value="0" />
         <el-option
           v-for="size in PAGE_SIZE_OPTIONS"
           :key="size"
@@ -112,8 +175,21 @@ function go(target: number) {
 }
 
 .result-pagination__info {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text-muted);
   font-size: var(--app-font-size-sm);
+}
+
+/* 耗时比其余统计信息更显眼一档 */
+.result-pagination__elapsed {
+  color: var(--text-color);
+  font-weight: 600;
+}
+
+.result-pagination__sep {
+  color: var(--border-color);
 }
 
 .result-pagination__actions {

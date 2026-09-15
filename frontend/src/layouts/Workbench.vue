@@ -5,8 +5,10 @@ import { VueDraggable } from 'vue-draggable-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTabStore } from '@/stores/tabStore'
 import { useDictStore } from '@/stores/dictStore'
+import { useConfigStore } from '@/stores/configStore'
 import { EventsOn } from '@/api/runtime'
 import { toolOf } from '@/utils/tools'
+import { parseSidebarView, serializeSidebarView } from '@/utils/sidebarView'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ToolPickerDialog from '@/components/ToolPickerDialog.vue'
 import DbQuery from '@/views/tools/DbQuery.vue'
@@ -21,6 +23,7 @@ import type { ToolType, WorkbenchTab } from '@/types'
 
 const tabStore = useTabStore()
 const dictStore = useDictStore()
+const configStore = useConfigStore()
 
 /** 状态栏右侧的版本号（取自后端 GetAppInfo，避免前后端各维护一份版本号） */
 const appVersionLabel = ref('')
@@ -79,8 +82,21 @@ function handleSingletonReady(type: ToolType) {
   }
 }
 
-/** 左侧菜单是否收起 */
-const sidebarCollapsed = ref(false)
+/**
+ * 左侧菜单是否收起。
+ * 状态持久化在 settings.sidebar_view（与分组折叠状态同一份配置），
+ * 启动时由 configStore.load() 恢复，因此重启后保持上次的展开/收起。
+ */
+const sidebarCollapsed = computed(
+  () => parseSidebarView(configStore.values.sidebar_view).collapsed,
+)
+
+/** 切换侧栏收起状态并落盘 */
+function toggleSidebar() {
+  const state = parseSidebarView(configStore.values.sidebar_view)
+  state.collapsed = !state.collapsed
+  configStore.set('sidebar_view', serializeSidebarView(state))
+}
 
 /** 正在重命名的 Tab ID */
 const renamingId = ref<number | null>(null)
@@ -494,7 +510,7 @@ function handleTabReady(uid: string) {
           class="workbench__icon-btn"
           type="button"
           :title="sidebarCollapsed ? '展开菜单' : '收起菜单'"
-          @click="sidebarCollapsed = !sidebarCollapsed"
+          @click="toggleSidebar"
         >
           <el-icon><Expand v-if="sidebarCollapsed" /><Fold v-else /></el-icon>
         </button>

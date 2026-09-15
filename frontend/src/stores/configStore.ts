@@ -25,6 +25,7 @@ const DEFAULTS: Record<SettingKey, string> = {
   editor_font_family: DEFAULT_FONT,
   sidebar_config: '{}',
   picker_config: '{}',
+  sidebar_view: '{}',
 }
 
 export const useConfigStore = defineStore('config', () => {

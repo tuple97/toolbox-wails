@@ -118,8 +118,6 @@ export interface SQLTemplate {
   fieldMappings: string
   preScript: string
   postScript: string
-  /** 查询结果是否分页展示 */
-  paginationEnabled: boolean
   /** 每页条数保留字段：实际页大小由每个标签页的翻页控件决定 */
   pageSize?: number
 }
@@ -141,8 +139,8 @@ export interface ExecutorPayload {
   sql: string
   /** SQL 编辑器高度（px），拖动分栏调整后持久化 */
   editorHeight?: number
-  /** 执行记录高度（px），拖动分栏调整后持久化 */
-  logHeight?: number
+  /** 每页条数（0 表示不分页），翻页控件调整后持久化 */
+  pageSize?: number
 }
 
 /** 命令执行器：执行请求 */
@@ -151,6 +149,14 @@ export interface ExecutorRequest {
   database: string
   sql: string
   limit: number
+  /** 页码，从 1 开始；小于等于 0 表示不分页 */
+  page?: number
+  /** 每页条数；小于等于 0 且页码大于 0 时取后端默认值 */
+  pageSize?: number
+  /** 上一次返回的总数；翻页时带回可跳过重新统计 */
+  total?: number
+  /** 是否重新统计总数 */
+  countTotal?: boolean
 }
 
 /** 命令执行器：表的字段信息 */
@@ -217,6 +223,14 @@ export interface ExecutorResult {
   rowCount: number
   truncated: boolean
   affectedRows: number
+  /** 满足条件的数据总量；未分页时等于 rowCount */
+  total: number
+  /** 当前页码，从 1 开始；未分页时为 1 */
+  page: number
+  /** 每页条数；未分页时为 0 */
+  pageSize: number
+  /** 总页数；未分页时为 1 */
+  pageCount: number
 }
 
 /** 词典项，与后端 database.DictionaryItem 对应 */
@@ -277,7 +291,7 @@ export interface TemplateExecuteRequest {
   templateId: number
   connId: number
   variables: Record<string, unknown>
-  /** 页码，从 1 开始；仅模板开启分页时生效 */
+  /** 页码，从 1 开始；小于等于 0 表示本次不分页 */
   page?: number
   /** 每页条数；小于等于 0 时取后端默认值 */
   pageSize?: number
@@ -316,6 +330,7 @@ export type SettingKey =
   | 'font_family'
   | 'sidebar_config'
   | 'picker_config'
+  | 'sidebar_view'
 
 /**
  * 主题标识。
@@ -415,6 +430,4 @@ export interface DbQueryPayload {
   variableValues?: Record<string, unknown>
   /** 该标签自己的每页条数，不随模板保存 */
   pageSize?: number
-  /** 执行记录高度（px），拖动分栏调整后持久化 */
-  logHeight?: number
 }

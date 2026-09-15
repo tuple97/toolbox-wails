@@ -8,9 +8,20 @@ import type { CancellablePromise } from '@wailsio/runtime'
 import { ExecuteStatement, ListDatabases, ListTableColumns, ListTables } from './bindings'
 import type { ExecutorColumn, ExecutorRequest, ExecutorResult } from '@/types'
 
-/** 执行用户输入的 SQL；cancel() 可终止正在执行的查询 */
+/**
+ * 执行用户输入的 SQL；cancel() 可终止正在执行的查询。
+ *
+ * 分页没有开关：page 大于 0 即分页（页大小缺省由后端取默认值），
+ * page 传 0 表示本次不分页（对应界面上把页大小设为 0）。
+ */
 export function executeStatement(req: ExecutorRequest): CancellablePromise<ExecutorResult> {
-  return ExecuteStatement(req) as unknown as CancellablePromise<ExecutorResult>
+  return ExecuteStatement({
+    ...req,
+    page: req.page ?? 0,
+    pageSize: req.pageSize ?? 0,
+    total: req.total ?? 0,
+    countTotal: req.countTotal ?? false,
+  }) as unknown as CancellablePromise<ExecutorResult>
 }
 
 /** 库列表（连接可见的全部数据库） */

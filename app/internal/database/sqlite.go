@@ -79,7 +79,6 @@ CREATE TABLE IF NOT EXISTS sql_templates (
   field_mappings TEXT    NOT NULL,
   pre_script     TEXT,
   post_script    TEXT,
-  pagination_enabled INTEGER NOT NULL DEFAULT 0,
   page_size      INTEGER NOT NULL DEFAULT 50
 );
 
@@ -189,7 +188,6 @@ type columnMigration struct {
 // columnMigrations 为历史库补充新增列的清单。
 // 新增字段时在此登记即可，无需用户手动删库。
 var columnMigrations = []columnMigration{
-	{table: "sql_templates", column: "pagination_enabled", ddl: "pagination_enabled INTEGER NOT NULL DEFAULT 0"},
 	{table: "sql_templates", column: "page_size", ddl: "page_size INTEGER NOT NULL DEFAULT 50"},
 	// 连接参数扩展（2026-09-14）：备注/颜色/方言/超时/SSL/自定义参数/只读与生产标记
 	{table: "db_connections", column: "note", ddl: "note TEXT"},

@@ -63,13 +63,11 @@ const variableValues = ref<Record<string, unknown>>({})
 const result = ref<QueryResult | null>(null)
 const running = ref(false)
 
-/** 模板是否开启结果分页；由模板的基础配置决定，查询页只读 */
-const paginationEnabled = ref(false)
 /** 当前页码，从 1 开始 */
 const page = ref(1)
 /**
  * 每页条数：属于当前 Tab 的私有状态，不写入模板。
- * 这样同一个模板在不同标签页可以各用各的分页大小。
+ * 这样同一个模板在不同标签页可以各用各的分页大小；0 表示不分页。
  */
 const pageSize = ref(DEFAULT_PAGE_SIZE)
 /** 上一次执行得到的总数，翻页时带回后端以避免重复统计 */
@@ -79,70 +77,23 @@ const lastTotal = ref(0)
 
 const formRef = ref<{ getValues: () => Record<string, unknown> } | null>(null)
 
-// -------------------------------------------------- 执行记录高度 / 结果行右键菜单
+// -------------------------------------------------- 结果区页签 / 结果行右键菜单
 
-/** 根容器：拖动执行记录时用它的高度做边界钳制 */
-const rootRef = ref<HTMLDivElement | null>(null)
-/** 条件区容器：钳制执行记录高度时扣掉它的高度 */
+/** 条件区容器：结果区高度计算用 */
 const formPanelRef = ref<HTMLElement | null>(null)
 
-/** 执行记录高度（px）：拖动分栏调整，随 Tab 持久化 */
-const logHeight = ref(150)
+/** 结果区页签：log = 执行日志（固定），result = 查询结果 */
+const activeTab = ref('log')
 
-/** 拖动分栏的高度约束 */
-const MIN_LOG = 80
-const MIN_RESULT = 140
-/** 执行记录标题栏高度，参与总高计算 */
-const LOG_HEAD = 34
+/** 日志页签组件引用：切到该页签时把日志滚到底部 */
+const logRef = ref<InstanceType<typeof ExecutionLog> | null>(null)
 
-/** 数值钳制 */
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max)
-}
-
-/** 扣掉条件区与结果区最低高度后，执行记录可用的最大高度 */
-function maxLogHeight(): number {
-  const root = rootRef.value
-  if (!root) {
-    return logHeight.value
+watch(activeTab, async (tab) => {
+  if (tab === 'log') {
+    await nextTick()
+    logRef.value?.scrollToBottom()
   }
-  const form = formPanelRef.value?.clientHeight ?? 0
-  return Math.max(MIN_LOG, root.clientHeight - form - MIN_RESULT - LOG_HEAD)
-}
-
-/** 按容器高度重新钳制执行记录高度（窗口缩放后调用） */
-function clampHeights() {
-  logHeight.value = Math.min(logHeight.value, maxLogHeight())
-}
-
-/**
- * 拖动执行记录上边界调整高度。
- * 拖动过程只改本地状态（保证跟手），松手才上报持久化，
- * 避免每移动一个像素就写一次 Tab payload。
- */
-function startResizeLog(event: MouseEvent) {
-  event.preventDefault()
-  const startY = event.clientY
-  const startLog = logHeight.value
-  const max = maxLogHeight()
-
-  const onMove = (moveEvent: MouseEvent) => {
-    logHeight.value = clamp(startLog - (moveEvent.clientY - startY), MIN_LOG, max)
-  }
-
-  const onUp = () => {
-    window.removeEventListener('mousemove', onMove)
-    window.removeEventListener('mouseup', onUp)
-    document.body.style.cursor = ''
-    document.body.style.userSelect = ''
-    notifyChange()
-  }
-
-  document.body.style.cursor = 'row-resize'
-  document.body.style.userSelect = 'none'
-  window.addEventListener('mousemove', onMove)
-  window.addEventListener('mouseup', onUp)
-}
+})
 
 /** 结果表格右键菜单：位置与被点的行 */
 const rowMenuVisible = ref(false)
@@ -214,7 +165,6 @@ async function loadTemplateConfig(id: number | null) {
   if (!id) {
     variableConfigs.value = []
     fieldMappings.value = []
-    paginationEnabled.value = false
     pageSize.value = DEFAULT_PAGE_SIZE
     return
   }
@@ -223,7 +173,6 @@ async function loadTemplateConfig(id: number | null) {
     const tpl = await fetchTemplate(id)
     variableConfigs.value = parseJSON<VariableConfig[]>(tpl.variables, [])
     fieldMappings.value = parseJSON<FieldMapping[]>(tpl.fieldMappings, [])
-    paginationEnabled.value = tpl.paginationEnabled
 
     // 连接未显式选择时，跟随模板配置
     if (!connId.value && tpl.connId) {
@@ -234,7 +183,6 @@ async function loadTemplateConfig(id: number | null) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
     variableConfigs.value = []
     fieldMappings.value = []
-    paginationEnabled.value = false
     pageSize.value = DEFAULT_PAGE_SIZE
   }
 }
@@ -258,7 +206,7 @@ function parseJSON<T>(raw: string, fallback: T): T {
 /**
  * 执行查询。
  *
- * targetPage 为要查询的页码；模板未开启分页时后端会忽略该参数。
+ * targetPage 为要查询的页码；页大小为 0（不分页）时忽略页码。
  * reuseTotal 为真表示翻页：沿用上次的总数，后端不再重复统计，
  * 只有重新执行（新条件、改页大小、换模板/连接）时才重新统计。
  */
@@ -274,7 +222,8 @@ async function handleRun(targetPage = 1, reuseTotal = false) {
 
   running.value = true
   const values = formRef.value?.getValues() ?? variableValues.value
-  const requestPage = paginationEnabled.value ? Math.max(targetPage, 1) : 0
+  // 页大小为 0 表示不分页：页码传 0，后端不会追加 LIMIT
+  const requestPage = pageSize.value > 0 ? Math.max(targetPage, 1) : 0
 
   try {
     // 只传模板 ID 与变量值；SQL 与脚本由后端从模板读取
@@ -283,12 +232,14 @@ async function handleRun(targetPage = 1, reuseTotal = false) {
       connId: connId.value,
       variables: values,
       page: requestPage,
-      pageSize: paginationEnabled.value ? pageSize.value : 0,
+      pageSize: pageSize.value,
       total: reuseTotal ? lastTotal.value : 0,
       countTotal: !reuseTotal,
     })
     result.value = data
     lastTotal.value = data.total
+    // 查询成功自动切到结果页签（日志页签只是过程记录，不该挡住结果）
+    activeTab.value = 'result'
     // 以服务端返回的页码为准，避免页码越界后界面与数据不一致
     page.value = data.page > 0 ? data.page : 1
     if (data.pageSize > 0) {
@@ -321,20 +272,26 @@ async function handleRun(targetPage = 1, reuseTotal = false) {
  * 翻页：沿用上次统计到的总数，后端不再重复统计。
  */
 function changePage(target: number) {
+  if (pageSize.value <= 0) {
+    return
+  }
   void handleRun(target, true)
 }
 
 /**
- * 修改每页条数：回到第一页重新查询。
- * 总数与页大小无关，已有总数时同样可以复用。
+ * 修改每页条数（0 表示不分页）：回到第一页重新查询。
+ *
+ * 分页 ↔ 不分页之间切换时总数口径不同（不分页返回的 total 只是本次行数），
+ * 因此这种情况必须重新统计；都在分页状态且已有总数时可以复用。
  */
 function changePageSize(size: number) {
-  if (size <= 0 || size === pageSize.value) {
+  if (size === pageSize.value) {
     return
   }
+  const reuseTotal = size > 0 && pageSize.value > 0 && lastTotal.value > 0
   pageSize.value = size
   page.value = 1
-  void handleRun(1, lastTotal.value > 0)
+  void handleRun(1, reuseTotal)
 }
 
 // ------------------------------------------------------------ 状态同步
@@ -358,7 +315,6 @@ function notifyChange() {
     connId: connId.value,
     variableValues: values,
     pageSize: pageSize.value,
-    logHeight: Math.round(logHeight.value),
   }
 
   const signature = JSON.stringify(payload)
@@ -411,7 +367,6 @@ const offConnectionsChanged = EventsOn('connections:changed', async () => {
 onBeforeUnmount(() => {
   offTemplatesChanged()
   offConnectionsChanged()
-  window.removeEventListener('resize', clampHeights)
 })
 
 // ------------------------------------------------------------ 生命周期
@@ -423,23 +378,19 @@ onMounted(async () => {
     connId.value = (props.initialPayload.connId as number) ?? null
     variableValues.value =
       (props.initialPayload.variableValues as Record<string, unknown>) ?? {}
-    // 每页条数是本标签的私有状态，从 payload 恢复
-    const savedPageSize = Number(props.initialPayload.pageSize)
-    pageSize.value = savedPageSize > 0 ? savedPageSize : DEFAULT_PAGE_SIZE
-    // 执行记录高度同样是本标签的私有状态
-    const savedLogHeight = Number(props.initialPayload.logHeight)
-    logHeight.value = savedLogHeight > 0 ? savedLogHeight : logHeight.value
+    // 每页条数是本标签的私有状态，从 payload 恢复（0 是合法值：不分页，不能用 || 兜底）
+    if (props.initialPayload.pageSize !== undefined) {
+      const savedPageSize = Number(props.initialPayload.pageSize)
+      if (Number.isFinite(savedPageSize) && savedPageSize >= 0) {
+        pageSize.value = savedPageSize
+      }
+    }
 
     await Promise.all([loadTemplates(), loadConnections()])
 
     if (templateId.value) {
       await loadTemplateConfig(templateId.value)
     }
-
-    // 恢复的高度可能超过当前窗口：先钳制再上报就绪，避免结果区被挤没
-    await nextTick()
-    clampHeights()
-    window.addEventListener('resize', clampHeights)
   }
   finally {
     // 失败也要上报，否则遮罩会一直盖住界面
@@ -541,48 +492,38 @@ onMounted(async () => {
         />
       </section>
 
+      <!-- 结果区：执行日志固定页签在最前，查询结果在后；概要徽标浮在页签栏右侧 -->
       <section class="db-query__result">
-        <div class="db-query__result-head">
-          <span>查询结果</span>
-          <span v-if="result" class="db-query__result-meta">
-            {{ result.rowCount }} 行 · {{ result.elapsedMs }} ms
-            <template v-if="paginationEnabled">
-              · 共 {{ result.total }} 条
-            </template>
-          </span>
-        </div>
+        <el-tabs v-model="activeTab" class="db-query__tabs">
+          <el-tab-pane label="执行日志" name="log" lazy>
+            <ExecutionLog ref="logRef" />
+          </el-tab-pane>
+          <el-tab-pane label="查询结果" name="result">
+            <ResultTable
+              v-if="result"
+              :result="result"
+              :mappings="fieldMappings"
+              @row-contextmenu="openRowMenu"
+            />
+            <el-empty v-else description="尚未执行查询" />
 
-        <ResultTable
-          v-if="result"
-          :result="result"
-          :mappings="fieldMappings"
-          @row-contextmenu="openRowMenu"
-        />
-        <el-empty v-else description="尚未执行查询" />
-
-        <ResultPagination
-          v-if="result && paginationEnabled"
-          :page="page"
-          :page-size="pageSize"
-          :total="result.total"
-          :page-count="result.pageCount"
-          :loading="running"
-          @change="changePage"
-          @size-change="changePageSize"
-        />
+            <!-- 分页常驻：页大小填 0 即不分页；语句不支持分页时由 supported 提示 -->
+            <ResultPagination
+              v-if="result"
+              :page="page"
+              :page-size="pageSize"
+              :total="result.total"
+              :page-count="result.pageCount"
+              :supported="result.pageSize > 0 || pageSize === 0"
+              :elapsed-ms="result.elapsedMs"
+              :loading="running"
+              @change="changePage"
+              @size-change="changePageSize"
+            />
+          </el-tab-pane>
+        </el-tabs>
       </section>
     </div>
-
-    <!-- 结果区 / 执行记录分界：仅记录展开时可拖 -->
-    <div
-      v-if="logStore.expanded"
-      class="db-query__splitter"
-      title="拖动调整执行记录高度"
-      @mousedown="startResizeLog"
-    />
-
-    <!-- 底部：执行记录（高度随分栏调整并持久化） -->
-    <ExecutionLog :height="logHeight" />
 
     <!-- 结果行右键菜单：复制为 INSERT / UPDATE / DELETE -->
     <ContextMenu
@@ -680,40 +621,55 @@ onMounted(async () => {
 }
 
 .db-query__result {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  /* 页签栏贴住上方分界线：上方不留多余空白 */
+  padding: 2px 16px 0;
   overflow: hidden;
 }
 
-/* 结果区 / 执行记录分界：6px 命中区，悬浮高亮 */
-.db-query__splitter {
-  flex: 0 0 auto;
-  height: 6px;
-  cursor: row-resize;
-  background: transparent;
-  transition: background-color 0.15s ease;
-}
-
-.db-query__splitter:hover {
-  background: var(--brand-color);
-}
-
-.db-query__result-head {
+/* 页签（执行日志 / 查询结果）：页签栏固定，内容区占满剩余高度 */
+.db-query__tabs {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  font-size: var(--app-font-size);
-  font-weight: 600;
-  border-bottom: 1px solid var(--border-color);
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
-.db-query__result-meta {
-  color: var(--text-muted);
-  font-size: var(--app-font-size-sm);
-  font-weight: 400;
+.db-query__tabs :deep(.el-tabs__header) {
+  flex: 0 0 auto;
+  margin: 0 0 6px;
 }
+
+/* 页签项收紧到 30px：默认 40px 会在标签上下留出较多空白 */
+.db-query__tabs :deep(.el-tabs__item) {
+  height: 30px;
+  line-height: 30px;
+}
+
+.db-query__tabs :deep(.el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.db-query__tabs :deep(.el-tab-pane) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 结果表格自己滚动；横向留白由分栏 padding 提供，不再另加 */
+.db-query__result :deep(.result-table) {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+}
+
+/* 结果表格自带滚动，分页控件固定在底部（见 ResultPagination） */
 </style>

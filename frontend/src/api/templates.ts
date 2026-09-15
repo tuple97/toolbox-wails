@@ -28,7 +28,6 @@ function toTemplate(raw: {
   fieldMappings: string
   preScript: string
   postScript: string
-  paginationEnabled: boolean
   pageSize?: number
 }): SQLTemplate {
   return {
@@ -40,7 +39,6 @@ function toTemplate(raw: {
     fieldMappings: raw.fieldMappings,
     preScript: raw.preScript,
     postScript: raw.postScript,
-    paginationEnabled: Boolean(raw.paginationEnabled),
     pageSize: Number(raw.pageSize) || 0,
   }
 }
@@ -97,7 +95,7 @@ export function validateScript(source: string): Promise<void> {
 /**
  * 按模板执行查询。
  * 前端只传模板 ID 与变量值，SQL/脚本由后端从模板读取，保证模板更新即时生效。
- * page / pageSize 仅在模板开启分页时被后端采纳，未开启时传 0 即可。
+ * 分页没有开关：传 page（从 1 开始）即分页，传 0 表示本次不分页（对应页大小填 0）。
  */
 export function executeTemplateQuery(req: TemplateExecuteRequest): Promise<QueryResult> {
   return ExecuteTemplateQuery({

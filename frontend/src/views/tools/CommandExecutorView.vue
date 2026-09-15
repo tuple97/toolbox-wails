@@ -4,6 +4,7 @@ import type { EditorView } from '@codemirror/view'
 import { ElMessage } from 'element-plus'
 import MonacoEditor from '@/components/MonacoEditor.vue'
 import ResultTable from '@/components/ResultTable.vue'
+import ResultPagination from '@/components/ResultPagination.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
 import ScriptSummary from '@/components/ScriptSummary.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
@@ -11,6 +12,7 @@ import { copyRowSql, dialectOf, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/uti
 import { formatSql, minifySql as minifySqlText } from '@/utils/sqlFormat'
 import { copyText } from '@/utils/clipboard'
 import { fetchConnections } from '@/api/db'
+import { DEFAULT_PAGE_SIZE } from '@/api/templates'
 import {
   executeStatement,
   fetchDatabases as fetchDatabaseList,
@@ -93,7 +95,7 @@ const currentConnection = computed(
   () => connections.value.find(c => c.id === connId.value) ?? null,
 )
 
-/** 查询结果转成通用 QueryResult，复用结果表格组件 */
+/** 查询结果转成通用 QueryResult，复用结果表格组件（分页信息原样带上） */
 function toQueryResult(data: ExecutorResult): QueryResult {
   return {
     columns: data.columns,
@@ -102,10 +104,10 @@ function toQueryResult(data: ExecutorResult): QueryResult {
     elapsedMs: data.elapsedMs,
     rowCount: data.rowCount,
     truncated: data.truncated,
-    total: data.rowCount,
-    page: 1,
-    pageSize: 0,
-    pageCount: 1,
+    total: data.total,
+    page: data.page,
+    pageSize: data.pageSize,
+    pageCount: data.pageCount,
   }
 }
 
@@ -144,9 +146,17 @@ const scriptSummary = ref<ScriptRunSummary | null>(null)
  * 执行中各语句的结果集（只有返回结果集的语句入列）。
  * 这里存的是已转换好的 QueryResult：模板里不能再调转换函数
  * （每次渲染都会产生新对象，导致子组件 props 引用变化而反复重渲染）。
- * database 是后端回带的生效库，概要徽标显示用。
+ * execSql 是实际发送的 SQL（分析时含 EXPLAIN 包装），翻页时按它重跑。
  */
-const scriptResults = ref<Array<{ index: number, sql: string, database: string, result: QueryResult }>>([])
+const scriptResults = ref<Array<{
+  index: number
+  sql: string
+  execSql: string
+  database: string
+  /** 本次请求的页大小（0 = 不分页）：语句不支持分页时用它区分「用户选的分页」 */
+  size: number
+  result: QueryResult
+}>>([])
 /** 结果页签：log = 执行日志（固定），summary = 摘要，result-N = 第 N 条语句的结果 */
 const activeScriptTab = ref('log')
 
@@ -161,40 +171,11 @@ watch(activeScriptTab, async (tab) => {
 })
 
 /**
- * 页签栏右侧的概要徽标：跟着当前页签走。
- *
- * 结果页签显示该条结果的行数 / 耗时 / 生效库；
- * 摘要页签显示整体统计。空串表示不显示。
+ * 每页条数：0 表示不分页。
+ * 结果页签各自记录自己的分页状态（后端随结果回带），
+ * 这里存的是「下次执行」用的默认值，改动后对当前页签立即生效。
  */
-const headMeta = computed(() => {
-  const tab = activeScriptTab.value
-  if (tab === 'log') {
-    return ''
-  }
-  if (tab.startsWith('result-')) {
-    const index = Number(tab.slice('result-'.length))
-    const entry = scriptResults.value.find(item => item.index === index)
-    if (!entry) {
-      return ''
-    }
-    const data = entry.result
-    // 带上后端**实际生效**的库：不带库名的语句打在哪一目了然
-    const where = entry.database ? ` · 库 ${entry.database}` : ''
-    return `${data.rowCount} 行 · ${data.elapsedMs} ms${data.truncated ? ' · 已截断' : ''}${where}`
-  }
-
-  const summary = scriptSummary.value
-  if (!summary) {
-    return ''
-  }
-  const parts = [
-    `共 ${summary.records.length} 条`,
-    `成功 ${summary.successCount}`,
-    `失败 ${summary.failedCount}`,
-  ]
-  parts.push(summary.finishedAt ? `总耗时 ${summary.totalMs} ms` : '执行中…')
-  return parts.join(' · ')
-})
+const pageSize = ref(DEFAULT_PAGE_SIZE)
 
 /** 结果表格右键菜单：位置与被点的行 */
 const rowMenuVisible = ref(false)
@@ -358,6 +339,13 @@ onMounted(async () => {
   connId.value = (props.initialPayload.connId as number) ?? null
   sql.value = (props.initialPayload.sql as string) ?? ''
   editorHeight.value = Number(props.initialPayload.editorHeight) || editorHeight.value
+  // 页大小 0 是合法值（不分页），不能用 || 兜底，否则恢复不出「不分页」
+  if (props.initialPayload.pageSize !== undefined) {
+    const savedPageSize = Number(props.initialPayload.pageSize)
+    if (Number.isFinite(savedPageSize) && savedPageSize >= 0) {
+      pageSize.value = savedPageSize
+    }
+  }
 
   // 恢复的高度可能超过当前窗口：先钳制再上报就绪，避免首帧结果区被挤没
   await nextTick()
@@ -748,6 +736,9 @@ async function runSingle(sqlText: string, options: { stateKey?: string, analysis
     database: effectiveDatabase.value,
     sql: sqlText,
     limit: 1000,
+    page: pageSize.value > 0 ? 1 : 0,
+    pageSize: pageSize.value,
+    countTotal: pageSize.value > 0,
   })
   runningCall = call
 
@@ -763,11 +754,17 @@ async function runSingle(sqlText: string, options: { stateKey?: string, analysis
       record.rowCount = data.rowCount
       scriptResults.value = [{
         index: 1,
-        sql: sqlText,
+        sql: stateKey,
+        execSql: sqlText,
         database: data.database || effectiveDatabase.value,
+        size: pageSize.value,
         result: toQueryResult(data),
       }]
       logStore.logSuccess(data.rowCount, data.elapsedMs, data.database || effectiveDatabase.value)
+      if (data.sql !== sqlText) {
+        // 后端按分页改写了 SQL：补一条实际执行的语句，便于核对
+        logStore.logPagedSQL(data.sql)
+      }
       if (data.truncated) {
         ElMessage.warning(`结果超过上限，仅展示前 ${data.rowCount} 行`)
       }
@@ -860,7 +857,14 @@ async function runScript(script: string, mode: 'run' | 'analyze' = 'run') {
       records: summary.records.map(record => ({ ...record })),
     }
   }
-  const results: Array<{ index: number, sql: string, database: string, result: QueryResult }> = []
+  const results: Array<{
+    index: number
+    sql: string
+    execSql: string
+    database: string
+    size: number
+    result: QueryResult
+  }> = []
   sync()
 
   logStore.append(
@@ -883,11 +887,15 @@ async function runScript(script: string, mode: 'run' | 'analyze' = 'run') {
     sync()
     markRunState(statement, 'running')
 
+    const execSql = sqlOf(statement)
     const call = executeStatement({
       connId: id,
       database: effectiveDatabase.value,
-      sql: sqlOf(statement),
+      sql: execSql,
       limit: 1000,
+      page: pageSize.value > 0 ? 1 : 0,
+      pageSize: pageSize.value,
+      countTotal: pageSize.value > 0,
     })
     runningCall = call
 
@@ -899,10 +907,15 @@ async function runScript(script: string, mode: 'run' | 'analyze' = 'run') {
       markRunState(statement, 'success')
       if (data.kind === 'query') {
         record.rowCount = data.rowCount
+        if (data.sql !== execSql) {
+          logStore.logPagedSQL(data.sql)
+        }
         results.push({
           index,
           sql: statement,
+          execSql,
           database: data.database || effectiveDatabase.value,
+          size: pageSize.value,
           result: toQueryResult(data),
         })
       }
@@ -970,6 +983,81 @@ async function runScript(script: string, mode: 'run' | 'analyze' = 'run') {
 /** 取消正在执行的查询 */
 function cancelRunning() {
   runningCall?.cancel()
+}
+
+// ------------------------------------------------------------ 结果分页
+
+/**
+ * 按新的页码 / 页大小重新执行某条结果。
+ *
+ * 各结果页签独立分页；页大小 0 表示不分页（页码传 0，后端不追加 LIMIT）。
+ * 翻页时把上次的总数带回，省掉一次全量统计；页大小变化、或从「不分页」
+ * 切换过来时口径不同，必须重新统计。
+ */
+async function reloadResultPage(index: number, page: number, size: number) {
+  const id = connId.value
+  const entry = scriptResults.value.find(item => item.index === index)
+  if (!id || !entry) {
+    return
+  }
+  const reuseTotal = size > 0 && entry.result.pageSize > 0 && entry.result.total > 0
+
+  running.value = true
+  const call = executeStatement({
+    connId: id,
+    database: entry.database || effectiveDatabase.value,
+    sql: entry.execSql,
+    limit: 1000,
+    page: size > 0 ? Math.max(page, 1) : 0,
+    pageSize: size,
+    total: reuseTotal ? entry.result.total : 0,
+    countTotal: !reuseTotal,
+  })
+  runningCall = call
+
+  try {
+    const data = await call
+    if (data.kind !== 'query') {
+      return
+    }
+    scriptResults.value = scriptResults.value.map(item => item.index === index
+      ? { ...item, size, database: data.database || item.database, result: toQueryResult(data) }
+      : item)
+    logStore.logSuccess(data.rowCount, data.elapsedMs, data.database || effectiveDatabase.value)
+    if (data.sql !== entry.execSql) {
+      logStore.logPagedSQL(data.sql)
+    }
+  }
+  catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    if (!isCancelled(message)) {
+      logStore.logError(message)
+      ElMessage.error(message)
+    }
+  }
+  finally {
+    running.value = false
+    runningCall = null
+  }
+}
+
+/** 结果页签翻页 */
+function changeResultPage(index: number, target: number) {
+  const entry = scriptResults.value.find(item => item.index === index)
+  if (!entry || entry.result.pageSize <= 0) {
+    return
+  }
+  void reloadResultPage(index, target, entry.result.pageSize)
+}
+
+/** 改某条结果的每页条数（0 表示不分页）；同时更新后续执行的默认页大小 */
+function changeResultPageSize(index: number, size: number) {
+  const entry = scriptResults.value.find(item => item.index === index)
+  if (!entry) {
+    return
+  }
+  pageSize.value = size
+  void reloadResultPage(index, 1, size)
 }
 
 /**
@@ -1074,6 +1162,7 @@ function notifyChange() {
     database: database.value,
     sql: sql.value,
     editorHeight: Math.round(editorHeight.value),
+    pageSize: pageSize.value,
   }
   const signature = JSON.stringify(payload)
   if (signature === lastEmittedSignature) {
@@ -1083,7 +1172,7 @@ function notifyChange() {
   emit('change', props.tabId, payload)
 }
 
-watch([connId, database, sql], notifyChange)
+watch([connId, database, sql, pageSize], notifyChange)
 </script>
 
 <template>
@@ -1196,7 +1285,7 @@ watch([connId, database, sql], notifyChange)
     <section class="executor__result">
       <el-tabs v-model="activeScriptTab" class="executor__tabs">
         <el-tab-pane label="执行日志" name="log" lazy>
-          <ExecutionLog ref="logRef" embedded />
+          <ExecutionLog ref="logRef" />
         </el-tab-pane>
         <el-tab-pane v-if="scriptSummary" label="摘要" name="summary">
           <ScriptSummary :summary="scriptSummary" />
@@ -1214,10 +1303,21 @@ watch([connId, database, sql], notifyChange)
             :analysis="analysisResult"
             @row-contextmenu="openRowMenu($event, item.result)"
           />
+
+          <!-- 分页常驻：页大小填 0 即不分页；语句不支持分页时由 supported 提示 -->
+          <ResultPagination
+            :page="item.result.page"
+            :page-size="item.size"
+            :total="item.result.total"
+            :page-count="item.result.pageCount"
+            :supported="item.result.pageSize > 0 || item.size === 0"
+            :elapsed-ms="item.result.elapsedMs"
+            :loading="running"
+            @change="changeResultPage(item.index, $event)"
+            @size-change="changeResultPageSize(item.index, $event)"
+          />
         </el-tab-pane>
       </el-tabs>
-
-      <span v-if="headMeta" class="executor__result-meta">{{ headMeta }}</span>
     </section>
 
     <!-- 结果行右键菜单：复制为 INSERT / UPDATE / DELETE -->
@@ -1313,34 +1413,15 @@ watch([connId, database, sql], notifyChange)
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  padding: 10px 16px 0;
+  /* 页签栏贴住分界线：上方不留多余空白 */
+  padding: 2px 16px 0;
   /* 徽标相对结果区右上角定位 */
   position: relative;
   /* 与 SQL 查询页一致：结果区上方有一条分界线 */
   border-top: 1px solid var(--border-color);
 }
 
-/*
- * 概要徽标：浮在页签栏右侧（那里通常是空的）。
- * 跟随页签变化且宽度可能变化，限长并截断，避免把页签挤走。
- */
-.executor__result-meta {
-  position: absolute;
-  top: 15px;
-  right: 16px;
-  z-index: 1;
-  max-width: 55%;
-  overflow: hidden;
-  padding: 3px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  background: var(--surface-color);
-  color: var(--text-muted);
-  font-size: var(--app-font-size-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  pointer-events: none;
-}
+/* 结果表格自带滚动，分页控件固定在底部（见 ResultPagination） */
 
 /* 结果表格自己滚动；横向留白与摘要表格对齐（分栏 padding 已足够，不再另加） */
 .executor__result :deep(.result-table) {
@@ -1359,7 +1440,13 @@ watch([connId, database, sql], notifyChange)
 
 .executor__tabs :deep(.el-tabs__header) {
   flex: 0 0 auto;
-  margin: 0 0 8px;
+  margin: 0 0 6px;
+}
+
+/* 页签项收紧到 30px：默认 40px 会在标签上下留出较多空白 */
+.executor__tabs :deep(.el-tabs__item) {
+  height: 30px;
+  line-height: 30px;
 }
 
 .executor__tabs :deep(.el-tabs__content) {

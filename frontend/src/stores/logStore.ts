@@ -8,9 +8,6 @@ export const useLogStore = defineStore('logs', () => {
   /** 日志行集合；每条记录可能包含多行（如请求行 + SQL 缩进） */
   const entries = ref<string[]>([])
 
-  /** 面板是否展开 */
-  const expanded = ref(true)
-
   /** 日志保留上限，由外部（configStore）同步 */
   const maxLines = ref(200)
 
@@ -52,6 +49,16 @@ export const useLogStore = defineStore('logs', () => {
     append(`<< [${now()}] 错误: ${message}`)
   }
 
+  /**
+   * 记录分页改写后的 SQL。
+   *
+   * 请求行照旧展示用户输入的原文，这里补一条「实际执行」——
+   * 界面上把页大小设为 30 之类的值后，能直接看到拼上去的 LIMIT / OFFSET。
+   */
+  function logPagedSQL(sql: string) {
+    append(`<< [分页] 实际执行: ${flattenSql(sql)}`)
+  }
+
   /** 清空日志 */
   function clear() {
     entries.value = []
@@ -67,12 +74,12 @@ export const useLogStore = defineStore('logs', () => {
 
   return {
     entries,
-    expanded,
     maxLines,
     append,
     logRequest,
     logSuccess,
     logError,
+    logPagedSQL,
     clear,
     setMaxLines,
   }
