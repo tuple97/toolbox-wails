@@ -16,7 +16,7 @@
 import type { Extension } from '@codemirror/state'
 import { RangeSet, StateEffect, StateField } from '@codemirror/state'
 import { EditorView, GutterMarker, gutter } from '@codemirror/view'
-import { splitSqlStatements } from '@/utils/sqlStatementRanges'
+import { splitSqlStatements } from '@/utils/sql/sqlStatementRanges'
 
 /** 一条语句的执行状态 */
 export type StatementRunState = 'running' | 'success' | 'error' | 'cancelled'

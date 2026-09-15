@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -69,23 +70,30 @@ func (a *App) RevealPassword(encrypted string) (string, error) {
 // ---------------------------------------------------------------- 查询执行
 
 // ExecuteQuery 执行查询：前置脚本 → 模板渲染 → SQL 执行 → 后置脚本。
-func (a *App) ExecuteQuery(req services.ExecuteRequest) (*services.QueryResult, error) {
+func (a *App) ExecuteQuery(
+	ctx context.Context,
+	req services.ExecuteRequest,
+) (*services.QueryResult, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
 	if req.ConnID <= 0 {
 		return nil, fmt.Errorf("请先选择数据库连接")
 	}
-	return a.dbService.Execute(req)
+	return a.dbService.Execute(ctx, req)
 }
 
 // QueryVariableOptions 执行 SQL 以获取变量的动态选项。
-func (a *App) QueryVariableOptions(connID int64, query string) ([]map[string]any, error) {
+func (a *App) QueryVariableOptions(
+	ctx context.Context,
+	connID int64,
+	query string,
+) ([]map[string]any, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(query) == "" {
 		return make([]map[string]any, 0), nil
 	}
-	return a.dbService.QueryOptionsForVariable(connID, query)
+	return a.dbService.QueryOptionsForVariable(ctx, connID, query)
 }

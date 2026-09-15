@@ -23,7 +23,11 @@ go.work.sum
 # 前端
 # ============================================================
 node_modules/
-frontend/dist/
+# 前端构建产物整体忽略，但保留占位文件：
+# main.go 用 `//go:embed all:frontend/dist` 嵌入产物，目录必须存在，
+# 否则未构建前端时 `go build` / `go run .`（pnpm run dev:app）会直接失败
+frontend/dist/*
+!frontend/dist/.gitkeep
 # Wails 生成的依赖指纹，用于判断是否需要重装依赖
 frontend/package.json.md5
 # Vite 本地缓存

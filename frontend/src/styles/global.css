@@ -439,15 +439,15 @@ html .el-overlay {
 #app-tip {
   position: fixed;
   z-index: 4000;
-  max-width: 320px;
-  padding: 4px 8px;
+  max-width: 340px;
+  padding: 6px 10px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--overlay-bg);
   box-shadow: var(--shadow-md);
   color: var(--text-color);
   font-size: var(--app-font-size-xs);
-  line-height: 1.5;
+  line-height: 1.55;
   word-break: break-word;
   pointer-events: none;
   user-select: none;

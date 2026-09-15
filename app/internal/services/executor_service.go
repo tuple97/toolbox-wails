@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,6 +39,9 @@ type ExecutorRequest struct {
 	Total int64 `json:"total"`
 	// CountTotal 是否重新统计总数；首次执行与页大小变化时应置真
 	CountTotal bool `json:"countTotal"`
+	// AllowProductionWrite 生产库上的写操作确认标记。
+	// 前端的生产库守卫只是提示；后端必须自己兜底，否则改一个布尔就能绕过。
+	AllowProductionWrite bool `json:"allowProductionWrite"`
 }
 
 // ExecutorResult 命令执行器的执行结果。
@@ -74,7 +78,7 @@ type ExecutorResult struct {
 type ExecutorColumn struct {
 	// Name 字段名
 	Name string `json:"name"`
-	// DataType 字段类型（如 varchar / bigint）
+	// DataType 字段的完整类型定义（如 varchar(32) / decimal(10,2) / bigint）
 	DataType string `json:"dataType"`
 	// Comment 字段注释
 	Comment string `json:"comment"`
@@ -119,9 +123,23 @@ func (s *DBService) ExecuteStatement(ctx context.Context, req ExecutorRequest) (
 	}
 	defer db.Close()
 
-	// 只读连接：后端兜底拒绝写操作（前端也会提示，但不能只依赖前端）
-	if conn.ReadOnly && !isQueryStatement(sqlText) {
-		return nil, fmt.Errorf("连接「%s」已设为只读，已拒绝执行该写操作", conn.Name)
+	/*
+	 * 只读连接：后端兜底拒绝写操作（前端也会提示，但不能只依赖前端）。
+	 * 只看首关键字不够 —— `SELECT ... INTO OUTFILE` 会写文件、
+	 * `SELECT ... FOR UPDATE` 会加写锁，它们的首关键字都是 SELECT。
+	 */
+	if conn.ReadOnly {
+		if !isQueryStatement(sqlText) {
+			return nil, fmt.Errorf("连接「%s」已设为只读，已拒绝执行该写操作", conn.Name)
+		}
+		if reason := readOnlyForbiddenReason(sqlText); reason != "" {
+			return nil, fmt.Errorf("连接「%s」已设为只读，已拒绝执行（%s）", conn.Name, reason)
+		}
+	}
+
+	// 生产库：写操作必须有确认标记，后端不信任前端的守卫
+	if conn.IsProduction && !isQueryStatement(sqlText) && !req.AllowProductionWrite {
+		return nil, fmt.Errorf("连接「%s」已标记为生产库，写操作需要确认后才能执行", conn.Name)
 	}
 
 	/*
@@ -302,6 +320,31 @@ func isQueryStatement(sqlText string) bool {
 	return false
 }
 
+/*
+ * 只读连接下仍可能藏着的写操作。
+ *
+ * 这些写法的首关键字都是 SELECT，`isQueryStatement` 会放行，
+ * 因此需要在只读连接上额外拦一道。
+ */
+var readOnlyForbidden = []struct {
+	pattern *regexp.Regexp
+	reason  string
+}{
+	{regexp.MustCompile(`(?i)\binto\s+(outfile|dumpfile)\b`), "SELECT ... INTO OUTFILE 会把结果写到服务器文件"},
+	{regexp.MustCompile(`(?i)\bfor\s+update\b`), "SELECT ... FOR UPDATE 会加排他写锁"},
+	{regexp.MustCompile(`(?i)\block\s+in\s+share\s+mode\b`), "LOCK IN SHARE MODE 会加共享锁"},
+}
+
+// readOnlyForbiddenReason 命中上面的写法时返回原因，否则返回空串。
+func readOnlyForbiddenReason(sqlText string) string {
+	for _, item := range readOnlyForbidden {
+		if item.pattern.MatchString(sqlText) {
+			return item.reason
+		}
+	}
+	return ""
+}
+
 // ListDatabases 返回连接可见的所有数据库（库选择下拉）。
 func (s *DBService) ListDatabases(ctx context.Context, connID int64) ([]string, error) {
 	conn, err := s.repo.GetConnection(connID)
@@ -362,12 +405,31 @@ func (s *DBService) ListTableColumns(ctx context.Context, connID int64, database
 	// 只有 MySQL 的 information_schema.columns 带注释列
 	var query string
 	if isPostgresType(conn.DBType) {
-		query = `SELECT column_name, data_type, ''
+		/*
+		 * PostgreSQL 的 data_type 不带长度（`character varying`），
+		 * 这里用 udt_name + 长度 / 精度拼出展示用类型（varchar(32) / numeric(10,2)）：
+		 *  - character_maximum_length 只对字符类型有值，其它类型为 NULL；
+		 *  - numeric_precision / numeric_scale 对整数类型同样有值，必须限定在 numeric / decimal 上；
+		 *  - 数组类型的 udt_name 是 `_int4` 这种内部名，直接用 data_type（ARRAY）。
+		 */
+		query = `SELECT column_name,
+		                CASE
+		                  WHEN data_type = 'ARRAY' THEN data_type
+		                  WHEN data_type = 'character' AND character_maximum_length IS NOT NULL
+		                    THEN 'char(' || character_maximum_length || ')'
+		                  WHEN character_maximum_length IS NOT NULL
+		                    THEN udt_name || '(' || character_maximum_length || ')'
+		                  WHEN data_type IN ('numeric', 'decimal') AND numeric_precision IS NOT NULL
+		                    THEN udt_name || '(' || numeric_precision || ',' || COALESCE(numeric_scale, 0) || ')'
+		                  ELSE udt_name
+		                END,
+		                ''
 		         FROM information_schema.columns
 		         WHERE table_schema = ? AND table_name = ?
 		         ORDER BY ordinal_position`
 	} else {
-		query = `SELECT column_name, data_type, column_comment
+		// MySQL / MariaDB 的 column_type 本身就是完整定义（varchar(32) / decimal(10,2) / enum('a','b')）
+		query = `SELECT column_name, column_type, column_comment
 		         FROM information_schema.columns
 		         WHERE table_schema = ? AND table_name = ?
 		         ORDER BY ordinal_position`

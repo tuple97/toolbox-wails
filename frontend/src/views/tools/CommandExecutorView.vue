@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { EditorView } from '@codemirror/view'
-import { ElMessage } from 'element-plus'
-import MonacoEditor from '@/components/MonacoEditor.vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import CodeEditor from '@/components/CodeEditor.vue'
 import ResultTable from '@/components/ResultTable.vue'
 import ResultPagination from '@/components/ResultPagination.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
 import ScriptSummary from '@/components/ScriptSummary.vue'
 import ConnectionSelect from '@/components/ConnectionSelect.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
-import { copyRowSql, dialectOf, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/utils/rowSql'
-import { formatSql, minifySql as minifySqlText } from '@/utils/sqlFormat'
+import { copyRowSql, dialectOf, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/utils/sql/rowSql'
+import { formatSql, minifySql as minifySqlText } from '@/utils/sql/sqlFormat'
 import { copyText } from '@/utils/clipboard'
 import { fetchConnections } from '@/api/db'
 import { DEFAULT_PAGE_SIZE } from '@/api/templates'
@@ -21,16 +21,16 @@ import {
 import {
   registerCompletionContext,
   unregisterCompletionContext,
-} from '@/utils/sqlCompletion'
+} from '@/utils/sql/sqlCompletion'
 import { useMetadataStore } from '@/stores/metadataStore'
-import { splitSqlStatements, statementAtCursor, statementEndWithSemicolon } from '@/utils/sqlStatementRanges'
+import { splitSqlStatements, statementAtCursor, statementEndWithSemicolon } from '@/utils/sql/sqlStatementRanges'
 import {
   setStatementRunStates,
   statementRunKey,
   type RunnableStatement,
   type StatementRunState,
   type StatementRunStates,
-} from '@/utils/sqlRunGutter'
+} from '@/utils/sql/sqlRunGutter'
 import { useLogStore } from '@/stores/logStore'
 import type {
   ContextMenuAction,
@@ -84,7 +84,7 @@ const editorHeight = ref(320)
 const MIN_EDITOR = 120
 const MIN_RESULT = 140
 
-/** 编辑器实例（MonacoEditor 的 mount 事件给出，现为 CM6 的 EditorView） */
+/** 编辑器实例（由 CodeEditor 的 mount 事件给出，即 CM6 的 EditorView） */
 let editorView: EditorView | null = null
 
 /** 进行中的可取消调用，取消按钮用 */
@@ -688,6 +688,46 @@ function applyFormat() {
   }
 }
 
+/** 与后端 isQueryStatement 同口径的查询关键字（其余一律按写操作处理） */
+const QUERY_KEYWORDS = new Set([
+  'select', 'show', 'describe', 'desc', 'explain', 'table', 'values',
+])
+
+/**
+ * 是否写操作。
+ *
+ * 后端会用同一口径兜底校验，这里只是用来决定要不要弹确认框——
+ * 判宽一点（把 WITH 也当写操作）最多多问一次，判窄了会漏掉生产库写操作。
+ */
+function isWriteStatement(sql: string): boolean {
+  const first = /^\s*[a-z_]+/i.exec(sql)?.[0].trim().toLowerCase() ?? ''
+  return first !== '' && !QUERY_KEYWORDS.has(first)
+}
+
+/**
+ * 生产库写操作的执行前确认。
+ *
+ * 后端会校验请求里的 allowProductionWrite 标记（前端提示拦不住 DevTools 改参数），
+ * 这里只是把「确认」这一步显式交给用户。未确认返回 false。
+ */
+async function confirmProductionWrite(sql: string): Promise<boolean> {
+  const conn = currentConnection.value
+  if (!conn?.isProduction || !isWriteStatement(sql)) {
+    return true
+  }
+  try {
+    await ElMessageBox.confirm(
+      `连接「${conn.name}」标记为生产库，即将执行写操作且不可撤销。确认继续？`,
+      '生产库写操作确认',
+      { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' },
+    )
+    return true
+  }
+  catch {
+    return false
+  }
+}
+
 /**
  * 执行单条语句：与脚本执行共用同一套「摘要 + 结果N」页签展示。
  *
@@ -699,6 +739,9 @@ async function runSingle(sqlText: string, options: { stateKey?: string, analysis
   const id = connId.value
   if (!id) {
     ElMessage.warning('请先选择数据库连接')
+    return
+  }
+  if (!(await confirmProductionWrite(sqlText))) {
     return
   }
 
@@ -739,6 +782,8 @@ async function runSingle(sqlText: string, options: { stateKey?: string, analysis
     page: pageSize.value > 0 ? 1 : 0,
     pageSize: pageSize.value,
     countTotal: pageSize.value > 0,
+    // 生产库写操作：已在上一步弹窗确认，后端仍会校验这个标记
+    allowProductionWrite: currentConnection.value?.isProduction ?? false,
   })
   runningCall = call
 
@@ -871,6 +916,16 @@ async function runScript(script: string, mode: 'run' | 'analyze' = 'run') {
     `>> 开始${analyze ? '分析' : '执行'}脚本（库 ${effectiveDatabase.value || '未指定'}），共 ${statements.length} 条语句`,
   )
 
+  /*
+   * 生产库：脚本里只要含写操作，开始前统一确认一次。
+   * 后端仍会逐条校验 allowProductionWrite，这里的弹窗只是交互。
+   */
+  const writeStatement = statements.find(item => isWriteStatement(sqlOf(item)))
+  if (writeStatement && !(await confirmProductionWrite(sqlOf(writeStatement)))) {
+    logStore.append('-- 已取消：生产库写操作未确认')
+    return
+  }
+
   let cancelled = false
   for (let i = 0; i < statements.length; i++) {
     const index = i + 1
@@ -896,6 +951,7 @@ async function runScript(script: string, mode: 'run' | 'analyze' = 'run') {
       page: pageSize.value > 0 ? 1 : 0,
       pageSize: pageSize.value,
       countTotal: pageSize.value > 0,
+      allowProductionWrite: currentConnection.value?.isProduction ?? false,
     })
     runningCall = call
 
@@ -1012,6 +1068,8 @@ async function reloadResultPage(index: number, page: number, size: number) {
     pageSize: size,
     total: reuseTotal ? entry.result.total : 0,
     countTotal: !reuseTotal,
+    // 翻页重跑的是已确认过的语句
+    allowProductionWrite: true,
   })
   runningCall = call
 
@@ -1256,9 +1314,10 @@ watch([connId, database, sql, pageSize], notifyChange)
       :style="{ height: `${editorHeight}px` }"
       @keydown.capture="handleKeydown"
     >
-      <MonacoEditor
+      <CodeEditor
         v-model="sql"
         language="sql"
+        completion-mode="sql"
         :db-type="currentConnection?.dbType ?? ''"
         height="100%"
         show-statement-frames

@@ -9,7 +9,7 @@
  */
 import { syntaxTree } from '@codemirror/language'
 import type { EditorState } from '@codemirror/state'
-import { statementAtCursor } from '@/utils/sqlStatementRanges'
+import { statementAtCursor } from '@/utils/sql/sqlStatementRanges'
 
 /**
  * 语法树节点类型：从 `syntaxTree` 的返回值推导。
@@ -48,8 +48,18 @@ export function inLiteralOrComment(state: EditorState, pos: number): boolean {
  * 用于补全的别名解析：`Parens` 是语法树给的嵌套括号节点，逐层向上收集，
  * 内层先命中（内层别名遮蔽外层，符合 SQL 的作用域规则）；
  * 最外层补上光标所在语句的范围。语法树拿不到嵌套信息时就只剩语句本身这一层。
+ *
+ * @param statement 显式指定最外层语句范围；不传时按「光标归属」（`statementAtCursor`）
+ *   推算。补全场景应传入自己的范围计算——补全发生在「正在写」的时候，
+ *   光标常停在语句末尾空白或新起的一行上，执行口径的归属会返回 null。
  */
-export function scopeRanges(state: EditorState, pos: number, text: string, dbType = ''): TextRange[] {
+export function scopeRanges(
+  state: EditorState,
+  pos: number,
+  text: string,
+  dbType = '',
+  statement?: TextRange | null,
+): TextRange[] {
   const scopes: TextRange[] = []
   const tree = syntaxTree(state)
   let node: SyntaxNode | null = tree.resolveInner(pos, -1)
@@ -60,9 +70,9 @@ export function scopeRanges(state: EditorState, pos: number, text: string, dbTyp
     node = node.parent
   }
 
-  const statement = statementAtCursor(text, pos, dbType)
-  if (statement) {
-    scopes.push({ from: statement.from, to: statement.to })
+  const range = statement ?? statementAtCursor(text, pos, dbType)
+  if (range) {
+    scopes.push({ from: range.from, to: range.to })
   }
   return scopes
 }

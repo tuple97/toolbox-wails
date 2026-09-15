@@ -3,7 +3,7 @@ import { computed, nextTick, ref, shallowRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { EditorView } from '@codemirror/view'
 import ContextMenu from '@/components/ContextMenu.vue'
-import MonacoEditor from '@/components/MonacoEditor.vue'
+import CodeEditor from '@/components/CodeEditor.vue'
 import { copyText } from '@/utils/clipboard'
 import { useLogStore } from '@/stores/logStore'
 import { LOG_LANGUAGE_ID } from '@/utils/logLanguage'
@@ -174,9 +174,10 @@ defineExpose({
     @keydown="handleKeydown"
   >
     <div class="log-panel__body">
-      <MonacoEditor
+      <CodeEditor
         :model-value="logText"
         :language="LOG_LANGUAGE_ID"
+        completion-mode="none"
         readonly
         disable-suggestions
         height="100%"

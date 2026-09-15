@@ -114,7 +114,8 @@ func (a *App) init() error {
 		return err
 	}
 
-	cipher, err := utils.NewCipher(dataDir)
+	// 密钥与数据库分开放：主密钥进系统凭证，回退目录也避开数据目录
+	cipher, err := utils.NewCipher(dataDir, resolveKeyDir())
 	if err != nil {
 		return fmt.Errorf("初始化加密器失败: %w", err)
 	}
@@ -153,6 +154,18 @@ func resolveDataDir() (string, error) {
 		base = filepath.Dir(exe)
 	}
 	return filepath.Join(base, "Toolbox"), nil
+}
+
+// resolveKeyDir 返回主密钥的回退目录。
+//
+// 只有系统凭证不可用（Linux 无 Secret Service 等）时才会用到它。
+// 刻意与数据库目录（os.UserConfigDir）分开：两者同目录的话，
+// 拿到用户目录就等于同时拿到密钥和密文，加密就没有意义了。
+func resolveKeyDir() string {
+	if base, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(base, "Toolbox")
+	}
+	return ""
 }
 
 // Greet 返回一句问候语，用于演示前后端调用链路。

@@ -1,14 +1,13 @@
 /**
  * 执行记录面板的自定义日志语言与「四套编辑器主题」。
  *
- * 迁移说明（Monaco → CodeMirror 6）：
- *  - 这里从「Monaco 主题注册表」变成「按需生成的 CM6 扩展」：
- *    EditorView.theme 负责渲染层（背景/光标/选区/行号/浮层），
- *    HighlightStyle 负责语法高亮层（token → 颜色）。
- *  - EditorPalette 与 PALETTES 数据原样保留（调色板是设计资产，与编辑器无关），
- *    只是把它们展开成 CM6 的两层扩展，而不是 Monaco 的 rules + colors 表。
- *  - CM6 的主题是 per-editor 扩展（通过 Compartment 动态切换），
- *    因此不再需要 Monaco 时代「主题全局唯一」的那套说明。
+ * 主题分两层：
+ *  - EditorView.theme 负责渲染层（背景 / 光标 / 选区 / 行号 / 浮层）；
+ *  - HighlightStyle 负责语法高亮层（token → 颜色）。
+ *
+ * EditorPalette 与 PALETTES 是设计资产（与具体编辑器无关），
+ * 在这里被展开成 CM6 的两层扩展；主题是 per-editor 扩展，
+ * 通过 Compartment 动态切换，不依赖任何全局注册表。
  */
 import { HighlightStyle, StreamLanguage, syntaxHighlighting } from '@codemirror/language'
 import type { StreamParser } from '@codemirror/language'
@@ -55,7 +54,7 @@ const SQL_KEYWORDS = [
   'create', 'alter', 'drop', 'table', 'index', 'view', 'with', 'over', 'partition',
 ]
 
-/** 一条 token 配色规则（原 Monaco ITokenThemeRule 的最小化等价物） */
+/** 一条 token 配色规则（token 选择器 → 颜色） */
 interface TokenRule {
   token: string
   /** 不带 # 的十六进制颜色 */
@@ -337,7 +336,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
 
   const theme = EditorView.theme(
     {
-      // 背景透明：编辑器要融入所在容器（沿用原 Monaco 全局规则的观感）
+      // 背景透明：编辑器要融入所在容器
       '&': {
         color: h(palette.foreground),
         backgroundColor: 'transparent',
@@ -373,40 +372,56 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         backgroundColor: 'transparent',
         color: h(palette.lineNumberActive),
       },
+      /*
+       * 浮层（补全列表 / 悬停卡片）统一观感：圆角 + 阴影 + 克制的边框。
+       * 内边距交给各自的容器，这里不设 padding；圆角要裁到内部内容上，
+       * 所以带上 overflow: hidden。
+       */
       '.cm-tooltip': {
         backgroundColor: h(palette.widget),
         border: `1px solid ${h(palette.border)}`,
+        borderRadius: '8px',
+        boxShadow: palette.dark
+          ? '0 12px 30px rgba(0, 0, 0, 0.45)'
+          : '0 12px 30px rgba(15, 23, 42, 0.16)',
         color: h(palette.foreground),
+        overflow: 'hidden',
+      },
+      '.cm-tooltip-autocomplete': {
+        fontStyle: 'normal',
+        padding: '4px',
+      },
+      '.cm-tooltip-autocomplete > ul': {
+        maxHeight: '300px',
+      },
+      '.cm-tooltip-autocomplete > ul > li': {
+        color: h(palette.foreground),
+        // 基础主题的行内边距偏挤，放松一点，同时给选中行留出圆角
+        padding: '4px 8px',
+        borderRadius: '5px',
       },
       '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
         backgroundColor: h(palette.selection),
         color: h(palette.foreground),
       },
-      '.cm-tooltip-autocomplete > ul > li': {
-        color: h(palette.foreground),
-        // 基础主题的行内边距偏挤，稍微放松一点（配合浮层使用编辑器字体的观感）
-        padding: '2px 6px',
-      },
       /*
        * 补全弹层排版：CM6 基础主题会给「匹配到的片段」加下划线、
-       * 给 detail 加斜体，这里都换成更克制的做法——
-       * 匹配片段用品牌色底纹标记，detail 恢复正体并降低不透明度。
+       * 给 detail 加斜体。这里改成「命中片段用品牌色加粗」——
+       * 比底色块克制，深色底上也不会显脏。
        */
-      '.cm-tooltip-autocomplete': {
-        fontStyle: 'normal',
-      },
       '.cm-tooltip-autocomplete ul li .cm-completionMatchedText': {
         textDecoration: 'none',
-        backgroundColor: `${h(palette.accent)}40`,
-        borderRadius: '2px',
+        color: h(palette.accent),
+        fontWeight: '600',
       },
       '.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionMatchedText': {
-        backgroundColor: `${h(palette.accent)}80`,
+        color: h(palette.accent),
       },
       '.cm-tooltip-autocomplete ul li .cm-completionDetail': {
-        marginLeft: '0.6em',
+        marginLeft: '0.75em',
         fontStyle: 'normal',
-        opacity: '0.7',
+        fontSize: '0.92em',
+        opacity: '0.55',
       },
       /*
        * 列名多选勾选框（DOM 由 CodeEditor.vue 的 renderColumnCheckbox 提供）：
@@ -416,14 +431,19 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: '0.9em',
-        height: '0.9em',
-        marginRight: '0.5em',
+        width: '0.85em',
+        height: '0.85em',
+        marginRight: '0.55em',
         border: `1px solid ${h(palette.lineNumber)}`,
-        borderRadius: '2px',
+        borderRadius: '3px',
         color: '#fff',
+        // 与文本基线对齐（inline-flex 默认按底边对齐会偏下）
+        verticalAlign: '-1px',
         // 勾选框只是状态显示，点击仍然交给整行（点击即插入）
         pointerEvents: 'none',
+      },
+      '.cm-tooltip-autocomplete ul li[aria-selected] .cm-sqlcheck': {
+        borderColor: h(palette.lineNumberActive),
       },
       '.cm-tooltip-autocomplete ul li .cm-sqlcheck[data-checked="true"]': {
         borderColor: h(palette.accent),
@@ -431,8 +451,51 @@ export function editorThemeExtensions(themeName: string): Extension[] {
       },
       '.cm-tooltip-autocomplete ul li .cm-sqlcheck[data-checked="true"]::after': {
         content: '"✓"',
-        fontSize: '0.75em',
+        fontSize: '0.72em',
         lineHeight: '1',
+      },
+      /*
+       * 列候选的描述区（DOM 由 CodeEditor.vue 的 renderColumnDetail 提供）：
+       * 「类型 · 来源 · 注释」三段，靠间距分隔；来源与注释各带一个小图标，
+       * 与悬停卡片同一套视觉语言（不再拼成一串 `·`）。
+       */
+      '.cm-tooltip-autocomplete ul li .cm-column-detail': {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.7em',
+        marginLeft: '1.1em',
+        fontSize: '0.92em',
+        opacity: '0.6',
+      },
+      '.cm-tooltip-autocomplete ul li[aria-selected] .cm-column-detail': {
+        opacity: '0.9',
+      },
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__part': {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.28em',
+      },
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__type': {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      },
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__icon': {
+        display: 'inline-flex',
+        alignItems: 'center',
+        opacity: '0.75',
+      },
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__icon svg': {
+        width: '0.95em',
+        height: '0.95em',
+      },
+      /*
+       * 错误标记（模板语法校验等，装饰由 utils/editorErrors.ts 提供）：
+       * 底部红色波浪线，悬停显示消息（文案挂在 title 上，走全局提示代理）。
+       */
+      '.cm-error-mark': {
+        textDecoration: `underline wavy ${palette.dark ? '#f87171' : '#dc2626'}`,
+        // 下划线穿过下伸部（g / y 等），更接近 IDE 的波浪线观感
+        textDecorationSkipInk: 'none',
+        textUnderlineOffset: '3px',
       },
       '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': {
         backgroundColor: h(palette.selection),

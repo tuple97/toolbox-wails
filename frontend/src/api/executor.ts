@@ -21,6 +21,8 @@ export function executeStatement(req: ExecutorRequest): CancellablePromise<Execu
     pageSize: req.pageSize ?? 0,
     total: req.total ?? 0,
     countTotal: req.countTotal ?? false,
+    // 生产库写操作的确认标记（后端会校验，默认不确认）
+    allowProductionWrite: req.allowProductionWrite ?? false,
   }) as unknown as CancellablePromise<ExecutorResult>
 }
 

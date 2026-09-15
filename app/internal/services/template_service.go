@@ -79,10 +79,11 @@ func (s *TemplateService) Delete(id int64) error {
 //
 // 实现基于 text/template 的预处理与字段引用提取，
 // 支持 {{if device_no}}、{{range list}}、{{quote name}} 等写法。
+//
+// **刻意不做语法校验**：这个方法是编辑时实时调用的（前端防抖 500ms），
+// 半成品语法是常态；一校验就会在每次输入后报错弹窗。
+// 语法问题交给 CheckTemplate（编辑器标波浪线）与 Save（保存前拦截）负责。
 func (s *TemplateService) ExtractVariables(sqlText string) ([]string, error) {
-	if err := utils.ValidateTemplate(sqlText); err != nil {
-		return nil, err
-	}
 	names := utils.ExtractTemplateVariables(sqlText)
 	if names == nil {
 		names = make([]string, 0)

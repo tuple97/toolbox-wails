@@ -7,6 +7,7 @@ import {
   PreviewTemplate,
   SaveSqlTemplate,
   ValidateScript,
+  ValidateTemplate,
 } from './bindings'
 import type {
   QueryResult,
@@ -90,6 +91,28 @@ export function previewTemplate(
 /** 校验前置/后置脚本语法 */
 export function validateScript(source: string): Promise<void> {
   return ValidateScript(source)
+}
+
+/**
+ * 模板语法校验结果。
+ *
+ * 校验失败不是异常：位置与消息就是返回值，界面据此在编辑器里标红波浪线，
+ * 不再弹「模板语法错误」这种定位不了的提示框。
+ */
+export interface TemplateCheckResult {
+  /** 语法是否通过 */
+  valid: boolean
+  /** 出错行号（1 起）；拿不到时为 0 */
+  line: number
+  /** 出错列号（1 起）；拿不到时为 0 */
+  column: number
+  /** 可读的错误消息 */
+  message: string
+}
+
+/** 校验模板语法（纯语法解析，不依赖连接，可在编辑时实时调用） */
+export function validateTemplate(sqlText: string): Promise<TemplateCheckResult> {
+  return ValidateTemplate(sqlText) as unknown as Promise<TemplateCheckResult>
 }
 
 /**

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useDictStore } from '@/stores/dictStore'
 import { buildColumns, createMappingLookup, formatCell } from '@/utils/dictFormatter'
-import { suggestionsForRow } from '@/utils/explainTips'
+import { suggestionsForRow } from '@/utils/sql/explainTips'
 import type { FieldMapping, QueryResult } from '@/types'
 
 const props = withDefaults(defineProps<{
@@ -175,10 +175,25 @@ function rowIndex(index: number): number {
 /*
  * 分析建议气泡：teleport 到 body，scoped 样式够不到，所以放开为全局类。
  * 内容是多条建议（换行分隔），必须保留换行。
+ *
+ * 外观也统一成应用自己的浮层观感（与编辑器里的列悬停卡片一致）：
+ * Element Plus 默认的纯黑小方块在亮色主题下很突兀、圆角与内边距也偏紧。
  */
-.result-table-tip {
+.result-table-tip.el-popper {
   max-width: 480px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--overlay-bg);
+  box-shadow: var(--shadow-md);
+  color: var(--text-color);
+  font-size: var(--app-font-size-xs);
   white-space: pre-line;
   line-height: 1.7;
+}
+
+.result-table-tip.el-popper .el-popper__arrow::before {
+  background: var(--overlay-bg);
+  border-color: var(--border-color);
 }
 </style>

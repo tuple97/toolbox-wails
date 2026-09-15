@@ -8,7 +8,7 @@
  *    注释直接丢弃即可，引库反而更重。
  */
 import { format } from 'sql-formatter'
-import type { SqlDialect } from '@/utils/rowSql'
+import type { SqlDialect } from '@/utils/sql/rowSql'
 
 /** 美化 SQL（按方言） */
 export function formatSql(sql: string, dialect: SqlDialect): string {

@@ -185,6 +185,43 @@ func TestRenderSQL_SyntaxError(t *testing.T) {
 	}
 }
 
+func TestCheckTemplate_OK(t *testing.T) {
+	check := CheckTemplate(`select * from users where id = {{ id }} {{if env}} and a = 1{{end}}`)
+	if !check.Valid {
+		t.Fatalf("应当校验通过，实际: %+v", check)
+	}
+	if check.Line != 0 || check.Message != "" {
+		t.Errorf("通过时不应带位置与消息: %+v", check)
+	}
+}
+
+func TestCheckTemplate_ReportsLine(t *testing.T) {
+	// 第 3 行的 {{ 没闭合：行号应指向它，消息里不该再带 `template: sql:…:` 前缀
+	check := CheckTemplate("SELECT 1\nSELECT 2\nSELECT {{ id ")
+	if check.Valid {
+		t.Fatal("未闭合的标记应当校验失败")
+	}
+	if check.Line != 3 {
+		t.Errorf("行号应为 3，实际 %d（消息：%s）", check.Line, check.Message)
+	}
+	if strings.Contains(check.Message, "template:") {
+		t.Errorf("消息应剥掉模板前缀，实际: %s", check.Message)
+	}
+}
+
+func TestCheckTemplate_SyntaxError(t *testing.T) {
+	check := CheckTemplate(`select * from t {{ if }}`)
+	if check.Valid {
+		t.Fatal("语法错误应当校验失败")
+	}
+	if check.Line <= 0 {
+		t.Errorf("应当解析出行号，实际: %+v", check)
+	}
+	if check.Message == "" {
+		t.Error("应当给出可读的错误消息")
+	}
+}
+
 func TestExtractTemplateVariables(t *testing.T) {
 	names := ExtractTemplateVariables(
 		`select * from t where a = {{ device_no }} {{if env}} and b = {{ quote user_name }}{{end}}`,

@@ -20,6 +20,9 @@ import * as database$0 from "./internal/database/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as services$0 from "./internal/services/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as utils$0 from "./internal/utils/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -458,6 +461,21 @@ export function ValidateScript(source) {
 }
 
 /**
+ * ValidateTemplate 校验模板语法，返回错误位置供编辑器标注（红色波浪线）。
+ * 
+ * 刻意不返回 error、也不依赖数据库连接：纯语法检查，编辑过程中随时可调，
+ * 校验失败时把位置与消息作为结果返回，界面就不会再弹「模板语法错误」这种
+ * 定位不了的提示。
+ * @param {string} sqlText
+ * @returns {$CancellablePromise<utils$0.TemplateCheck>}
+ */
+export function ValidateTemplate(sqlText) {
+    return $Call.ByID(3453963828, sqlText).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType28($result);
+    }));
+}
+
+/**
  * WindowClose 关闭窗口并退出应用。
  * @returns {$CancellablePromise<void>}
  */
@@ -518,3 +536,4 @@ const $$createType24 = $Create.Array($$createType10);
 const $$createType25 = $Create.Map($Create.Any, $$createType17);
 const $$createType26 = $Create.Map($Create.Any, $Create.Any);
 const $$createType27 = $Create.Array($$createType26);
+const $$createType28 = utils$0.TemplateCheck.createFrom;

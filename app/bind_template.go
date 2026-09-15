@@ -1,11 +1,13 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"toolbox-wails/app/internal/database"
 	"toolbox-wails/app/internal/services"
+	"toolbox-wails/app/internal/utils"
 )
 
 // ---------------------------------------------------------------- SQL 模板
@@ -79,6 +81,15 @@ func (a *App) ExtractTemplateVariables(sqlText string) ([]string, error) {
 	return a.templates.ExtractVariables(sqlText)
 }
 
+// ValidateTemplate 校验模板语法，返回错误位置供编辑器标注（红色波浪线）。
+//
+// 刻意不返回 error、也不依赖数据库连接：纯语法检查，编辑过程中随时可调，
+// 校验失败时把位置与消息作为结果返回，界面就不会再弹「模板语法错误」这种
+// 定位不了的提示。
+func (a *App) ValidateTemplate(sqlText string) utils.TemplateCheck {
+	return utils.CheckTemplate(sqlText)
+}
+
 // PreviewTemplate 渲染模板，返回最终 SQL。
 func (a *App) PreviewTemplate(sqlText string, variables map[string]any) (string, error) {
 	if err := a.ready(); err != nil {
@@ -105,7 +116,10 @@ func (a *App) ValidateScript(source string) error {
 //
 // req 中的 Page / PageSize 仅在模板开启分页时生效，未开启时后端会自动忽略。
 // Total 与 CountTotal 用于翻页时复用总数：翻页传上次返回的 total 且 CountTotal=false。
-func (a *App) ExecuteTemplateQuery(req services.TemplateExecuteRequest) (*services.QueryResult, error) {
+func (a *App) ExecuteTemplateQuery(
+	ctx context.Context,
+	req services.TemplateExecuteRequest,
+) (*services.QueryResult, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
@@ -113,5 +127,6 @@ func (a *App) ExecuteTemplateQuery(req services.TemplateExecuteRequest) (*servic
 		return nil, fmt.Errorf("请先选择 SQL 模板")
 	}
 
-	return a.dbService.ExecuteTemplateQuery(req)
+	// ctx 由 Wails 注入：前端「取消」时同步中断数据库端的语句
+	return a.dbService.ExecuteTemplateQuery(ctx, req)
 }

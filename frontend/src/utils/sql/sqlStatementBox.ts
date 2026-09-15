@@ -26,7 +26,7 @@
 import type { EditorView, LayerMarker, ViewUpdate } from '@codemirror/view'
 import * as cmView from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
-import { statementAtCursor, statementEndWithSemicolon } from '@/utils/sqlStatementRanges'
+import { statementAtCursor, statementEndWithSemicolon } from '@/utils/sql/sqlStatementRanges'
 
 /** 边框与文字之间留的呼吸感（像素） */
 const BOX_INSET_PX = 2

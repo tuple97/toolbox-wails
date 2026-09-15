@@ -2,7 +2,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Events } from '@wailsio/runtime'
-import MonacoEditor from '@/components/MonacoEditor.vue'
+import type { EditorView } from '@codemirror/view'
+import CodeEditor from '@/components/CodeEditor.vue'
+import { registerScriptGlobals, registerTemplateContext } from '@/utils/sql/sqlCompletion'
 import VariableConfigPanel from '@/components/VariableConfigPanel.vue'
 import FieldMappingPanel from '@/components/FieldMappingPanel.vue'
 import ConnectionSelect from '@/components/ConnectionSelect.vue'
@@ -13,10 +15,12 @@ import {
   persistTemplate,
   removeTemplate,
   validateScript,
+  validateTemplate,
 } from '@/api/templates'
+import type { TemplateCheckResult } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
-import { SNIPPET_CATEGORIES, SQL_SNIPPETS } from '@/utils/sqlSnippets'
-import type { SqlSnippet } from '@/utils/sqlSnippets'
+import { SNIPPET_CATEGORIES, SQL_SNIPPETS } from '@/utils/sql/sqlSnippets'
+import type { SqlSnippet } from '@/utils/sql/sqlSnippets'
 import type {
   DBConnection,
   FieldMapping,
@@ -106,6 +110,8 @@ async function loadTemplate(id: number) {
     fieldMappings.value = reuseUnchanged(parseJSON<FieldMapping[]>(tpl.fieldMappings, []))
 
     await refreshVariables()
+    // 存的模板也可能带语法错误（旧数据 / 手工改库），载入后立刻标出来
+    await checkTemplate()
   }
   catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
@@ -165,11 +171,51 @@ async function refreshVariables() {
     )
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    const message = e instanceof Error ? e.message : String(e)
+    // 模板语法错误不弹窗：编辑时半成品语法很常见，位置已在编辑器上用波浪线标出
+    if (!message.includes('模板语法错误')) {
+      ElMessage.error(message)
+    }
   }
 }
 
-/** SQL 变化后防抖重新解析 */
+/**
+ * 校验模板语法，把错误标在编辑器上（底部红色波浪线）。
+ *
+ * 刻意**不弹提示框**：编辑过程中半成品语法很常见，弹窗只会打断输入，
+ * 而且「模板语法错误」这种文案定位不到位置，不如直接在出错的那一行划线。
+ */
+async function checkTemplate() {
+  const text = form.sqlText
+  try {
+    const result = await validateTemplate(text)
+    applyCheckResult(text, result)
+  }
+  catch {
+    // 校验请求失败（服务未就绪等）：不打扰编辑，等下一次防抖再试
+  }
+}
+
+/** 把校验结果画到编辑器上 */
+function applyCheckResult(text: string, result: TemplateCheckResult) {
+  // 校验期间用户又改了内容：丢弃这次结果，等下一次防抖
+  if (text !== form.sqlText) {
+    return
+  }
+
+  if (result.valid) {
+    sqlEditorRef.value?.setErrors([])
+    return
+  }
+  sqlEditorRef.value?.setErrors([{
+    // 拿不到行号时退到第一行：至少有个入口能看到消息（悬停可看）
+    line: result.line > 0 ? result.line : 1,
+    column: result.column,
+    message: result.message || '模板语法错误',
+  }])
+}
+
+/** SQL 变化后防抖重新解析与校验 */
 let parseTimer: number | null = null
 function scheduleParse() {
   if (parseTimer !== null) {
@@ -178,6 +224,7 @@ function scheduleParse() {
   parseTimer = window.setTimeout(() => {
     parseTimer = null
     void refreshVariables()
+    void checkTemplate()
   }, 500)
 }
 
@@ -199,6 +246,7 @@ function handleCreate() {
   variableConfigs.value = []
   fieldMappings.value = []
   detectedVariables.value = []
+  sqlEditorRef.value?.setErrors([])
 }
 
 /** 保存模板 */
@@ -214,6 +262,25 @@ async function handleSave() {
   if (!form.sqlText.trim()) {
     ElMessage.warning('SQL 内容不能为空')
     return
+  }
+
+  /*
+   * 保存前校验模板语法：失败时在编辑器上标出出错位置并滚动过去，不弹提示框
+   * （校验请求本身失败时放行，避免因为一次请求异常就保存不了）。
+   */
+  try {
+    const check = await validateTemplate(form.sqlText)
+    if (!check.valid) {
+      sqlEditorRef.value?.setErrors([{
+        line: check.line > 0 ? check.line : 1,
+        column: check.column,
+        message: check.message || '模板语法错误',
+      }], { reveal: true })
+      return
+    }
+  }
+  catch {
+    // 忽略：校验不可用时不阻塞保存
   }
 
   // 保存前校验脚本语法，避免存入不可用脚本
@@ -278,10 +345,41 @@ async function handleDelete(item: TemplateListItem) {
   }
 }
 
+// ------------------------------------------------------------ 编辑器补全上下文
+
+/**
+ * SQL 编辑器：登记模板变量，供 `{{ … }}` 内的补全使用。
+ *
+ * 传 getter 而不是快照：变量配置随编辑实时变化，补全时要读最新值。
+ * SQL 部分的表/列候选走编辑器自己的 SQL 上下文（模板编辑器没有连接上下文，
+ * 会退化为关键字 + 函数，见 utils/sqlCompletion.ts）。
+ */
+function handleSqlEditorMount(view: EditorView) {
+  registerTemplateContext(view, () => variableConfigs.value.map(item => ({
+    name: item.name,
+    label: item.label,
+  })))
+}
+
+/** 前置脚本可用的全局标识符：注入的变量名 + variables / sqlTemplate */
+function handlePreScriptMount(view: EditorView) {
+  registerScriptGlobals(view, () => [
+    'variables',
+    'sqlTemplate',
+    'console',
+    ...variableConfigs.value.map(item => item.name),
+  ])
+}
+
+/** 后置脚本可用的全局标识符：rows */
+function handlePostScriptMount(view: EditorView) {
+  registerScriptGlobals(view, () => ['rows', 'console'])
+}
+
 // ------------------------------------------------------------ 片段插入
 
 /** SQL 编辑器实例，用于在当前光标处插入片段 */
-const sqlEditorRef = ref<InstanceType<typeof MonacoEditor> | null>(null)
+const sqlEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null)
 /** 片段选择弹窗 */
 const snippetVisible = ref(false)
 /** 当前选中的分类 */
@@ -413,12 +511,14 @@ onMounted(async () => {
               <span>插入模板</span>
             </el-button>
           </div>
-          <MonacoEditor
+          <CodeEditor
             ref="sqlEditorRef"
             v-model="form.sqlText"
             language="sql"
+            completion-mode="sql-template"
             height="100%"
             @change="scheduleParse"
+            @mount="handleSqlEditorMount"
           />
         </div>
 
@@ -449,7 +549,13 @@ onMounted(async () => {
                 可修改变量并追加 SQL 片段：
                 <code>return &#123; variables, sqlFragment &#125;</code>
               </p>
-              <MonacoEditor v-model="form.preScript" language="javascript" height="220px" />
+              <CodeEditor
+                v-model="form.preScript"
+                language="javascript"
+                completion-mode="javascript"
+                height="220px"
+                @mount="handlePreScriptMount"
+              />
             </el-tab-pane>
 
             <el-tab-pane label="后置脚本" name="post" lazy>
@@ -457,7 +563,13 @@ onMounted(async () => {
                 可加工结果集：
                 <code>return &#123; rows &#125;</code>
               </p>
-              <MonacoEditor v-model="form.postScript" language="javascript" height="220px" />
+              <CodeEditor
+                v-model="form.postScript"
+                language="javascript"
+                completion-mode="javascript"
+                height="220px"
+                @mount="handlePostScriptMount"
+              />
             </el-tab-pane>
           </el-tabs>
         </div>

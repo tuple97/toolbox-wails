@@ -160,7 +160,7 @@ export class ExecutorColumn {
         }
         if (!("dataType" in $$source)) {
             /**
-             * DataType 字段类型（如 varchar / bigint）
+             * DataType 字段的完整类型定义（如 varchar(32) / decimal(10,2) / bigint）
              * @member
              * @type {string}
              */
@@ -261,6 +261,15 @@ export class ExecutorRequest {
              * @type {boolean}
              */
             this["countTotal"] = false;
+        }
+        if (!("allowProductionWrite" in $$source)) {
+            /**
+             * AllowProductionWrite 生产库上的写操作确认标记。
+             * 前端的生产库守卫只是提示；后端必须自己兜底，否则改一个布尔就能绕过。
+             * @member
+             * @type {boolean}
+             */
+            this["allowProductionWrite"] = false;
         }
 
         Object.assign(this, $$source);

@@ -164,11 +164,17 @@ export interface ExecutorRequest {
   total?: number
   /** 是否重新统计总数 */
   countTotal?: boolean
+  /**
+   * 生产库上的写操作确认标记。
+   * 前端的确认弹窗只是交互，后端也会校验这个标记，避免被绕过。
+   */
+  allowProductionWrite?: boolean
 }
 
 /** 命令执行器：表的字段信息 */
 export interface ExecutorColumn {
   name: string
+  /** 完整类型定义（如 varchar(32) / decimal(10,2)） */
   dataType: string
   comment: string
 }

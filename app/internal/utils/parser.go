@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -187,6 +188,47 @@ func ValidateTemplate(tplText string) error {
 		return fmt.Errorf("模板语法错误: %w", err)
 	}
 	return nil
+}
+
+// TemplateCheck 模板语法检查结果。
+//
+// 与 ValidateTemplate 的区别：校验失败时**不报错**，而是把位置与消息作为结果返回，
+// 界面据此在编辑器里标出红色波浪线，而不是弹一个不知道错在哪的提示框。
+type TemplateCheck struct {
+	// Valid 语法是否通过
+	Valid bool `json:"valid"`
+	// Line 出错行号（1 起）；拿不到位置时为 0
+	Line int `json:"line"`
+	// Column 出错列号（1 起）；拿不到位置时为 0
+	Column int `json:"column"`
+	// Message 去掉 `template: sql:行:列:` 前缀后的可读信息
+	Message string `json:"message"`
+}
+
+// 模板解析错误的文本形如 `template: sql:3:12: unexpected "}" in operand`。
+// text/template 的解析错误类型未导出、取不到结构化字段，只能从消息里读位置。
+var templateErrorPattern = regexp.MustCompile(`^template: [^:]+:(\d+)(?::(\d+))?:\s*(.*)$`)
+
+// CheckTemplate 校验模板语法并回报错误位置。
+//
+// 行号可以直接对应用户文档：PreprocessPlaceholders 只做行内替换，不会改变行数
+// （列号会因补点号略有偏移，够定位即可）。
+func CheckTemplate(tplText string) TemplateCheck {
+	// 解析在预处理之后进行，保证校验结果与实际渲染一致
+	processed := PreprocessPlaceholders(tplText)
+	if _, err := template.New("sql").Funcs(TplFuncMap).Parse(processed); err == nil {
+		return TemplateCheck{Valid: true}
+	} else {
+		check := TemplateCheck{Message: err.Error()}
+		if groups := templateErrorPattern.FindStringSubmatch(check.Message); groups != nil {
+			check.Line, _ = strconv.Atoi(groups[1])
+			if groups[2] != "" {
+				check.Column, _ = strconv.Atoi(groups[2])
+			}
+			check.Message = groups[3]
+		}
+		return check
+	}
 }
 
 // ExtractTemplateVariables 提取模板中引用的变量名。

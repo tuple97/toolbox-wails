@@ -48,6 +48,7 @@ export const DeleteSqlTemplate = App.DeleteSqlTemplate
 export const ExtractTemplateVariables = App.ExtractTemplateVariables
 export const PreviewTemplate = App.PreviewTemplate
 export const ValidateScript = App.ValidateScript
+export const ValidateTemplate = App.ValidateTemplate
 export const ExecuteTemplateQuery = App.ExecuteTemplateQuery
 
 // ---- 词典 ----

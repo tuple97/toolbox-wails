@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
- * CodeMirror 6 编辑器封装（替代 Monaco）。
+ * CodeMirror 6 编辑器封装：全应用唯一的代码编辑器组件。
  *
  * 设计要点：
  *  - 实例必须放 shallowRef：CM6 view 内部结构庞大，放进普通 ref 会被深层代理，
- *    调用开销极高（与 Monaco 同一条铁律）；
+ *    调用开销极高；
  *  - 语言 / 主题 / 只读 / 字体各自用 Compartment：切换时 dispatch 一个新配置即可，
  *    不销毁重建编辑器（重建会丢滚动位置与撤销栈）；
  *  - 主题的两层分工见 utils/logLanguage.ts：
@@ -21,6 +21,7 @@ import {
   highlightActiveLine,
   highlightActiveLineGutter,
   highlightSpecialChars,
+  hoverTooltip,
   keymap,
   lineNumbers,
 } from '@codemirror/view'
@@ -41,15 +42,24 @@ import { MySQL, PostgreSQL, sql } from '@codemirror/lang-sql'
 import type { SQLDialect } from '@codemirror/lang-sql'
 import { javascript, localCompletionSource, snippets } from '@codemirror/lang-javascript'
 import { useConfigStore } from '@/stores/configStore'
-import { createSqlCompletion, isColumnMarked, toggleColumnMark } from '@/utils/sqlCompletion'
-import { createStatementBoxExtension } from '@/utils/sqlStatementBox'
-import { sqlStatementRunGutter, type RunnableStatement } from '@/utils/sqlRunGutter'
+import {
+  columnHoverAt,
+  createSqlCompletion,
+  isColumnMarked,
+  sqlContextOf,
+  toggleColumnMark,
+} from '@/utils/sql/sqlCompletion'
+import type { ColumnCompletion, CompletionMode, SqlColumnInfo } from '@/utils/sql/sqlCompletion'
+import { createStatementBoxExtension } from '@/utils/sql/sqlStatementBox'
+import { sqlStatementRunGutter, type RunnableStatement } from '@/utils/sql/sqlRunGutter'
 import {
   LOG_LANGUAGE_ID,
   editorThemeExtensions,
   editorThemeNameOf,
   logLanguage,
 } from '@/utils/logLanguage'
+import { editorErrorField, errorRangeOf, setEditorErrors } from '@/utils/editorErrors'
+import type { EditorError, ErrorPosition } from '@/utils/editorErrors'
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
@@ -88,6 +98,12 @@ const props = withDefaults(defineProps<{
   showLineNumbers?: boolean
   /** 是否关闭智能提示（日志展示场景） */
   disableSuggestions?: boolean
+  /**
+   * 补全模式：sql / sql-template / javascript / none。
+   * 显式传入优先；不传时按 language 推导（sql → sql、javascript → javascript、其余 → none）。
+   * 详见 utils/sqlCompletion.ts 的分派说明。
+   */
+  completionMode?: '' | CompletionMode
   /** 是否给识别出的每条 SQL 套边框（仅 sql 语言生效，命令执行器用） */
   showStatementFrames?: boolean
   /** 是否在行号左侧显示「执行这条语句」按钮（仅 sql 语言生效，命令执行器用） */
@@ -99,6 +115,7 @@ const props = withDefaults(defineProps<{
   height: '260px',
   showLineNumbers: true,
   disableSuggestions: false,
+  completionMode: '',
   showStatementFrames: false,
   showRunButtons: false,
 })
@@ -180,13 +197,31 @@ function readOnlyExtension(): Extension {
 }
 
 /**
+ * 生效的补全模式：显式传入优先，否则按 language 推导。
+ * 日志（toolbox-log）等未知语言一律 none——不注册任何补全源。
+ */
+function resolvedCompletionMode(): CompletionMode {
+  if (props.completionMode) {
+    return props.completionMode
+  }
+  if (props.language === 'sql') {
+    return 'sql'
+  }
+  if (props.language === 'javascript') {
+    return 'javascript'
+  }
+  return 'none'
+}
+
+/**
  * 补全源组装。
  *
  * 注意 `override` 会**替换掉语言自带的所有补全源**，因此必须把需要的都显式列上：
- *  - SQL：项目自己的元数据补全源（未登记连接上下文的编辑器——如 SQL 模板——
- *    会退化为「关键字 + 函数」，见 utils/sqlCompletion.ts）；
- *  - JavaScript：lang-javascript 自带的片段/关键字与作用域内标识符补全，
- *    另外补上「文档内单词」。
+ *  - SQL / SQL 模板：项目自己的补全源（sql-template 模式下它会先判断光标是否在
+ *    `{{ … }}` 内，再决定给模板候选还是 SQL 候选）；未登记连接上下文时
+ *    退化为「关键字 + 函数」，见 utils/sqlCompletion.ts；
+ *  - JavaScript：项目补全源只负责注入的全局标识符（variables / rows / sqlTemplate），
+ *    再叠加 lang-javascript 自带的片段与作用域标识符、以及「文档内单词」。
  *
  * SQL **不挂「文档内单词」**：它会把文档里出现过的词整篇倒出来，
  * 而 SQL 编辑器里最不缺的单词就是列名——于是 `FROM ` 后面会冒出 SELECT
@@ -194,11 +229,14 @@ function readOnlyExtension(): Extension {
  */
 function completionSources(): CompletionSource[] {
   const sources: CompletionSource[] = []
+  const mode = resolvedCompletionMode()
 
-  if (props.language === 'sql') {
-    sources.push(createSqlCompletion(() => viewRef.value))
+  if (mode === 'sql' || mode === 'sql-template') {
+    sources.push(createSqlCompletion(() => viewRef.value, mode))
   }
-  if (props.language === 'javascript') {
+
+  if (mode === 'javascript') {
+    sources.push(createSqlCompletion(() => viewRef.value, 'javascript'))
     sources.push(completeFromList([...snippets]))
     sources.push(localCompletionSource)
     sources.push(completeAnyWord)
@@ -207,9 +245,9 @@ function completionSources(): CompletionSource[] {
   return sources
 }
 
-/** 智能提示（日志等只读场景可用 disableSuggestions 关闭） */
+/** 智能提示（日志等只读场景可用 disableSuggestions 关闭；none 模式一律不装） */
 function completionExtension(): Extension {
-  if (props.disableSuggestions) {
+  if (props.disableSuggestions || resolvedCompletionMode() === 'none') {
     return []
   }
   const sources = completionSources()
@@ -237,9 +275,164 @@ function completionExtension(): Extension {
      * 类型信息由每项后面的 detail 文本承担。
      */
     icons: false,
-    // 列名候选项左侧的勾选框（多选支持，见 renderColumnCheckbox）
-    addToOptions: [{ render: renderColumnCheckbox, position: 10 }],
+    // 候选项左侧：勾选框（10，仅列名）；描述区（80）由 renderColumnDetail 组装
+    addToOptions: [
+      { render: renderColumnCheckbox, position: 10 },
+      { render: renderColumnDetail, position: 80 },
+    ],
   })
+}
+
+// ---------------------------------------------------------------- 列悬停提示
+
+/**
+ * 列悬停提示：鼠标停在列名上显示「类型 · 注释 · 来源表」。
+ *
+ * 数据来源与补全完全一致（utils/sqlCompletion 的作用域解析 + 元数据缓存），
+ * 因此派生表 / CTE 的列也能溯源到物理表。只在 SQL / SQL 模板模式挂载：
+ * 脚本编辑器与日志面板没有可查的列。
+ */
+function columnHoverExtension(): Extension {
+  const mode = resolvedCompletionMode()
+  if (mode !== 'sql' && mode !== 'sql-template') {
+    return []
+  }
+
+  return hoverTooltip((view, pos) => {
+    const hover = columnHoverAt(view.state, pos, {
+      mode,
+      sql: sqlContextOf(view) ?? undefined,
+    })
+    if (!hover) {
+      return null
+    }
+
+    return {
+      pos: hover.from,
+      end: hover.to,
+      above: true,
+      create: () => ({ dom: renderColumnHover(hover.info) }),
+    }
+  })
+}
+
+/** 「来源表」图标（表格轮廓，跟随文字颜色） */
+const TABLE_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2.2" y="3.2" width="11.6" height="9.6" rx="1.6"/><path d="M2.2 6.6h11.6M6.6 6.6v6.2"/></svg>'
+
+/** 「注释」图标（对话气泡） */
+const COMMENT_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M3.4 3.4h9.2a1.6 1.6 0 0 1 1.6 1.6v4.6a1.6 1.6 0 0 1-1.6 1.6H7.2L4.4 13.6v-2.4H3.4a1.6 1.6 0 0 1-1.6-1.6V5a1.6 1.6 0 0 1 1.6-1.6Z"/></svg>'
+
+/**
+ * 悬停卡片：标题行是「列名 + 完整类型」，下面是带图标的来源表与注释。
+ * 结构尽量扁平（不放标签底色块、不画分隔线），观感更接近 IDE 的悬停提示。
+ */
+function renderColumnHover(info: SqlColumnInfo): HTMLElement {
+  const root = document.createElement('div')
+  root.className = 'column-hover'
+
+  const head = document.createElement('div')
+  head.className = 'column-hover__head'
+
+  const name = document.createElement('span')
+  name.className = 'column-hover__name'
+  name.textContent = info.name
+  head.appendChild(name)
+
+  if (info.dataType) {
+    const type = document.createElement('span')
+    type.className = 'column-hover__type'
+    type.textContent = info.dataType
+    head.appendChild(type)
+  }
+
+  root.appendChild(head)
+
+  const rows: HTMLElement[] = []
+  if (info.table) {
+    rows.push(hoverRow(TABLE_ICON, info.derived ? `${info.table}（派生列）` : info.table))
+  }
+  if (info.comment) {
+    rows.push(hoverRow(COMMENT_ICON, info.comment))
+  }
+  if (rows.length) {
+    const meta = document.createElement('div')
+    meta.className = 'column-hover__meta'
+    meta.append(...rows)
+    root.appendChild(meta)
+  }
+
+  return root
+}
+
+/** 悬停卡片里的一行「图标 + 内容」（图标是固定字符串，不含用户输入） */
+function hoverRow(icon: string, value: string): HTMLElement {
+  const row = document.createElement('div')
+  row.className = 'column-hover__row'
+
+  const glyph = document.createElement('span')
+  glyph.className = 'column-hover__icon'
+  glyph.innerHTML = icon
+  row.appendChild(glyph)
+
+  const text = document.createElement('span')
+  text.className = 'column-hover__value'
+  text.textContent = value
+  row.appendChild(text)
+
+  return row
+}
+
+/**
+ * 列候选的描述区（补全列表右侧）：按「类型 · 来源 · 注释」分段渲染。
+ *
+ * 与悬停卡片同一套视觉语言：来源配表格图标、注释配气泡图标，
+ * 段与段之间用间距区分——纯文本 detail 只能串成一串 `·`，所以不用它。
+ */
+function renderColumnDetail(
+  completion: Completion,
+  _state: EditorState,
+  view: EditorView,
+): Node | null {
+  const detail = (completion as ColumnCompletion).columnDetail
+  if (!detail) {
+    return null
+  }
+
+  const doc = view.dom.ownerDocument
+  const root = doc.createElement('span')
+  root.className = 'cm-column-detail'
+
+  if (detail.dataType) {
+    const type = doc.createElement('span')
+    type.className = 'cm-column-detail__part cm-column-detail__type'
+    type.textContent = detail.dataType
+    root.appendChild(type)
+  }
+  if (detail.from) {
+    root.appendChild(detailPart(doc, TABLE_ICON, detail.from))
+  }
+  if (detail.comment) {
+    root.appendChild(detailPart(doc, COMMENT_ICON, detail.comment))
+  }
+
+  return root.childNodes.length ? root : null
+}
+
+/** 描述区里带图标的一段 */
+function detailPart(doc: Document, icon: string, text: string): HTMLElement {
+  const part = doc.createElement('span')
+  part.className = 'cm-column-detail__part'
+
+  const glyph = doc.createElement('span')
+  glyph.className = 'cm-column-detail__icon'
+  glyph.innerHTML = icon
+  part.appendChild(glyph)
+
+  const value = doc.createElement('span')
+  value.textContent = text
+  part.appendChild(value)
+
+  return part
 }
 
 // ---------------------------------------------------------------- 列名勾选
@@ -265,7 +458,8 @@ function renderColumnCheckbox(
   _state: EditorState,
   view: EditorView,
 ): Node | null {
-  if (props.language !== 'sql' || completion.type !== 'field') {
+  const mode = resolvedCompletionMode()
+  if ((mode !== 'sql' && mode !== 'sql-template') || completion.type !== 'field') {
     return null
   }
 
@@ -318,7 +512,7 @@ function baseExtensions(): Extension[] {
     bracketMatching(),
     closeBrackets(),
     highlightActiveLine(),
-    // 超长行自动折行（与原 Monaco 配置的 wordWrap: 'on' 保持一致）
+    // 超长行自动折行，长 SQL 不横向滚动
     EditorView.lineWrapping,
     /*
      * tabindex 必须显式给：CM6 在只读（editable=false）时会把 .cm-content 设成
@@ -337,6 +531,8 @@ function baseExtensions(): Extension[] {
       indentWithTab,
     ]),
     EditorView.updateListener.of(handleUpdate),
+    // 错误波浪线的装饰位（未设置错误时为空，不产生任何开销）
+    editorErrorField,
   ]
 
   /*
@@ -396,6 +592,7 @@ onMounted(() => {
     extensions: [
       ...baseExtensions(),
       completionExtension(),
+      columnHoverExtension(),
       languageCompartment.of(languageExtension()),
       themeCompartment.of(editorThemeExtensions(themeName())),
       readOnlyCompartment.of(readOnlyExtension()),
@@ -454,7 +651,7 @@ watch([() => configStore.editorFontSize, () => configStore.editorFontStack], () 
 /**
  * 在当前光标（或选区）处插入文本。
  *
- * 与 Monaco 版本行为一致：可撤销（CM6 每次 dispatch 都是独立撤销单元），
+ * 行为约定：可撤销（CM6 每次 dispatch 都是独立撤销单元），
  * 插入后若文本含占位词则选中它，方便直接改写。
  *
  * @returns 是否插入成功（编辑器未就绪时为 false）
@@ -487,8 +684,34 @@ function insertText(text: string, placeholder = '变量'): boolean {
   }
 }
 
-/** 供父组件调用：仅暴露插入能力，避免外部直接操作编辑器 */
-defineExpose({ insertText })
+/**
+ * 标记 / 清除编辑器里的错误（底部红色波浪线），供模板语法校验等使用。
+ *
+ * @param positions 错误位置（行号从 1 起）；传空数组即清空
+ * @param options.reveal 是否滚动到第一个错误并聚焦（保存前校验失败时用）
+ */
+function setErrors(positions: ErrorPosition[], options: { reveal?: boolean } = {}): void {
+  const view = viewRef.value
+  if (!view) {
+    return
+  }
+
+  const errors = positions
+    .map(position => errorRangeOf(view.state, position))
+    .filter((error): error is EditorError => error !== null)
+  view.dispatch({ effects: setEditorErrors.of(errors) })
+
+  if (options.reveal && errors.length) {
+    view.dispatch({
+      selection: { anchor: errors[0].from },
+      effects: EditorView.scrollIntoView(errors[0].from, { y: 'center' }),
+    })
+    view.focus()
+  }
+}
+
+/** 供父组件调用：只暴露插入与错误标记，避免外部直接操作编辑器 */
+defineExpose({ insertText, setErrors })
 </script>
 
 <template>
@@ -516,8 +739,66 @@ defineExpose({ insertText })
   overflow: auto;
 }
 
-/* 补全弹层的滚动条跟随全局滚动条美化，避免出现系统默认样式 */
-.code-editor :deep(.cm-tooltip-autocomplete > ul) {
-  max-height: 260px;
+/* 补全弹层的高度 / 内边距 / 圆角由 utils/logLanguage.ts 的主题统一给出 */
+
+/*
+ * 列悬停卡片（内容由 renderColumnHover 拼装）。
+ * 浮层底色 / 边框 / 圆角 / 阴影由 CM 主题里的 .cm-tooltip 统一提供，这里只排内容。
+ * 排版尽量扁平：标题行 + 两行带图标的次要信息，不用底色块与分隔线。
+ */
+.code-editor :deep(.column-hover) {
+  min-width: 220px;
+  max-width: 420px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.code-editor :deep(.column-hover__head) {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.code-editor :deep(.column-hover__name) {
+  color: var(--text-color);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* 类型跟一个等宽的完整定义（varchar(32) / decimal(10,2)），保持次要层级 */
+.code-editor :deep(.column-hover__type) {
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+.code-editor :deep(.column-hover__meta) {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.code-editor :deep(.column-hover__row) {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.code-editor :deep(.column-hover__icon) {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  opacity: 0.7;
+}
+
+.code-editor :deep(.column-hover__value) {
+  min-width: 0;
+  word-break: break-word;
 }
 </style>

@@ -7,7 +7,7 @@ import ResultPagination from '@/components/ResultPagination.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import ConnectionSelect from '@/components/ConnectionSelect.vue'
-import { copyRowSql, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/utils/rowSql'
+import { copyRowSql, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/utils/sql/rowSql'
 import { DEFAULT_PAGE_SIZE, executeTemplateQuery, fetchTemplate, fetchTemplateList } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
 import { EventsOn } from '@/api/runtime'
@@ -262,7 +262,14 @@ async function handleRun(targetPage = 1, reuseTotal = false) {
     const message = e instanceof Error ? e.message : String(e)
     result.value = null
     logStore.logError(message)
-    ElMessage.error(message)
+    /*
+     * 模板语法错误只在日志里留痕、不再弹窗：
+     * 查询页改不了模板（SQL 由模板决定），弹窗除了打扰没别的用途，
+     * 出错位置会在「SQL 模板」页的编辑器里以红色波浪线标出。
+     */
+    if (!message.includes('模板语法错误')) {
+      ElMessage.error(message)
+    }
   }
   finally {
     running.value = false
