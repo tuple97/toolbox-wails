@@ -7,6 +7,7 @@ import ResultTable from '@/components/ResultTable.vue'
 import ResultPagination from '@/components/ResultPagination.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
 import ScriptSummary from '@/components/ScriptSummary.vue'
+import ConnectionSelect from '@/components/ConnectionSelect.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import { copyRowSql, dialectOf, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/utils/rowSql'
 import { formatSql, minifySql as minifySqlText } from '@/utils/sqlFormat'
@@ -16,13 +17,12 @@ import { DEFAULT_PAGE_SIZE } from '@/api/templates'
 import {
   executeStatement,
   fetchDatabases as fetchDatabaseList,
-  fetchTables,
 } from '@/api/executor'
 import {
-  invalidateMeta,
   registerCompletionContext,
   unregisterCompletionContext,
 } from '@/utils/sqlCompletion'
+import { useMetadataStore } from '@/stores/metadataStore'
 import { splitSqlStatements, statementAtCursor, statementEndWithSemicolon } from '@/utils/sqlStatementRanges'
 import {
   setStatementRunStates,
@@ -1138,14 +1138,21 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
-/** 刷新元数据：库列表 + 当前库的表字段缓存一并重拉（库列表拉失败时可在这里恢复） */
+/**
+ * 刷新元数据：库列表 + 当前库的表字段缓存一并重拉（库列表拉失败时可在这里恢复）。
+ *
+ * 元数据缓存由 metadataStore 统一持有，刷新后连接管理页与补全都会立刻用到新数据。
+ */
 async function refreshMeta() {
   if (!connId.value) {
     return
   }
-  const ok = await loadDatabases(lastDatabaseByConn.get(connId.value) ?? database.value)
-  invalidateMeta(connId.value, effectiveDatabase.value)
-  void fetchTables(connId.value, effectiveDatabase.value)
+  const requested = connId.value
+  const ok = await loadDatabases(lastDatabaseByConn.get(requested) ?? database.value)
+  const meta = useMetadataStore()
+  meta.invalidateConnection(requested)
+  // 表列表按需重拉；字段缓存已随连接一起失效，用户点开表或补全时再加载
+  void meta.loadTables(requested, effectiveDatabase.value, true)
   if (ok) {
     ElMessage.success('元数据已刷新')
   }
@@ -1180,19 +1187,7 @@ watch([connId, database, sql, pageSize], notifyChange)
     <!-- 顶部操作栏：连接 → 库 → 元数据 → 执行 / 取消 -->
     <header class="executor__toolbar">
       <div class="executor__toolbar-left">
-        <el-select
-          v-model="connId"
-          placeholder="选择数据库连接"
-          filterable
-          style="width: 210px"
-        >
-          <el-option
-            v-for="conn in connections"
-            :key="conn.id"
-            :label="`${conn.name} (${conn.dbType})`"
-            :value="conn.id"
-          />
-        </el-select>
+        <ConnectionSelect v-model="connId" :connections="connections" width="210px" />
 
         <el-select
           v-model="database"

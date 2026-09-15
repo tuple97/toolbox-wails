@@ -151,6 +151,7 @@ function handlePick(type: ToolType) {
     v-model="dialogVisible"
     title="新建标签"
     width="680px"
+    align-center
     class="tool-picker"
   >
     <p class="tool-picker__hint">

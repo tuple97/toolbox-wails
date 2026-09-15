@@ -102,9 +102,16 @@ export interface DBConnection {
   urlParams: string
   /** 只读连接：后端拒绝执行写操作 */
   readOnly: boolean
-  /** 生产库标记：界面高亮提示 */
+  /** 本地库标记（环境标识，与 isTest / isProduction 互斥） */
+  isLocal: boolean
+  /** 测试库标记（环境标识，与 isLocal / isProduction 互斥） */
+  isTest: boolean
+  /** 生产库标记：界面高亮提示（环境标识，与 isLocal / isTest 互斥） */
   isProduction: boolean
 }
+
+/** 连接的环境标识，三者互斥；空串表示未标记 */
+export type ConnectionEnv = '' | 'local' | 'test' | 'production'
 
 /** SQL 模板配置，与后端 database.SQLTemplate 对应 */
 export interface SQLTemplate {

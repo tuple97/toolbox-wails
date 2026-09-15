@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS db_connections (
   ssl_key_path         TEXT,
   url_params           TEXT,
   read_only            INTEGER NOT NULL DEFAULT 0,
+  is_local             INTEGER NOT NULL DEFAULT 0,
+  is_test              INTEGER NOT NULL DEFAULT 0,
   is_production        INTEGER NOT NULL DEFAULT 0
 );
 
@@ -204,6 +206,9 @@ var columnMigrations = []columnMigration{
 	{table: "db_connections", column: "url_params", ddl: "url_params TEXT"},
 	{table: "db_connections", column: "read_only", ddl: "read_only INTEGER NOT NULL DEFAULT 0"},
 	{table: "db_connections", column: "is_production", ddl: "is_production INTEGER NOT NULL DEFAULT 0"},
+	// 环境标识扩展（2026-09-15）：本地 / 测试 / 生产三选一
+	{table: "db_connections", column: "is_local", ddl: "is_local INTEGER NOT NULL DEFAULT 0"},
+	{table: "db_connections", column: "is_test", ddl: "is_test INTEGER NOT NULL DEFAULT 0"},
 }
 
 // ensureColumn 在表缺少指定列时执行 ALTER TABLE ADD COLUMN。

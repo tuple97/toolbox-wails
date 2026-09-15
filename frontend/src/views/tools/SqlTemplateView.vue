@@ -5,6 +5,7 @@ import { Events } from '@wailsio/runtime'
 import MonacoEditor from '@/components/MonacoEditor.vue'
 import VariableConfigPanel from '@/components/VariableConfigPanel.vue'
 import FieldMappingPanel from '@/components/FieldMappingPanel.vue'
+import ConnectionSelect from '@/components/ConnectionSelect.vue'
 import {
   extractVariables,
   fetchTemplate,
@@ -384,18 +385,12 @@ onMounted(async () => {
             placeholder="模板名称"
             class="tpl-mgr__name"
           />
-          <el-select
+          <ConnectionSelect
             v-model="form.connId"
+            :connections="connections"
             placeholder="所属连接"
             class="tpl-mgr__conn"
-          >
-            <el-option
-              v-for="conn in connections"
-              :key="conn.id"
-              :label="conn.name"
-              :value="conn.id"
-            />
-          </el-select>
+          />
           <el-button type="primary" :loading="saving" @click="handleSave">
             保存模板
           </el-button>
@@ -474,7 +469,7 @@ onMounted(async () => {
       v-model="snippetVisible"
       title="插入模板片段"
       width="860px"
-      top="8vh"
+      align-center
       append-to-body
       class="snippet-dlg"
     >

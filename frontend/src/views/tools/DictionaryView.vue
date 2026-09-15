@@ -332,6 +332,7 @@ onMounted(async () => {
       v-model="dictDialogVisible"
       :title="dictForm.id ? '编辑词典' : '新建词典'"
       width="460px"
+      align-center
       append-to-body
     >
       <el-form label-width="80px" label-position="right">

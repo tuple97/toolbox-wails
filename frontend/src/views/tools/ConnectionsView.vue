@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   fetchConnection,
@@ -8,8 +8,10 @@ import {
   removeConnection,
   testConnection,
 } from '@/api/db'
+import ConnectionMetadataDialog from '@/components/ConnectionMetadataDialog.vue'
 import { Events } from '@wailsio/runtime'
-import type { DBConnection } from '@/types'
+import { useMetadataStore } from '@/stores/metadataStore'
+import type { ConnectionEnv, DBConnection } from '@/types'
 
 /**
  * 连接管理（单例标签页）。
@@ -77,6 +79,21 @@ const saving = ref(false)
 const editingId = ref(0)
 const form = reactive<DBConnection>(createEmptyForm())
 
+/**
+ * 元数据缓存（与 SQL 执行页的智能补全共用同一份）。
+ * 在这里刷新后，查询页补全立刻用到新数据，不需要各自维护缓存。
+ */
+const metadataStore = useMetadataStore()
+/** 元数据查看弹窗 */
+const metadataVisible = ref(false)
+/** 元数据刷新中 */
+const metadataRefreshing = ref(false)
+
+/** 当前编辑的已保存连接；新建（未保存）时为 null */
+const savedConnection = computed(
+  () => connections.value.find(item => item.id === editingId.value) ?? null,
+)
+
 function createEmptyForm(): DBConnection {
   return {
     id: 0,
@@ -101,6 +118,8 @@ function createEmptyForm(): DBConnection {
     sslKeyPath: '',
     urlParams: '',
     readOnly: false,
+    isLocal: false,
+    isTest: false,
     isProduction: false,
   }
 }
@@ -122,6 +141,34 @@ async function load() {
 /** 广播连接变更，供其他标签页刷新 */
 function notifyChanged() {
   void Events.Emit('connections:changed')
+}
+
+/**
+ * 当前连接的环境标识；本地 / 测试 / 生产三者互斥，空串表示未标记。
+ * 用「单一取值 + 三个勾选框」表达互斥，比三个独立布尔更不容易出现冲突状态。
+ */
+const envMark = computed<ConnectionEnv>(() => {
+  if (form.isProduction) {
+    return 'production'
+  }
+  if (form.isTest) {
+    return 'test'
+  }
+  if (form.isLocal) {
+    return 'local'
+  }
+  return ''
+})
+
+/**
+ * 切换环境标识：勾选一个即清掉其它两个，再次点击已勾选的则取消标记。
+ * 后端保存时也会再归一一次，避免脏数据同时挂多个环境标签。
+ */
+function toggleEnv(env: Exclude<ConnectionEnv, ''>, checked: boolean) {
+  const next = checked ? env : ''
+  form.isLocal = next === 'local'
+  form.isTest = next === 'test'
+  form.isProduction = next === 'production'
 }
 
 /** 切换数据库类型时同步默认端口 */
@@ -168,6 +215,45 @@ async function buildPayload(): Promise<DBConnection> {
   return payload
 }
 
+/**
+ * 查看 / 刷新元数据前的校验：必须已保存连接。
+ * 元数据接口按连接 ID 读取已保存的连接配置，未保存的连接没有 ID 可用。
+ */
+function requireSavedConnection(): DBConnection | null {
+  const conn = savedConnection.value
+  if (!conn) {
+    ElMessage.warning('请先保存连接，再查看或刷新元数据')
+  }
+  return conn
+}
+
+/** 打开元数据查看弹窗（库 / 表 / 字段） */
+function handleViewMetadata() {
+  if (requireSavedConnection()) {
+    metadataVisible.value = true
+  }
+}
+
+/** 刷新该连接的元数据：清缓存后重新拉取库列表与当前库的表列表 */
+async function handleRefreshMetadata() {
+  const conn = requireSavedConnection()
+  if (!conn) {
+    return
+  }
+  metadataRefreshing.value = true
+  try {
+    // 库以表单里填写的为准（未填时用连接自身配置的库）
+    await metadataStore.refreshConnection(conn.id, form.database || conn.database || '')
+    ElMessage.success('元数据已刷新')
+  }
+  catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  }
+  finally {
+    metadataRefreshing.value = false
+  }
+}
+
 /** 测试连接（未改密码时用已保存的密码） */
 async function handleTest() {
   testing.value = true
@@ -185,6 +271,10 @@ async function handleTest() {
 
 /** 保存连接 */
 async function handleSave() {
+  // 保存中忽略重复触发（快捷键连按 / 连点按钮）
+  if (saving.value) {
+    return
+  }
   if (!form.name.trim()) {
     // 名称在「基本」页：校验失败先切过去，否则用户在别的页签上看不到要填什么
     activeTab.value = 'basic'
@@ -242,7 +332,22 @@ async function handleDelete(conn: DBConnection) {
   }
 }
 
+/**
+ * Ctrl/Cmd + S 保存当前连接。
+ *
+ * 顺手拦掉浏览器的「保存网页」默认行为；
+ * 视图是切换即卸载的（非 keep-alive），所以不会在别的标签页误触发。
+ */
+function handleSaveShortcut(event: KeyboardEvent) {
+  if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') {
+    return
+  }
+  event.preventDefault()
+  void handleSave()
+}
+
 onMounted(async () => {
+  window.addEventListener('keydown', handleSaveShortcut)
   try {
     await load()
     // 默认展示第一条连接；没有任何连接时进入新建
@@ -258,6 +363,10 @@ onMounted(async () => {
     // 失败也要上报，否则遮罩会一直盖住界面
     emit('ready')
   }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleSaveShortcut)
 })
 </script>
 
@@ -287,8 +396,10 @@ onMounted(async () => {
               <span class="conn-mgr__item-name">
                 <span v-if="item.color" class="conn-mgr__dot" :style="{ background: item.color }" />
                 <span class="conn-mgr__item-text">{{ item.name }}</span>
+                <el-tag v-if="item.isLocal" size="small" type="success" effect="plain">本地</el-tag>
+                <el-tag v-if="item.isTest" size="small" type="warning" effect="plain">测试</el-tag>
                 <el-tag v-if="item.isProduction" size="small" type="danger" effect="plain">生产</el-tag>
-                <el-tag v-if="item.readOnly" size="small" type="warning" effect="plain">只读</el-tag>
+                <el-tag v-if="item.readOnly" size="small" type="info" effect="plain">只读</el-tag>
               </span>
               <span class="conn-mgr__item-addr">
                 {{ item.dbType }} · {{ item.host }}:{{ item.port }}/{{ item.database }}
@@ -318,8 +429,32 @@ onMounted(async () => {
           <small class="conn-mgr__editor-note">密码加密保存在本地，留空表示不修改</small>
 
           <div class="conn-mgr__editor-actions">
+            <!-- 元数据：查看（放大镜）/ 刷新，放在「测试连接」左边 -->
+            <el-button
+              :disabled="!editingId"
+              title="查看元数据（库 / 表 / 字段）"
+              @click="handleViewMetadata"
+            >
+              <el-icon><Search /></el-icon>
+            </el-button>
+            <el-button
+              :disabled="!editingId"
+              :loading="metadataRefreshing"
+              title="刷新元数据"
+              @click="handleRefreshMetadata"
+            >
+              <el-icon><Refresh /></el-icon>
+            </el-button>
+
             <el-button :loading="testing" @click="handleTest">测试连接</el-button>
-            <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+            <el-button
+              type="primary"
+              :loading="saving"
+              title="保存（Ctrl+S）"
+              @click="handleSave"
+            >
+              保存
+            </el-button>
           </div>
         </header>
 
@@ -375,12 +510,33 @@ onMounted(async () => {
               <el-form-item label="标记">
                 <div class="conn-form__markers">
                   <el-color-picker v-model="form.color" />
-                  <el-checkbox v-model="form.isProduction">生产库</el-checkbox>
+
+                  <!-- 环境标识：三者互斥，生产在最右 -->
+                  <el-checkbox
+                    :model-value="envMark === 'local'"
+                    @change="(value: boolean | string | number) => toggleEnv('local', Boolean(value))"
+                  >
+                    本地库
+                  </el-checkbox>
+                  <el-checkbox
+                    :model-value="envMark === 'test'"
+                    @change="(value: boolean | string | number) => toggleEnv('test', Boolean(value))"
+                  >
+                    测试库
+                  </el-checkbox>
+                  <el-checkbox
+                    :model-value="envMark === 'production'"
+                    @change="(value: boolean | string | number) => toggleEnv('production', Boolean(value))"
+                  >
+                    生产库
+                  </el-checkbox>
+
                   <el-checkbox v-model="form.readOnly">只读连接</el-checkbox>
                 </div>
               </el-form-item>
               <p class="conn-form__tip">
-                颜色用于列表着色区分环境；只读连接会在后端拒绝执行写操作。
+                颜色用于列表着色区分环境；本地 / 测试 / 生产为互斥的环境标识；
+                只读连接会在后端拒绝执行写操作。
               </p>
             </el-tab-pane>
 
@@ -458,6 +614,12 @@ onMounted(async () => {
         </el-form>
       </section>
     </div>
+
+    <!-- 元数据查看：库 / 表 / 字段 -->
+    <ConnectionMetadataDialog
+      v-model:visible="metadataVisible"
+      :connection="savedConnection"
+    />
   </div>
 </template>
 

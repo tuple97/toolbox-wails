@@ -39,6 +39,8 @@ function toConnection(raw: {
   sslKeyPath?: string | null
   urlParams?: string | null
   readOnly?: boolean | null
+  isLocal?: boolean | null
+  isTest?: boolean | null
   isProduction?: boolean | null
 }): DBConnection {
   return {
@@ -64,6 +66,8 @@ function toConnection(raw: {
     sslKeyPath: String(raw.sslKeyPath ?? ''),
     urlParams: String(raw.urlParams ?? ''),
     readOnly: Boolean(raw.readOnly ?? false),
+    isLocal: Boolean(raw.isLocal ?? false),
+    isTest: Boolean(raw.isTest ?? false),
     isProduction: Boolean(raw.isProduction ?? false),
   }
 }

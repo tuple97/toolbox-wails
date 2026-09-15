@@ -18,7 +18,7 @@ type Tab struct {
 //
 // 字段按本项目只支持的 mysql/postgres 两种方言裁剪，分为以下几组：
 //   - 基本：Name / DBType / Host / Port / Database / Username / Password；
-//   - 展示：Note（备注）、Color（颜色标记）、IsProduction（生产库标记，界面提示用）；
+//   - 展示：Note（备注）、Color（颜色标记）、IsLocal / IsTest / IsProduction（环境标记，界面提示用）；
 //   - 方言：Charset（MySQL 字符集）、DefaultSchema（PostgreSQL 默认 schema）；
 //   - 超时：ConnectTimeoutSecs / QueryTimeoutSecs / KeepaliveSecs（0 表示用默认值）；
 //   - 加密：SSLMode + 三个证书路径（MySQL 映射到 tls，PostgreSQL 映射到 sslmode 等）；
@@ -60,7 +60,12 @@ type DBConnection struct {
 	URLParams string `json:"urlParams"`
 	// ReadOnly 只读连接：拒绝执行写操作
 	ReadOnly bool `json:"readOnly"`
+	// IsLocal 本地库标记（环境标识之一，与 IsTest / IsProduction 互斥）
+	IsLocal bool `json:"isLocal"`
+	// IsTest 测试库标记（环境标识之一，与 IsLocal / IsProduction 互斥）
+	IsTest bool `json:"isTest"`
 	// IsProduction 生产库标记：界面高亮提示，避免误操作
+	// （环境标识之一，与 IsLocal / IsTest 互斥）
 	IsProduction bool `json:"isProduction"`
 }
 

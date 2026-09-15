@@ -14,9 +14,10 @@
  *  - 补全源由编辑器实例通过 `createSqlCompletion(getView)` 装配；只有命令执行器会
  *    用 `registerCompletionContext` 登记上下文，其余编辑器（SQL 模板、执行记录）
  *    拿到空结果，行为保持不变。
- *  - 元数据分两级缓存（TTL 5 分钟）：`connId:库` → 该库的表与字段；
- *    `connId` → 库列表。缺失时后台异步拉取，本次补全立即用已有数据返回，
- *    绝不阻塞输入。
+ *  - 元数据统一由 `stores/metadataStore.ts` 缓存（TTL 5 分钟）：
+ *    `connId` → 库列表；`connId:库` → 表列表；`connId:库:表` → 字段。
+ *    缺失时后台异步拉取，本次补全立即用已有数据返回，绝不阻塞输入；
+ *    连接管理页刷新元数据后，这里会立刻用到新数据。
  *  - **作用域按子查询分层**：靠语法树（`sqlSyntax.ts` 的 scopeRanges）拿到
  *    嵌套括号节点，逐层向上收集，内层别名优先（语句范围来自 sqlStatementRanges）；
  *    「光标所在的最内层子查询 → … → 外层语句」的范围链，每层单独解析表引用；
@@ -35,44 +36,12 @@
 import { startCompletion } from '@codemirror/autocomplete'
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete'
 import type { EditorView } from '@codemirror/view'
-import { fetchDatabases, fetchTableColumns, fetchTables } from '@/api/executor'
+import { useMetadataStore } from '@/stores/metadataStore'
 import { statementAtCursor } from '@/utils/sqlStatementRanges'
 import { inLiteralOrComment, scopeRanges } from '@/utils/sqlSyntax'
 import { dialectOf, quoteIdent } from '@/utils/rowSql'
 import type { SqlDialect } from '@/utils/rowSql'
 import type { ExecutorColumn } from '@/types'
-
-/** 元数据缓存有效期 */
-const META_TTL = 5 * 60 * 1000
-
-/** 每个库的元数据：表列表 + 各表字段 */
-interface SchemaMeta {
-  tables: string[]
-  columns: Map<string, ExecutorColumn[]>
-  /** 表列表的抓取时间 */
-  fetchedAt: number
-  /** 表列表是否正在加载 */
-  loading: boolean
-  /**
-   * 各表字段的抓取时间与加载状态。
-   *
-   * 必须与表列表**分开**记账：曾经共用一个 `loading`/`fetchedAt`，
-   * 结果是「表列表先加载完 → 字段查询看到缓存是新的 → 直接返回空 Map、永远不发起字段查询」，
-   * 于是列名补全（SELECT / WHERE / 别名点号）恒为空。
-   */
-  columnsFetchedAt: Map<string, number>
-  columnsLoading: Set<string>
-}
-
-/** 每个连接的库列表 */
-interface DatabaseMeta {
-  names: string[]
-  fetchedAt: number
-  loading: boolean
-}
-
-const metaCache = new Map<string, SchemaMeta>()
-const databaseCache = new Map<number, DatabaseMeta>()
 
 /** 编辑器模型 → 所属命令执行器的连接、库与方言（getter，切换连接自动生效） */
 type ContextGetter = () => { connId: number, database: string, dbType: string }
@@ -704,108 +673,38 @@ function namespaceSuggestions(connId: number, dialect: SqlDialect): Completion[]
   }))
 }
 
-// ---------------------------------------------------------------- 元数据缓存
+// ---------------------------------------------------------------- 元数据（统一走 metadataStore）
 
-/** 空的元数据条目 */
-function createMeta(): SchemaMeta {
-  return {
-    tables: [],
-    columns: new Map(),
-    fetchedAt: 0,
-    loading: false,
-    columnsFetchedAt: new Map(),
-    columnsLoading: new Set(),
-  }
+/**
+ * 元数据缓存已收敛到 `stores/metadataStore.ts`：
+ * 连接管理页的「查看 / 刷新元数据」与这里的补全共用同一份数据，
+ * 刷新后补全立即生效，不会各存一份。
+ *
+ * 下面三个包装保持「同步返回缓存 + 后台补齐」的语义不变：
+ * 补全候选必须立刻返回，绝不等待网络。
+ */
+function ensureTables(connId: number, database: string): string[] {
+  return metadata().ensureTables(connId, database)
+}
+
+function ensureColumns(connId: number, database: string, table: string): ExecutorColumn[] {
+  return metadata().ensureColumns(connId, database, table)
+}
+
+function ensureDatabases(connId: number): string[] {
+  return metadata().ensureDatabases(connId)
 }
 
 /**
- * 确保表列表就绪；缺失或过期时后台拉取，
- * 本次补全先返回缓存内容（可能为空），绝不阻塞输入。
+ * 延迟解析 store 实例。
+ *
+ * 这些函数都在补全回调（用户输入）里执行，此时 pinia 已激活；
+ * 但模块加载期不能调用 useMetadataStore()，因此这里惰性获取并缓存。
  */
-function ensureTables(connId: number, database: string): string[] {
-  const key = `${connId}:${database}`
-  const cached = metaCache.get(key)
-  if (cached && !cached.loading && cached.fetchedAt && Date.now() - cached.fetchedAt < META_TTL) {
-    return cached.tables
-  }
-  if (cached?.loading) {
-    return cached.tables
-  }
-
-  const entry = cached ?? createMeta()
-  entry.loading = true
-  metaCache.set(key, entry)
-
-  void fetchTables(connId, database)
-    .then((tables) => {
-      entry.tables = tables
-      entry.fetchedAt = Date.now()
-    })
-    .finally(() => {
-      entry.loading = false
-    })
-
-  return entry.tables
-}
-
-/** 确保某张表的字段就绪（按表单独记账，不受表列表加载状态影响） */
-function ensureColumns(connId: number, database: string, table: string): ExecutorColumn[] {
-  const key = `${connId}:${database}`
-  const cached = metaCache.get(key)
-  const fetchedAt = cached?.columnsFetchedAt.get(table) ?? 0
-  if (cached && fetchedAt && Date.now() - fetchedAt < META_TTL) {
-    return cached.columns.get(table) ?? []
-  }
-  if (cached?.columnsLoading.has(table)) {
-    return cached.columns.get(table) ?? []
-  }
-
-  const entry = cached ?? createMeta()
-  entry.columnsLoading.add(table)
-  metaCache.set(key, entry)
-
-  void fetchTableColumns(connId, database, table)
-    .then((columns) => {
-      entry.columns.set(table, columns)
-      entry.columnsFetchedAt.set(table, Date.now())
-    })
-    .finally(() => {
-      entry.columnsLoading.delete(table)
-    })
-
-  return entry.columns.get(table) ?? []
-}
-
-/** 确保库列表就绪（机制同 ensureTables，按连接缓存） */
-function ensureDatabases(connId: number): string[] {
-  const cached = databaseCache.get(connId)
-  if (cached && !cached.loading && Date.now() - cached.fetchedAt < META_TTL) {
-    return cached.names
-  }
-  if (cached?.loading) {
-    return cached.names
-  }
-
-  const entry: DatabaseMeta = cached ?? { names: [], fetchedAt: 0, loading: true }
-  entry.loading = true
-  databaseCache.set(connId, entry)
-
-  void fetchDatabases(connId)
-    .then((names) => {
-      entry.names = names
-      entry.fetchedAt = Date.now()
-    })
-    .finally(() => {
-      entry.loading = false
-    })
-
-  return entry.names
-}
-
-/** 强制失效元数据缓存（工具栏刷新按钮）：表 / 字段 + 该连接的库列表 */
-export function invalidateMeta(connId: number, database: string) {
-  metaCache.delete(`${connId}:${database}`)
-  databaseCache.delete(connId)
+let metadataStore: ReturnType<typeof useMetadataStore> | null = null
+function metadata(): ReturnType<typeof useMetadataStore> {
+  metadataStore ??= useMetadataStore()
+  return metadataStore
 }
 
 // ---------------------------------------------------------------- 语句解析

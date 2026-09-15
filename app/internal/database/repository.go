@@ -167,6 +167,9 @@ func (r *Repository) GetConnection(id int64) (*DBConnection, error) {
 
 // SaveConnection 新增或更新连接，返回记录 ID。
 func (r *Repository) SaveConnection(c DBConnection) (int64, error) {
+	// 环境标识入库前先归一，保证「本地 / 测试 / 生产」三者互斥
+	c.normalizeEnvMark()
+
 	if c.ID > 0 {
 		_, err := r.db.conn.Exec(`
 			UPDATE db_connections
@@ -174,13 +177,13 @@ func (r *Repository) SaveConnection(c DBConnection) (int64, error) {
 			    note = ?, color = ?, charset = ?, default_schema = ?,
 			    connect_timeout_secs = ?, query_timeout_secs = ?, keepalive_secs = ?,
 			    ssl_mode = ?, ssl_ca_path = ?, ssl_cert_path = ?, ssl_key_path = ?, url_params = ?,
-			    read_only = ?, is_production = ?
+			    read_only = ?, is_local = ?, is_test = ?, is_production = ?
 			WHERE id = ?`,
 			c.Name, c.DBType, c.Host, c.Port, c.Database, c.Username, c.Password, c.Extra,
 			c.Note, c.Color, c.Charset, c.DefaultSchema,
 			c.ConnectTimeoutSecs, c.QueryTimeoutSecs, c.KeepaliveSecs,
 			c.SSLMode, c.SSLCaPath, c.SSLCertPath, c.SSLKeyPath, c.URLParams,
-			boolToInt(c.ReadOnly), boolToInt(c.IsProduction), c.ID)
+			boolToInt(c.ReadOnly), boolToInt(c.IsLocal), boolToInt(c.IsTest), boolToInt(c.IsProduction), c.ID)
 		if err != nil {
 			return 0, fmt.Errorf("更新连接失败: %w", err)
 		}
@@ -193,18 +196,34 @@ func (r *Repository) SaveConnection(c DBConnection) (int64, error) {
 			note, color, charset, default_schema,
 			connect_timeout_secs, query_timeout_secs, keepalive_secs,
 			ssl_mode, ssl_ca_path, ssl_cert_path, ssl_key_path, url_params,
-			read_only, is_production
+			read_only, is_local, is_test, is_production
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.Name, c.DBType, c.Host, c.Port, c.Database, c.Username, c.Password, c.Extra,
 		c.Note, c.Color, c.Charset, c.DefaultSchema,
 		c.ConnectTimeoutSecs, c.QueryTimeoutSecs, c.KeepaliveSecs,
 		c.SSLMode, c.SSLCaPath, c.SSLCertPath, c.SSLKeyPath, c.URLParams,
-		boolToInt(c.ReadOnly), boolToInt(c.IsProduction))
+		boolToInt(c.ReadOnly), boolToInt(c.IsLocal), boolToInt(c.IsTest), boolToInt(c.IsProduction))
 	if err != nil {
 		return 0, fmt.Errorf("新增连接失败: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// normalizeEnvMark 保证环境标识互斥。
+//
+// 界面上三者是单选式的勾选，正常情况下不会同时为真；
+// 这里再兜一道，避免脏数据导致列表同时挂出多个环境标签。
+// 优先级：生产 > 测试 > 本地（越危险的环境越应保留提示）。
+func (c *DBConnection) normalizeEnvMark() {
+	if c.IsProduction {
+		c.IsLocal = false
+		c.IsTest = false
+		return
+	}
+	if c.IsTest {
+		c.IsLocal = false
+	}
 }
 
 // DeleteConnection 删除连接。
@@ -425,7 +444,7 @@ func scanConnection(s rowScanner) (DBConnection, error) {
 	var note, color, charset, defaultSchema sql.NullString
 	var sslMode, sslCa, sslCert, sslKey, urlParams sql.NullString
 	var port, connectTimeout, queryTimeout, keepalive sql.NullInt64
-	var readOnly, isProduction sql.NullInt64
+	var readOnly, isLocal, isTest, isProduction sql.NullInt64
 
 	if err := s.Scan(
 		&c.ID, &c.Name, &c.DBType, &host, &port,
@@ -433,7 +452,7 @@ func scanConnection(s rowScanner) (DBConnection, error) {
 		&note, &color, &charset, &defaultSchema,
 		&connectTimeout, &queryTimeout, &keepalive,
 		&sslMode, &sslCa, &sslCert, &sslKey, &urlParams,
-		&readOnly, &isProduction,
+		&readOnly, &isLocal, &isTest, &isProduction,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return c, err
@@ -460,6 +479,8 @@ func scanConnection(s rowScanner) (DBConnection, error) {
 	c.SSLKeyPath = sslKey.String
 	c.URLParams = urlParams.String
 	c.ReadOnly = readOnly.Int64 != 0
+	c.IsLocal = isLocal.Int64 != 0
+	c.IsTest = isTest.Int64 != 0
 	c.IsProduction = isProduction.Int64 != 0
 	return c, nil
 }
@@ -469,7 +490,7 @@ const connectionColumns = `id, name, db_type, host, port, database, username, pa
 	note, color, charset, default_schema,
 	connect_timeout_secs, query_timeout_secs, keepalive_secs,
 	ssl_mode, ssl_ca_path, ssl_cert_path, ssl_key_path, url_params,
-	read_only, is_production`
+	read_only, is_local, is_test, is_production`
 
 // boolToInt 将布尔值转为 SQLite 的 0/1。
 func boolToInt(b bool) int {

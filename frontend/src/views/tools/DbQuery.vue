@@ -6,6 +6,7 @@ import ResultTable from '@/components/ResultTable.vue'
 import ResultPagination from '@/components/ResultPagination.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
+import ConnectionSelect from '@/components/ConnectionSelect.vue'
 import { copyRowSql, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/utils/rowSql'
 import { DEFAULT_PAGE_SIZE, executeTemplateQuery, fetchTemplate, fetchTemplateList } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
@@ -419,20 +420,12 @@ onMounted(async () => {
           />
         </el-select>
 
-        <el-select
+        <ConnectionSelect
           v-model="connId"
-          placeholder="选择数据库连接"
+          :connections="connections"
           clearable
-          filterable
-          style="width: 200px"
-        >
-          <el-option
-            v-for="conn in connections"
-            :key="conn.id"
-            :label="`${conn.name} (${conn.dbType})`"
-            :value="conn.id"
-          />
-        </el-select>
+          width="200px"
+        />
 
         <!-- 图标按钮：跳转到对应的单例标签页 -->
         <el-button
