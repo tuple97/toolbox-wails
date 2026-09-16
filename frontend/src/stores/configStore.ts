@@ -26,6 +26,8 @@ const DEFAULTS: Record<SettingKey, string> = {
   sidebar_config: '{}',
   picker_config: '{}',
   sidebar_view: '{}',
+  sql_completion_trigger: 'positional',
+  sql_completion_alias: 'false',
 }
 
 export const useConfigStore = defineStore('config', () => {

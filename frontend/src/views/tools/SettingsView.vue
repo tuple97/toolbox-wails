@@ -4,6 +4,7 @@ import { useConfigStore } from '@/stores/configStore'
 import { useLogStore } from '@/stores/logStore'
 import { fetchSystemFonts } from '@/api/fonts'
 import { buildFontOptions } from '@/utils/fonts'
+import { SQL_TRIGGER_MODE_OPTIONS, parseSqlTriggerMode } from '@/utils/sql/sqlCompletionTrigger'
 import type { ControlSize, ThemeMode } from '@/types'
 
 /**
@@ -84,6 +85,18 @@ const logMaxLines = computed({
     configStore.set('log_max_lines', String(value))
     logStore.setMaxLines(value)
   },
+})
+
+/** SQL 提示触发方式（三档，见 utils/sql/sqlCompletionTrigger.ts） */
+const sqlTriggerMode = computed({
+  get: () => parseSqlTriggerMode(configStore.values.sql_completion_trigger),
+  set: (value: string) => configStore.set('sql_completion_trigger', value),
+})
+
+/** 表名补全后自动补别名 */
+const sqlAutoAlias = computed({
+  get: () => configStore.values.sql_completion_alias === 'true',
+  set: (value: boolean) => configStore.set('sql_completion_alias', value ? 'true' : 'false'),
 })
 
 onMounted(async () => {
@@ -195,9 +208,30 @@ onMounted(async () => {
             </div>
           </el-form-item>
 
+          <el-form-item label="提示触发">
+            <el-select v-model="sqlTriggerMode" style="width: 100%">
+              <el-option
+                v-for="opt in SQL_TRIGGER_MODE_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              >
+                <span>{{ opt.label }}</span>
+                <small class="settings-view__option-hint">{{ opt.hint }}</small>
+              </el-option>
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="表名自动别名">
+            <el-switch v-model="sqlAutoAlias" />
+          </el-form-item>
+
           <el-form-item label="">
             <small class="settings-view__tip">
-              编辑器字体独立于界面字体，可单独指定；选项与本机已安装字体同步。
+              提示触发决定 SQL 编辑器何时自动弹出候选（Ctrl+Space 始终可用）；
+              表名自动别名会在 FROM / JOIN 之后补一个短别名
+              （<code>users</code> → <code>u</code>、<code>order_items</code> → <code>oi</code>），
+              候选里同时保留「不加别名」的那条。
             </small>
           </el-form-item>
         </el-form>
@@ -277,5 +311,12 @@ onMounted(async () => {
   color: var(--text-muted);
   font-size: var(--app-font-size-xs);
   line-height: 1.6;
+}
+
+/* 下拉项里的说明文字：左侧标题 + 灰色注解 */
+.settings-view__option-hint {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
 }
 </style>

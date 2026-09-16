@@ -455,6 +455,78 @@ func (s *DBService) ListTableColumns(ctx context.Context, connID int64, database
 	return columns, nil
 }
 
+// ForeignKey 表间外键约束（智能补全用它生成 `ON a.x = b.y` 形式的关联条件）。
+type ForeignKey struct {
+	// Column 本表的列名
+	Column string `json:"column"`
+	// ReferencedTable 被引用的表
+	ReferencedTable string `json:"referencedTable"`
+	// ReferencedColumn 被引用的列名（通常是 id）
+	ReferencedColumn string `json:"referencedColumn"`
+}
+
+// ListForeignKeys 返回指定表的外键约束。
+//
+// database 在 MySQL 下是库名、PostgreSQL 下是 schema（见 schemaName）。
+// 取不到（无 information_schema 权限 / 表没有外键）时前端会退化为命名启发式，
+// 因此这里如实返回错误即可 —— 补全的可用性不依赖它。
+func (s *DBService) ListForeignKeys(ctx context.Context, connID int64, database string, table string) ([]ForeignKey, error) {
+	// 同 ListTables：连接用连接自身的库，库/schema 只作为查询条件
+	conn, db, closeDB, err := s.openExecutorConn(connID, "")
+	if err != nil {
+		return nil, err
+	}
+	defer closeDB()
+
+	queryCtx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
+
+	/*
+		方言差异：MySQL 的 key_column_usage 直接带 referenced_* 三列；
+		PostgreSQL（标准 information_schema）没有这几列，得按约束名绕到
+		constraint_column_usage 才能拿到被引用的表 / 列。
+	*/
+	var query string
+	if isPostgresType(conn.DBType) {
+		query = `SELECT kcu.column_name, ccu.table_name, ccu.column_name
+		         FROM information_schema.table_constraints tc
+		         JOIN information_schema.key_column_usage kcu
+		           ON kcu.constraint_name = tc.constraint_name
+		          AND kcu.constraint_schema = tc.constraint_schema
+		         JOIN information_schema.constraint_column_usage ccu
+		           ON ccu.constraint_name = tc.constraint_name
+		          AND ccu.constraint_schema = tc.constraint_schema
+		         WHERE tc.constraint_type = 'FOREIGN KEY'
+		           AND tc.table_schema = ? AND tc.table_name = ?
+		         ORDER BY tc.constraint_name, kcu.ordinal_position`
+	} else {
+		query = `SELECT column_name, referenced_table_name, referenced_column_name
+		         FROM information_schema.key_column_usage
+		         WHERE table_schema = ? AND table_name = ?
+		           AND referenced_table_name IS NOT NULL
+		         ORDER BY constraint_name, ordinal_position`
+	}
+
+	rows, err := db.QueryContext(queryCtx, query, schemaName(database, conn.DBType), table)
+	if err != nil {
+		return nil, fmt.Errorf("读取外键信息失败: %w", err)
+	}
+	defer rows.Close()
+
+	keys := make([]ForeignKey, 0, 8)
+	for rows.Next() {
+		var item ForeignKey
+		if err := rows.Scan(&item.Column, &item.ReferencedTable, &item.ReferencedColumn); err != nil {
+			return nil, fmt.Errorf("读取外键信息失败: %w", err)
+		}
+		keys = append(keys, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历外键信息失败: %w", err)
+	}
+	return keys, nil
+}
+
 // openExecutorConn 打开命令执行器元数据查询用的连接，并按所选库覆盖默认库。
 func (s *DBService) openExecutorConn(connID int64, dbName string) (*database.DBConnection, *sql.DB, func(), error) {
 	conn, err := s.repo.GetConnection(connID)

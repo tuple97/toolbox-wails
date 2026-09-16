@@ -5,8 +5,14 @@
  * 因此返回的 CancellablePromise 调用 cancel() 时会同步取消数据库端的查询。
  */
 import type { CancellablePromise } from '@wailsio/runtime'
-import { ExecuteStatement, ListDatabases, ListTableColumns, ListTables } from './bindings'
-import type { ExecutorColumn, ExecutorRequest, ExecutorResult } from '@/types'
+import {
+  ExecuteStatement,
+  ListDatabases,
+  ListForeignKeys,
+  ListTableColumns,
+  ListTables,
+} from './bindings'
+import type { ExecutorColumn, ExecutorRequest, ExecutorResult, TableForeignKey } from '@/types'
 
 /**
  * 执行用户输入的 SQL；cancel() 可终止正在执行的查询。
@@ -49,5 +55,19 @@ export async function fetchTableColumns(
     name: String(item?.name ?? ''),
     dataType: String(item?.dataType ?? ''),
     comment: String(item?.comment ?? ''),
+  }))
+}
+
+/** 表的外键约束（关联条件补全用） */
+export async function fetchForeignKeys(
+  connId: number,
+  database: string,
+  table: string,
+): Promise<TableForeignKey[]> {
+  const list = await ListForeignKeys(connId, database, table)
+  return (list ?? []).map(item => ({
+    column: String(item?.column ?? ''),
+    referencedTable: String(item?.referencedTable ?? ''),
+    referencedColumn: String(item?.referencedColumn ?? ''),
   }))
 }

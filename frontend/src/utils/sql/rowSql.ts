@@ -136,6 +136,13 @@ function escapeString(text: string, dialect: SqlDialect): string {
   return dialect === 'mysql' ? escaped.replace(/\\/g, '\\\\') : escaped
 }
 
+/**
+ * 值 → SQL 字面量（结果行 SQL 与补全的比较值共用一份转义规则）。
+ */
+export function formatSqlValue(value: unknown, dialect: SqlDialect): string {
+  return formatValue(value, dialect)
+}
+
 /** 单元格值 → SQL 字面量 */
 function formatValue(value: unknown, dialect: SqlDialect): string {
   if (value === null || value === undefined) {

@@ -129,6 +129,21 @@ export interface SQLTemplate {
   pageSize?: number
 }
 
+/**
+ * 表的外键约束，与后端 services.ForeignKey 对应。
+ *
+ * 智能补全的关联条件优先用它生成 `ON a.x = b.y`；
+ * `utils/sql/sqlCompletionJoin.ts` 的 `ForeignKeyInfo` 与它结构一致。
+ */
+export interface TableForeignKey {
+  /** 本表的列名 */
+  column: string
+  /** 被引用的表 */
+  referencedTable: string
+  /** 被引用的列名（通常是 id） */
+  referencedColumn: string
+}
+
 /** 词典，与后端 database.Dictionary 对应 */
 export interface Dictionary {
   id: number
@@ -344,6 +359,8 @@ export type SettingKey =
   | 'sidebar_config'
   | 'picker_config'
   | 'sidebar_view'
+  | 'sql_completion_trigger'
+  | 'sql_completion_alias'
 
 /**
  * 主题标识。

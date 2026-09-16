@@ -4,7 +4,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Events } from '@wailsio/runtime'
 import type { EditorView } from '@codemirror/view'
 import CodeEditor from '@/components/CodeEditor.vue'
-import { registerScriptGlobals, registerTemplateContext } from '@/utils/sql/sqlCompletion'
+import { registerScriptGlobals } from '@/utils/sql/sqlCompletion'
+import type { CompletionRuntime } from '@/utils/sql/sqlCompletion'
 import VariableConfigPanel from '@/components/VariableConfigPanel.vue'
 import FieldMappingPanel from '@/components/FieldMappingPanel.vue'
 import ConnectionSelect from '@/components/ConnectionSelect.vue'
@@ -348,18 +349,31 @@ async function handleDelete(item: TemplateListItem) {
 // ------------------------------------------------------------ 编辑器补全上下文
 
 /**
- * SQL 编辑器：登记模板变量，供 `{{ … }}` 内的补全使用。
+ * 模板 SQL 编辑器的补全上下文（每页定向扩展）。
  *
- * 传 getter 而不是快照：变量配置随编辑实时变化，补全时要读最新值。
- * SQL 部分的表/列候选走编辑器自己的 SQL 上下文（模板编辑器没有连接上下文，
- * 会退化为关键字 + 函数，见 utils/sqlCompletion.ts）。
+ * 两样东西都是「按需实时求值」：
+ *  - `sql`：模板所属连接的表 / 列元数据（连接从模板配置来，库名与方言从连接列表取）；
+ *  - `templateVariables`：本模板的变量配置。
+ *
+ * 因为写成了函数，改连接、改变量配置后补全立即跟着变，不需要重建编辑器。
  */
-function handleSqlEditorMount(view: EditorView) {
-  registerTemplateContext(view, () => variableConfigs.value.map(item => ({
-    name: item.name,
-    label: item.label,
-  })))
+function templateCompletionContext(): Partial<CompletionRuntime> {
+  const conn = templateConnection.value
+  return {
+    sql: conn
+      ? { connId: conn.id, database: conn.database ?? '', dbType: conn.dbType }
+      : undefined,
+    templateVariables: variableConfigs.value.map(item => ({ name: item.name, label: item.label })),
+  }
 }
+
+/** 模板当前绑定的连接（补全上下文与编辑器方言都用它） */
+const templateConnection = computed(
+  () => connections.value.find(item => item.id === form.connId) ?? null,
+)
+
+/** 编辑器方言：跟随模板绑定的连接 */
+const templateConnectionDbType = computed(() => templateConnection.value?.dbType ?? '')
 
 /** 前置脚本可用的全局标识符：注入的变量名 + variables / sqlTemplate */
 function handlePreScriptMount(view: EditorView) {
@@ -511,14 +525,16 @@ onMounted(async () => {
               <span>插入模板</span>
             </el-button>
           </div>
+          <!-- 补全上下文：所属连接的表/列 + 本模板变量（见 templateCompletionContext） -->
           <CodeEditor
             ref="sqlEditorRef"
             v-model="form.sqlText"
             language="sql"
             completion-mode="sql-template"
             height="100%"
+            :db-type="templateConnectionDbType"
+            :completion-context="templateCompletionContext"
             @change="scheduleParse"
-            @mount="handleSqlEditorMount"
           />
         </div>
 

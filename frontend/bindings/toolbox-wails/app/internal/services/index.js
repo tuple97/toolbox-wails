@@ -8,6 +8,7 @@ export {
     ExecutorColumn,
     ExecutorRequest,
     ExecutorResult,
+    ForeignKey,
     QueryResult,
     SystemMetrics,
     TemplateExecuteRequest,

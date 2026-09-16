@@ -492,7 +492,7 @@ onMounted(async () => {
         />
       </section>
 
-      <!-- 结果区：执行日志固定页签在最前，查询结果在后；概要徽标浮在页签栏右侧 -->
+      <!-- 结果区：执行日志固定页签在最前，查询结果在后 -->
       <section class="db-query__result">
         <el-tabs v-model="activeTab" class="db-query__tabs">
           <el-tab-pane label="执行日志" name="log" lazy>
@@ -621,7 +621,6 @@ onMounted(async () => {
 }
 
 .db-query__result {
-  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;

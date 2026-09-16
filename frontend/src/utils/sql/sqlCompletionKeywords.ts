@@ -20,6 +20,22 @@ export const BOOST_FUNCTION = 50
 export const BOOST_EXPRESSION_KEYWORD = 30
 export const BOOST_CLAUSE_KEYWORD = 10
 
+/**
+ * 智能项（`*` 展开 / 分组列 / 比较值 / INSERT 列清单）：100。
+ *
+ * 高于列（90）——它们只在该位置才有意义，出来了就该排在最前面，
+ * 常规列名候选紧随其后。
+ */
+export const BOOST_SMART_ITEM = 100
+
+/**
+ * 「上下文优先的列」：如 GROUP BY 位置上的 SELECT 非聚合列。
+ *
+ * 略高于普通列（90），但仍低于片段型智能项，
+ * 这样「补齐全部列」的入口在最前、它推荐的那些列紧跟其后、其余列照旧。
+ */
+export const BOOST_SMART_COLUMN = 95
+
 /*
  * 关键字按「允许出现的位置」分类，补全只给该位置写得出来的那些，
  * 其余一律不弹（矩阵见 sqlCompletion.ts 里 keywordsFor 的说明）。
@@ -54,6 +70,32 @@ export const SQL_KEYWORDS = [
 
 /** 表达式关键字的集合版，用于决定候选权重 */
 export const EXPRESSION_KEYWORD_SET = new Set(EXPRESSION_KEYWORDS)
+
+/**
+ * 需要引用符才能当标识符用的保留字。
+ *
+ * 补全里出现的语句关键字是基础（多词结构拆成单词），另外补一批列名里最常踩到的
+ * 保留字 —— 例如 `order` / `key` / `user` / `desc` / `row`。
+ *
+ * 判据只用于「插入时要不要加引用符」：**宁可多引几个也不能少引**（少引 = 生成的
+ * SQL 直接语法错误），所以这里按「MySQL 8 / PostgreSQL 里确实保留」来收，
+ * 常见的非保留词（`status` / `type` / `name` / `password`）故意不收，
+ * 免得日常列名全被包成反引号。
+ */
+export const RESERVED_WORDS = new Set([
+  // 补全里的关键字（含多词结构拆开后的单词）
+  ...SQL_KEYWORDS.flatMap(keyword => keyword.toLowerCase().split(/\s+/)),
+  // 两词结构的后半截（`GROUP BY` / `ORDER BY` 的 by 已在上面的拆分里）
+  'group', 'order', 'union', 'cross', 'outer', 'inner', 'left', 'right',
+  // 列名里最常见的保留字
+  'key', 'index', 'user', 'database', 'schema', 'column',
+  'primary', 'foreign', 'references', 'constraint', 'default', 'unique', 'check',
+  'rank', 'row', 'rows', 'window', 'match', 'natural', 'except', 'intersect',
+  'partition', 'procedure', 'function', 'trigger', 'view', 'comment',
+  'grant', 'revoke', 'commit', 'rollback', 'transaction', 'lock', 'unlock',
+  'replace', 'ignore', 'force', 'precision',
+  'current_user', 'current_date', 'current_time', 'current_timestamp',
+])
 
 /** 常用函数（label → 提示的签名说明） */
 export const SQL_FUNCTIONS: Record<string, string> = {

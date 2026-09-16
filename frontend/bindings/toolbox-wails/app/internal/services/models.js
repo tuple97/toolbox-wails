@@ -423,6 +423,54 @@ export class ExecutorResult {
 }
 
 /**
+ * ForeignKey 表间外键约束（智能补全用它生成 `ON a.x = b.y` 形式的关联条件）。
+ */
+export class ForeignKey {
+    /**
+     * Creates a new ForeignKey instance.
+     * @param {Partial<ForeignKey>} [$$source = {}] - The source object to create the ForeignKey.
+     */
+    constructor($$source = {}) {
+        if (!("column" in $$source)) {
+            /**
+             * Column 本表的列名
+             * @member
+             * @type {string}
+             */
+            this["column"] = "";
+        }
+        if (!("referencedTable" in $$source)) {
+            /**
+             * ReferencedTable 被引用的表
+             * @member
+             * @type {string}
+             */
+            this["referencedTable"] = "";
+        }
+        if (!("referencedColumn" in $$source)) {
+            /**
+             * ReferencedColumn 被引用的列名（通常是 id）
+             * @member
+             * @type {string}
+             */
+            this["referencedColumn"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ForeignKey instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ForeignKey}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ForeignKey(/** @type {Partial<ForeignKey>} */($$parsedSource));
+    }
+}
+
+/**
  * QueryResult 描述一次查询的完整结果。
  */
 export class QueryResult {

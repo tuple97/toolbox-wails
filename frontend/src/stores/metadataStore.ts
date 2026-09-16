@@ -15,8 +15,8 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { fetchDatabases, fetchTableColumns, fetchTables } from '@/api/executor'
-import type { ExecutorColumn } from '@/types'
+import { fetchDatabases, fetchForeignKeys, fetchTableColumns, fetchTables } from '@/api/executor'
+import type { ExecutorColumn, TableForeignKey } from '@/types'
 
 /** 元数据缓存有效期 */
 export const META_TTL = 5 * 60 * 1000
@@ -36,6 +36,16 @@ export const useMetadataStore = defineStore('metadata', () => {
   const columns = ref<Record<string, ExecutorColumn[]>>({})
   const columnsFetchedAt = ref<Record<string, number>>({})
   const columnsLoading = ref<Record<string, boolean>>({})
+
+  /**
+   * `${connId}::${database}::${table}` → 外键列表。
+   *
+   * 与字段同样是「按表单独记账」：共用一个时间戳会让先拉完的那份把另一份饿死
+   * （见下面 ensureColumns 的说明）。
+   */
+  const foreignKeys = ref<Record<string, TableForeignKey[]>>({})
+  const foreignKeysFetchedAt = ref<Record<string, number>>({})
+  const foreignKeysLoading = ref<Record<string, boolean>>({})
 
   /** 最近一次失败原因，界面可据此给提示 */
   const lastError = ref('')
@@ -208,9 +218,64 @@ export const useMetadataStore = defineStore('metadata', () => {
     return Boolean(columnsLoading.value[tableKey(connId, database, table)])
   }
 
+  // ------------------------------------------------------------ 外键
+
+  /** 读取外键缓存并在需要时后台刷新；同步返回当前可见数据 */
+  function ensureForeignKeys(connId: number, database: string, table: string): TableForeignKey[] {
+    if (!connId || !table) {
+      return []
+    }
+    const key = tableKey(connId, database, table)
+    if (!isFresh(foreignKeysFetchedAt.value[key]) && !foreignKeysLoading.value[key]) {
+      void loadForeignKeys(connId, database, table)
+    }
+    return foreignKeys.value[key] ?? []
+  }
+
+  /**
+   * 拉取某张表的外键；force 为真时忽略缓存。
+   *
+   * **失败不抛出**：外键只用于把关联条件补全得更准，没有它还有命名启发式兜底，
+   * 不能因为无 information_schema 权限、方言差异之类的原因把补全链路打断 ——
+   * 失败按「这张表没有外键」缓存下来，并记进 lastError 供界面提示。
+   */
+  async function loadForeignKeys(
+    connId: number,
+    database: string,
+    table: string,
+    force = false,
+  ): Promise<TableForeignKey[]> {
+    if (!connId || !table) {
+      return []
+    }
+    const key = tableKey(connId, database, table)
+    if (!force && isFresh(foreignKeysFetchedAt.value[key])) {
+      return foreignKeys.value[key] ?? []
+    }
+    if (foreignKeysLoading.value[key]) {
+      return foreignKeys.value[key] ?? []
+    }
+
+    foreignKeysLoading.value[key] = true
+    try {
+      const list = await fetchForeignKeys(connId, database, table)
+      foreignKeys.value[key] = list
+      return list
+    }
+    catch (e) {
+      lastError.value = e instanceof Error ? e.message : String(e)
+      foreignKeys.value[key] = []
+      return []
+    }
+    finally {
+      foreignKeysFetchedAt.value[key] = Date.now()
+      foreignKeysLoading.value[key] = false
+    }
+  }
+
   // ------------------------------------------------------------ 缓存管理
 
-  /** 丢掉某个连接的全部元数据缓存（库 + 该连接下所有库的表与字段） */
+  /** 丢掉某个连接的全部元数据缓存（库 + 该连接下所有库的表 / 字段 / 外键） */
   function invalidateConnection(connId: number) {
     delete databases.value[connId]
     delete databasesFetchedAt.value[connId]
@@ -222,16 +287,21 @@ export const useMetadataStore = defineStore('metadata', () => {
         delete tablesFetchedAt.value[key]
       }
     }
-    const tablePrefix = `${connId}::`
     for (const key of Object.keys(columns.value)) {
-      if (key.startsWith(tablePrefix)) {
+      if (key.startsWith(schemaPrefix)) {
         delete columns.value[key]
         delete columnsFetchedAt.value[key]
       }
     }
+    for (const key of Object.keys(foreignKeys.value)) {
+      if (key.startsWith(schemaPrefix)) {
+        delete foreignKeys.value[key]
+        delete foreignKeysFetchedAt.value[key]
+      }
+    }
   }
 
-  /** 丢掉某个库下的表与字段缓存（库列表保留） */
+  /** 丢掉某个库下的表 / 字段 / 外键缓存（库列表保留） */
   function invalidateSchema(connId: number, database: string) {
     const prefix = `${schemaKey(connId, database)}::`
     delete tables.value[schemaKey(connId, database)]
@@ -240,6 +310,12 @@ export const useMetadataStore = defineStore('metadata', () => {
       if (key.startsWith(prefix)) {
         delete columns.value[key]
         delete columnsFetchedAt.value[key]
+      }
+    }
+    for (const key of Object.keys(foreignKeys.value)) {
+      if (key.startsWith(prefix)) {
+        delete foreignKeys.value[key]
+        delete foreignKeysFetchedAt.value[key]
       }
     }
   }
@@ -271,6 +347,8 @@ export const useMetadataStore = defineStore('metadata', () => {
     tablesFetchedAt.value = {}
     columns.value = {}
     columnsFetchedAt.value = {}
+    foreignKeys.value = {}
+    foreignKeysFetchedAt.value = {}
     lastError.value = ''
   }
 
@@ -278,13 +356,16 @@ export const useMetadataStore = defineStore('metadata', () => {
     databases,
     tables,
     columns,
+    foreignKeys,
     lastError,
     ensureDatabases,
     ensureTables,
     ensureColumns,
+    ensureForeignKeys,
     loadDatabases,
     loadTables,
     loadColumns,
+    loadForeignKeys,
     isDatabasesLoading,
     isTablesLoading,
     isColumnsLoading,

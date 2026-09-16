@@ -18,6 +18,7 @@ import {
   completionStatementRange,
   defaultMetadataProvider,
   qualifierBeforeCursor,
+  sqlContextFromRuntime,
   sqlContextOf,
   unquoteIdent,
 } from './sqlCompletion'
@@ -52,7 +53,8 @@ export function columnHoverAt(
   pos: number,
   runtime: CompletionRuntime,
 ): SqlColumnHover | null {
-  const sql = runtime.sql
+  // 运行期上下文允许写 getter（页面动态注入），这里先求值
+  const sql = sqlContextFromRuntime(runtime)
   const word = state.wordAt(pos)
   if (!sql || !sql.connId || !word) {
     return null

@@ -37,6 +37,10 @@ var defaultSettings = []database.Setting{
 	{Key: "picker_config", Type: SettingTypeJSON, Value: "{}"},
 	// 侧边菜单视图状态：整体收起与分组折叠（JSON，结构见前端 utils/sidebarView.ts）
 	{Key: "sidebar_view", Type: SettingTypeJSON, Value: "{}"},
+	// SQL 提示触发方式：positional（位置感知，默认）/ require-prefix（需前缀）/ manual（仅手动）
+	{Key: "sql_completion_trigger", Type: SettingTypeString, Value: "positional"},
+	// 表名补全后是否自动补别名（true / false，默认关闭）
+	{Key: "sql_completion_alias", Type: SettingTypeBoolean, Value: "false"},
 }
 
 // SettingService 负责全局配置的读写。

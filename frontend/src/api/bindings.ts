@@ -39,6 +39,7 @@ export const ExecuteStatement = App.ExecuteStatement
 export const ListDatabases = App.ListDatabases
 export const ListTables = App.ListTables
 export const ListTableColumns = App.ListTableColumns
+export const ListForeignKeys = App.ListForeignKeys
 
 // ---- SQL 模板 ----
 export const ListSqlTemplates = App.ListSqlTemplates

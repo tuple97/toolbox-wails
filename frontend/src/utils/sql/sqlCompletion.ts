@@ -40,10 +40,24 @@
  *    补全时语句通常还没写完（正打到 `where u.`），语法树没有别名语义，
  *    而这套扫描对半成品语句更宽容。
  */
-import { startCompletion } from '@codemirror/autocomplete'
+import { insertCompletionText, startCompletion } from '@codemirror/autocomplete'
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete'
 import type { EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
+import { matchedByPinyinOnly, matchesPrefix, recordCompletionSelection, sortByRank } from './sqlCompletionRank'
+import { joinConditionItems } from './sqlCompletionJoin'
+import type { ForeignKeyInfo, JoinSide } from './sqlCompletionJoin'
+import {
+  comparisonTarget,
+  insertTargetTable,
+  nonAggregateColumnsOf,
+  selectListTail,
+  smartFragmentItem,
+  smartValueItems,
+  starAtSelectListEnd,
+} from './sqlSmartItems'
+import type { SmartColumn, SmartCompareValue } from './sqlSmartItems'
+import { useDictStore } from '@/stores/dictStore'
 import { useMetadataStore } from '@/stores/metadataStore'
 import { splitSqlStatements } from '@/utils/sql/sqlStatementRanges'
 import { inLiteralOrComment, scopeRanges } from '@/utils/sql/sqlSyntax'
@@ -57,6 +71,7 @@ import {
   BOOST_EXPRESSION_KEYWORD,
   BOOST_FUNCTION,
   BOOST_NAMESPACE,
+  BOOST_SMART_COLUMN,
   BOOST_TABLE,
   CLAUSE_KEYWORDS,
   EXPRESSION_KEYWORDS,
@@ -64,8 +79,23 @@ import {
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
 } from './sqlCompletionKeywords'
-import { clearColumnMarks, columnItem, qualifierBeforeCursor } from './sqlCompletionInsert'
-import { readTemplateContext, scriptBundle, templateBundle } from './sqlTemplateCompletion'
+import {
+  clearColumnMarks,
+  columnItem,
+  openingQuoteBefore,
+  qualifierBeforeCursor,
+  quotedIdentApply,
+  renderIdent,
+} from './sqlCompletionInsert'
+import { MAX_OPTIONS, pooledColumnItems } from './sqlCompletionColumnPool'
+import { aliasForTable, aliasedTableText } from './sqlTableAlias'
+import {
+  readTemplateContext,
+  scriptBundle,
+  templateBlockStack,
+  templateBundle,
+  templateClosingItems,
+} from './sqlTemplateCompletion'
 import type { ColumnCompletion } from './sqlCompletionInsert'
 
 // 拆分模块的对外 API 在此统一再导出：调用方（组件 / 测试）仍从 '@/utils/sql/sqlCompletion' 导入
@@ -104,25 +134,112 @@ export interface MetadataProvider {
   databases(connId: number): string[]
   tables(connId: number, database: string): string[]
   columns(connId: number, database: string, table: string): ExecutorColumn[]
+  /**
+   * 外键约束（可选）。
+   *
+   * 关联条件补全优先用它生成 `ON a.x = b.y`；不实现（或查询失败 / 无权限）时
+   * 退化为命名启发式（`{单数表名}_id = 对方.id`），功能不缺席。
+   */
+  foreignKeys?: (connId: number, database: string, table: string) => ForeignKeyInfo[]
+  /**
+   * 某列的可选值（可选），用于「比较值」智能项。
+   *
+   * 默认实现按「词典名与列名同名」从词典取值；不实现（或该列没有值域数据）时
+   * 不提供比较值候选，其余补全不受影响。
+   */
+  values?: (
+    connId: number,
+    database: string,
+    table: string,
+    column: string,
+  ) => SmartCompareValue[]
 }
 
-/** 一次补全所需的运行期上下文 */
+/**
+ * 本次补全命中的位置类别。
+ *
+ * 与既有的子句分类（readClauseKind）是同一趟分析的两种表达：
+ * 触发策略（sqlCompletionTrigger）与位置相关的新候选（关联条件 / 分组 / 列清单等）
+ * 都消费它，避免各自再写一套判定。
+ */
+export type CompletionContextKind =
+  /** 表名位置：FROM / JOIN / INTO / UPDATE 之后 */
+  | 'table'
+  /** 表达式位置：SELECT 列表 / WHERE / ON / SET / BY 等 */
+  | 'column'
+  /** 语句头（语句开头或判不出位置） */
+  | 'statement-start'
+  /** 子句关键字位置（表来源写完之后） */
+  | 'keyword'
+  /** 别名位置（AS 之后），此处不给候选 */
+  | 'alias'
+  /** 关联条件位置（JOIN … ON 之后） */
+  | 'join-on'
+  /** 分组位置（GROUP BY 之后） */
+  | 'group-by'
+  /** INSERT 列清单内 */
+  | 'insert'
+  /** 模板片段 `{{ … }}` 内 */
+  | 'template'
+  /** 脚本编辑器 */
+  | 'script'
+  /** 无（日志等不补全的编辑器） */
+  | 'none'
+
+/** 定向扩展的开关：轻量场景（如只想要变量的输入框）可以把用不上的候选关掉 */
+export interface CompletionFeatureFlags {
+  /** 关掉函数候选（只留变量与关键字的场景） */
+  disableFunctions?: boolean
+  /** 关掉语句片段候选（T3 的智能项与片段类候选） */
+  disableSnippets?: boolean
+  /** 关联条件建议（默认开） */
+  joinSuggestions?: boolean
+  /** 智能项（`*` 展开 / GROUP BY / 比较值 / INSERT 列清单，默认开） */
+  smartItems?: boolean
+  /**
+   * 表名补全后自动补别名（设置项 `sql_completion_alias`）。
+   *
+   * 由编辑器封装层统一注入（页面不必各自读设置），
+   * 因此设置改完**下一次补全**就生效，不用重建编辑器。
+   */
+  autoTableAlias?: boolean
+}
+
+/**
+ * 一次补全所需的运行期上下文。
+ *
+ * `sql` / `templateVariables` / `scriptGlobals` 允许传**取值函数**：
+ * 每次查询都重新求值，因此页面上的模板配置、当前连接变化后，
+ * 引用它的编辑器无需重建即可拿到新上下文。
+ */
 export interface CompletionRuntime {
   mode: CompletionMode
   /** SQL 侧上下文；未登记（如模板编辑器未绑定连接）时退化为关键字 + 函数 */
-  sql?: SqlContext
+  sql?: SqlContext | (() => SqlContext | undefined)
   /** 模板变量（sql-template 模式） */
-  templateVariables?: TemplateVariable[]
+  templateVariables?: TemplateVariable[] | (() => TemplateVariable[])
   /** 脚本注入的全局标识符（javascript 模式） */
-  scriptGlobals?: string[]
+  scriptGlobals?: string[] | (() => string[])
   /** 元数据来源；缺省用 metadataStore */
   metadata?: MetadataProvider
+  /** 定向扩展开关 */
+  featureFlags?: CompletionFeatureFlags
+  /** 是否用「历史选中」加权排序（默认开；用例里可关掉以获得确定顺序） */
+  useHistory?: boolean
 }
 
 /** 补全结果（内部统一形态，供补全源与测试共用） */
 export interface CompletionBundle {
   from: number
   options: Completion[]
+  /** 本次命中的位置类别（触发策略与新候选共用） */
+  contextKind: CompletionContextKind
+  /**
+   * 是否交给编辑器过滤候选。
+   * 本模块自行完成匹配（例如中文表名用拼音首字母命中）时置 false——
+   * 此时候选项已按本模块的打分排好序，编辑器不再插手。
+   */
+  filter?: boolean
 }
 
 /** 单个编辑器登记的上下文（按需扩展，避免替换原来的 getter 机制） */
@@ -130,6 +247,183 @@ interface CompletionRegistration {
   getSql?: () => SqlContext
   getTemplateVariables?: () => TemplateVariable[]
   getScriptGlobals?: () => string[]
+}
+
+// ---------------------------------------------------------------- 运行期上下文
+
+/** getter 求值后的运行期上下文（内部使用） */
+interface ResolvedRuntime {
+  mode: CompletionMode
+  sql?: SqlContext
+  templateVariables: TemplateVariable[]
+  scriptGlobals: string[]
+  metadata: MetadataProvider
+  featureFlags: CompletionFeatureFlags
+  useHistory: boolean
+}
+
+/** 求值一个「值或取值函数」字段 */
+function resolveField<T>(value: T | (() => T | undefined) | undefined): T | undefined {
+  if (typeof value === 'function') {
+    return (value as () => T | undefined)()
+  }
+  return value
+}
+
+/**
+ * 读运行期上下文里的 SQL 侧信息（兼容「值」与「getter」两种写法）。
+ * 悬停提示等旁路功能也用它，口径与补全保持一致。
+ */
+export function sqlContextFromRuntime(runtime: CompletionRuntime): SqlContext | undefined {
+  return resolveField(runtime.sql)
+}
+
+/** 把运行期上下文归一化：getter 求值、缺省项补齐（每次查询都重新求值） */
+function resolveRuntime(runtime: CompletionRuntime): ResolvedRuntime {
+  return {
+    mode: runtime.mode,
+    sql: resolveField(runtime.sql),
+    templateVariables: resolveField(runtime.templateVariables) ?? [],
+    scriptGlobals: resolveField(runtime.scriptGlobals) ?? [],
+    metadata: runtime.metadata ?? defaultMetadataProvider,
+    featureFlags: runtime.featureFlags ?? {},
+    useHistory: runtime.useHistory !== false,
+  }
+}
+
+/**
+ * 收尾：排序、必要时自行过滤、给候选项挂上「选中即记历史」的包装。
+ *
+ * 排序只做稳定重排，等于同分时保留原有插入顺序，
+ * 因此「列在前、关键字在后」这类既有分类顺序不会被打破。
+ */
+function finalizeBundle(
+  state: EditorState,
+  pos: number,
+  bundle: CompletionBundle,
+  runtime: ResolvedRuntime,
+): CompletionBundle {
+  if (!bundle.options.length) {
+    return bundle
+  }
+  const prefix = state.sliceDoc(Math.min(bundle.from, pos), pos)
+
+  /*
+   * 中文表名 / 列名靠拼音首字母命中时，编辑器自带的字面量匹配认不出来，
+   * 这种情况下改为本模块过滤（只留真正命中的）并交出排序权。
+   */
+  const customFilter = Boolean(prefix) && bundle.options.some(option => matchedByPinyinOnly(option.label, prefix))
+  const matched = customFilter
+    ? bundle.options.filter(option => matchesPrefix(option.label, prefix))
+    : bundle.options
+
+  /*
+   * 排序之后再截断：留下的都是分数最高（前缀命中 / 高频 / 该位置该出现）的那些，
+   * 超宽表 + 多表 JOIN 也不会把上千个候选一路带进弹层。
+   */
+  const sorted = sortByRank(matched, prefix)
+  const capped = sorted.length > MAX_OPTIONS ? sorted.slice(0, MAX_OPTIONS) : sorted
+  return {
+    ...bundle,
+    options: runtime.useHistory ? withHistoryRecording(capped) : capped,
+    filter: customFilter ? false : bundle.filter,
+  }
+}
+
+/**
+ * 给候选项包一层「选中即记历史」。
+ *
+ * 只包装 apply，不改变任何插入行为：
+ *  - 候选项自带函数 apply（列勾选、点号追加、模板闭合等）→ 原样调用；
+ *  - 自带字符串 apply（函数补 `()`）→ 按字符串插入；
+ *  - 都没有 → 插入 label 本身（与编辑器默认行为一致）。
+ */
+function withHistoryRecording(options: Completion[]): Completion[] {
+  return options.map((option) => {
+    const rawApply = option.apply
+    return {
+      ...option,
+      apply: (view: EditorView, completion: Completion, from: number, to: number) => {
+        recordCompletionSelection(completion.label)
+        if (typeof rawApply === 'function') {
+          return rawApply(view, completion, from, to)
+        }
+        if (typeof rawApply === 'string') {
+          view.dispatch(insertCompletionText(view.state, rawApply, from, to))
+          return true
+        }
+        view.dispatch(insertCompletionText(view.state, completion.label, from, to))
+        return true
+      },
+    }
+  })
+}
+
+// ---------------------------------------------------------------- 位置类别
+
+/**
+ * 该位置是否属于「合理弹窗位」（打字触发的 position 档据此判定）。
+ *
+ * 排除别名位：那里只能写别名，弹出来也是空列表；
+ * 模板 / 脚本 / 无补全的编辑器不走这条路径。
+ */
+export function isPositionalEligible(kind: CompletionContextKind): boolean {
+  switch (kind) {
+    case 'table':
+    case 'column':
+    case 'statement-start':
+    case 'keyword':
+    case 'join-on':
+    case 'group-by':
+    case 'insert':
+      return true
+    default:
+      return false
+  }
+}
+
+/**
+ * 当前位置的类别（触发策略与页面按需调用）。
+ *
+ * 只做文本扫描，不查元数据，因此可以在每次按键时廉价调用；
+ * 与补全本身共用 readClauseKind / currentClausePrefix，判定不会出现两套口径。
+ */
+export function contextKindAt(state: EditorState, pos: number, dbType = ''): CompletionContextKind {
+  if (inLiteralOrComment(state, pos)) {
+    return 'none'
+  }
+  const doc = state.doc.toString()
+  const statement = completionStatementRange(doc, pos, dbType)
+  const prefix = currentClausePrefix(doc, pos, statement)
+  return sqlContextKindOf(scanClause(prefix), prefix)
+}
+
+/** 由子句扫描结论细化为位置类别 */
+function sqlContextKindOf(scan: ClauseScan, statementText: string): CompletionContextKind {
+  switch (scan.kind) {
+    case 'alias':
+      return 'alias'
+    case 'source':
+      return 'table'
+    case 'afterSource':
+      return 'keyword'
+    case 'column':
+      // 关联条件：ON 且同一条语句里出现过 JOIN（ON 也会出现在 CREATE INDEX 等语句里）
+      if (scan.keyword === 'on' && /\bjoin\b/i.test(statementText)) {
+        return 'join-on'
+      }
+      // 分组：BY 且左边那个词是 GROUP
+      if (scan.keyword === 'by' && scan.previousKeyword === 'group') {
+        return 'group-by'
+      }
+      // INSERT 的列清单：INTO 之后还没闭合的括号内
+      if (scan.keyword === 'into') {
+        return 'insert'
+      }
+      return 'column'
+    default:
+      return 'statement-start'
+  }
 }
 
 /**
@@ -182,6 +476,7 @@ export function createSqlCompletion(
   getView: () => EditorView | null,
   mode: CompletionMode = 'sql',
   metadata: MetadataProvider = defaultMetadataProvider,
+  getContext?: () => Partial<CompletionRuntime> | undefined,
 ): CompletionSource {
   return (context: CompletionContext): CompletionResult | null => {
     if (mode === 'none') {
@@ -195,17 +490,25 @@ export function createSqlCompletion(
     clearColumnMarks(view)
 
     const registration = viewContexts.get(view) ?? {}
-    const bundle = collectCompletions(context.state, context.pos, {
-      mode,
-      sql: registration.getSql?.(),
-      templateVariables: registration.getTemplateVariables?.() ?? [],
-      scriptGlobals: registration.getScriptGlobals?.() ?? [],
-      metadata,
-    })
+    // 页面注入的动态上下文每次查询都重新求值，模板 / 连接变化后即时生效
+    const extra = getContext?.() ?? {}
+    const bundle = collectCompletions(
+      context.state,
+      context.pos,
+      createRuntime(mode, registration, metadata, extra),
+    )
 
     if (!bundle || !bundle.options.length) {
       // 返回 null 让已打开的补全弹层正常关闭（列未知时不报错）
       return null
+    }
+
+    /*
+     * 自行过滤（拼音首字母命中）时不能给 validFor：
+     * 编辑器只在「自己过滤」的路径上使用 validFor。
+     */
+    if (bundle.filter === false) {
+      return { from: bundle.from, options: bundle.options, filter: false }
     }
 
     return {
@@ -214,6 +517,30 @@ export function createSqlCompletion(
       // 继续输入标识符时在本地过滤，避免每次都重新查询元数据
       validFor: /^[\w$]*$/,
     }
+  }
+}
+
+/**
+ * 组装运行期上下文。
+ *
+ * 与寄存上下文（registerCompletionContext 等）的区别：这里是**按编辑器用途**
+ * 给出的默认上下文，页面还可以通过 CodeEditor 的 completionContext 注入
+ * 动态内容（同一编辑器换模板 / 换连接后即时生效）。
+ */
+function createRuntime(
+  mode: CompletionMode,
+  registration: CompletionRegistration,
+  metadata: MetadataProvider,
+  extra?: Partial<CompletionRuntime>,
+): CompletionRuntime {
+  return {
+    mode,
+    sql: extra?.sql ?? registration.getSql?.() ?? undefined,
+    templateVariables: extra?.templateVariables ?? registration.getTemplateVariables?.() ?? [],
+    scriptGlobals: extra?.scriptGlobals ?? registration.getScriptGlobals?.() ?? [],
+    metadata: extra?.metadata ?? metadata,
+    featureFlags: extra?.featureFlags,
+    useHistory: extra?.useHistory,
   }
 }
 
@@ -230,10 +557,22 @@ export function collectCompletions(
     return null
   }
 
+  // getter 在这里统一求值：页面上的模板 / 连接变化后，下一次查询就会拿到新上下文
+  const resolved = resolveRuntime(runtime)
+
   // JavaScript：只给注入的全局标识符（关键字/片段由 lang-javascript 自带源负责）
-  if (runtime.mode === 'javascript') {
-    return scriptBundle(state, pos, runtime.scriptGlobals ?? [])
+  if (resolved.mode === 'javascript') {
+    const scripted = scriptBundle(state, pos, resolved.scriptGlobals)
+    return scripted ? finalizeBundle(state, pos, scripted, resolved) : null
   }
+
+  /*
+   * 模板编辑器：先算「到光标为止的未闭合块栈」——片段内的 else / end 关键字
+   * 与普通位置的 {{else}} / {{end}} 收尾候选都要靠它决定给哪个。
+   */
+  const templateBlocks = resolved.mode === 'sql-template'
+    ? templateBlockStack(state.doc.sliceString(0, pos))
+    : []
 
   /*
    * 模板上下文要**先于**字符串判断：模板里 `'{{ device_no }}'`（引号内插值）
@@ -241,10 +580,11 @@ export function collectCompletions(
    * 这里的顺序调整只影响「确实处于 {{ … }} 内」的情形，
    * 字符串／注释里的其它位置依旧不弹候选。
    */
-  if (runtime.mode === 'sql-template') {
+  if (resolved.mode === 'sql-template') {
     const template = readTemplateContext(state, pos)
     if (template) {
-      return templateBundle(template, runtime.templateVariables ?? [])
+      const bundle = templateBundle(template, resolved.templateVariables, templateBlocks)
+      return bundle ? finalizeBundle(state, pos, bundle, resolved) : null
     }
   }
 
@@ -256,22 +596,35 @@ export function collectCompletions(
     return null
   }
 
-  return sqlBundle(state, pos, runtime)
+  const bundle = sqlBundle(state, pos, resolved)
+  if (!bundle) {
+    return null
+  }
+
+  /*
+   * 模板编辑器的普通 SQL 位置：光标还落在未闭合的块里时，把 {{else}} / {{end}}
+   * 追加在 SQL 候选之后（boost 低于子句关键字）——收尾方便，但不抢 SQL 候选的位置。
+   */
+  if (resolved.mode === 'sql-template') {
+    bundle.options.push(...templateClosingItems(state, pos))
+  }
+  return finalizeBundle(state, pos, bundle, resolved)
 }
 
 // ---------------------------------------------------------------- 静态补全
 
 /** 无连接上下文时的静态补全：SQL 关键字 + 常用函数 */
-function staticOptions(): Completion[] {
-  return [
-    ...SQL_KEYWORDS.map(label => ({ label, type: 'keyword' as const })),
-    ...Object.entries(SQL_FUNCTIONS).map(([label, detail]) => ({
+function staticOptions(flags: CompletionFeatureFlags = {}): Completion[] {
+  const options: Completion[] = SQL_KEYWORDS.map(label => ({ label, type: 'keyword' as const }))
+  if (!flags.disableFunctions) {
+    options.push(...Object.entries(SQL_FUNCTIONS).map(([label, detail]) => ({
       label,
       type: 'function' as const,
       detail,
       apply: `${label}()`,
-    })),
-  ]
+    })))
+  }
+  return options
 }
 
 // ---------------------------------------------------------------- SQL 路径
@@ -280,9 +633,9 @@ function staticOptions(): Completion[] {
 function sqlBundle(
   state: EditorState,
   pos: number,
-  runtime: CompletionRuntime,
+  runtime: ResolvedRuntime,
 ): CompletionBundle | null {
-  const metadata = runtime.metadata ?? defaultMetadataProvider
+  const metadata = runtime.metadata
   const doc = state.doc.toString()
   const line = state.doc.lineAt(pos)
   const lineBefore = line.text.slice(0, pos - line.from)
@@ -293,7 +646,11 @@ function sqlBundle(
 
   // 没有登记连接上下文（模板编辑器未绑定连接）：退化为关键字 + 函数
   if (!runtime.sql || !runtime.sql.connId) {
-    return { from, options: staticOptions() }
+    return {
+      from,
+      options: staticOptions(runtime.featureFlags),
+      contextKind: 'statement-start',
+    }
   }
 
   const { connId, database, dbType } = runtime.sql
@@ -308,6 +665,40 @@ function sqlBundle(
 
   const scopes = buildScopes(state, pos, doc, dbType, statement, connId, database, metadata)
 
+  /*
+   * 子句扫描只做一次：位置类别（contextKind）与候选类型（ClauseKind）
+   * 都由这次扫描的结论得出，触发策略与补全不会出现两套口径。
+   */
+  const clausePrefix = currentClausePrefix(doc, pos, statement)
+  const prefixStart = pos - clausePrefix.length
+  const scan = scanClause(clausePrefix)
+  const contextKind = sqlContextKindOf(scan, clausePrefix)
+
+  /*
+   * 智能项总开关（默认开）；片段型（会替换既有文本 / 一次插入多列）
+   * 另受 disableSnippets 控制：只要变量的轻量场景可以关掉它们。
+   */
+  const smart = runtime.featureFlags.smartItems !== false
+  const fragments = smart && runtime.featureFlags.disableSnippets !== true
+
+  /** 表引用 → 列清单（派生表用静态列，物理表查元数据） */
+  const columnsOf = (ref: TableRef) => columnsOfRef(ref, connId, database, metadata)
+
+  /*
+   * GROUP BY 位置：先算出「SELECT 里未聚合的列」——它们既作为推荐列提前，
+   * 也从普通列候选里去掉同名项，避免同一列在列表里出现两次。
+   */
+  const promoted = smart && contextKind === 'group-by'
+    ? groupByPromotion(clausePrefix, pos, scopes, columnsOf, fragments, dialect)
+    : { items: [] as Completion[], skip: new Set<string>() }
+
+  /*
+   * 自动别名只在「写了别名也合法」的位置生效：FROM / JOIN 之后的表名。
+   * INSERT INTO / UPDATE / TRUNCATE 后面加别名是语法错误，绝不能顺手带上。
+   */
+  const autoAlias = runtime.featureFlags.autoTableAlias === true
+    && (scan.keyword === 'from' || scan.keyword === 'join')
+
   const qualifier = readQualifierBeforeCursor(lineBefore)
   const options = qualifier
     ? resolveAfterDot(qualifier, scopes, connId, database, dialect, metadata)
@@ -316,11 +707,295 @@ function sqlBundle(
         connId,
         database,
         dialect,
-        readClauseKind(currentClausePrefix(doc, pos, statement)),
+        scan.kind,
         metadata,
+        runtime.featureFlags,
+        promoted.skip,
+        word,
+        autoAlias,
       )
 
-  return { from, options }
+  /*
+   * ON 后面追加整条关联条件（外键 + 命名启发式）。
+   * 与普通列候选并存：想自己写条件的人照样能挑列名。
+   */
+  if (contextKind === 'join-on' && runtime.featureFlags.joinSuggestions !== false) {
+    options.push(...joinConditionSuggestions(scopes, connId, database, metadata))
+  }
+
+  options.push(...promoted.items)
+  if (smart) {
+    options.push(...smartSuggestions({
+      prefix: clausePrefix,
+      prefixStart,
+      pos,
+      clause: scan,
+      contextKind,
+      scopes,
+      connId,
+      database,
+      dialect,
+      metadata,
+      columnsOf,
+      fragments,
+    }))
+  }
+
+  return { from, options, contextKind }
+}
+
+/** 表引用 → 列清单（派生表用静态列，物理表查元数据） */
+function columnsOfRef(
+  ref: TableRef,
+  connId: number,
+  database: string,
+  metadata: MetadataProvider,
+): SmartColumn[] {
+  return ref.virtualColumns
+    ? ref.virtualColumns.map(column => ({
+        name: column.name,
+        dataType: column.dataType,
+        comment: column.comment,
+      }))
+    : metadata.columns(connId, ref.schema || database, ref.table)
+        .map(column => ({
+          name: column.name,
+          dataType: column.dataType,
+          comment: column.comment,
+        }))
+}
+
+/**
+ * 按限定符定位列来源。
+ *
+ * 没写限定符时，只有「来源唯一」或「只有一个来源含这一列」才敢归属：
+ * 多来源下归属谁都是猜。
+ */
+function sourceRefOf(
+  scopes: TableRef[][],
+  qualifier: string,
+  column: string,
+  columnsOf: (ref: TableRef) => SmartColumn[],
+): TableRef | null {
+  const refs = scopes[0] ?? []
+  if (qualifier) {
+    const wanted = qualifier.toLowerCase()
+    return refs.find(ref => (ref.alias || ref.table).toLowerCase() === wanted) ?? null
+  }
+  if (refs.length === 1) {
+    return refs[0]
+  }
+  const hit = refs.filter(ref =>
+    columnsOf(ref).some(item => item.name.toLowerCase() === column.toLowerCase()))
+  return hit.length === 1 ? hit[0] : null
+}
+
+/**
+ * GROUP BY 位置的智能项：推荐 SELECT 里**未聚合**的列。
+ *
+ * 按 GROUP BY 的规范，SELECT 中不带聚合函数的列就该出现在分组里，
+ * 所以这些列值得排在普通列候选之前，另外给一个「一次补齐」的片段项。
+ * 返回的 `skip` 交给普通列候选去重（否则同一列会出现两次）。
+ */
+function groupByPromotion(
+  prefix: string,
+  pos: number,
+  scopes: TableRef[][],
+  columnsOf: (ref: TableRef) => SmartColumn[],
+  /** 片段型智能项是否可用（disableSnippets 会关掉「一次补齐」这一项） */
+  fragments: boolean,
+  dialect: SqlDialect,
+): { items: Completion[], skip: Set<string> } {
+  const skip = new Set<string>()
+  const tail = selectListTail(prefix)
+  if (!tail) {
+    return { items: [], skip }
+  }
+
+  const items: Completion[] = []
+  const seen = new Set<string>()
+  for (const column of nonAggregateColumnsOf(tail.text)) {
+    const key = column.column.toLowerCase()
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    skip.add(key)
+
+    const ref = sourceRefOf(scopes, column.qualifier, column.column, columnsOf)
+    const meta = ref
+      ? columnsOf(ref).find(item => item.name.toLowerCase() === key)
+      : undefined
+    items.push({
+      ...columnItem(column.column, {
+        dataType: meta?.dataType,
+        from: ref ? ref.alias || ref.table : undefined,
+        comment: meta?.comment,
+      }, dialect),
+      boost: BOOST_SMART_COLUMN,
+    })
+  }
+
+  if (fragments && items.length) {
+    items.unshift(smartFragmentItem(
+      '补齐非聚合列',
+      `插入 SELECT 中未聚合的 ${items.length} 列`,
+      items.map(item => renderIdent(item.label, dialect)).join(', '),
+      { from: pos, to: pos },
+    ))
+  }
+
+  return { items, skip }
+}
+
+/** 智能项的参数（列与值的来源由 sqlBundle 注入） */
+interface SmartItemArgs {
+  /** 光标所在语句中光标之前的文本 */
+  prefix: string
+  /** prefix 在文档中的起点 */
+  prefixStart: number
+  /** 光标位置（文档坐标） */
+  pos: number
+  clause: ClauseScan
+  contextKind: CompletionContextKind
+  scopes: TableRef[][]
+  connId: number
+  database: string
+  dialect: SqlDialect
+  metadata: MetadataProvider
+  columnsOf: (ref: TableRef) => SmartColumn[]
+  /** 片段型智能项是否可用（disableSnippets 会关掉） */
+  fragments: boolean
+}
+
+/**
+ * 就地追加的智能项：`*` 展开、比较值、INSERT 列清单。
+ *
+ * GROUP BY 的推荐列由 groupByPromotion 单独处理（它还要参与去重），
+ * 这里只负责其余三类，各自都只在「位置确实对得上」时才出现。
+ */
+function smartSuggestions(args: SmartItemArgs): Completion[] {
+  const items: Completion[] = []
+  const refs = args.scopes[0] ?? []
+
+  // ① `*` 展开：只在 SELECT 列表里，且列表末尾就是星号本身（`COUNT(*)` 不算）
+  if (args.fragments && args.clause.kind === 'column' && args.clause.keyword === 'select') {
+    const tail = selectListTail(args.prefix)
+    const star = tail ? starAtSelectListEnd(tail.text) : null
+    if (tail && star) {
+      const picked = star.qualifier
+        ? refs.filter(ref => (ref.alias || ref.table).toLowerCase() === star.qualifier.toLowerCase())
+        : refs
+      const names: string[] = []
+      for (const ref of picked) {
+        // 多来源必须带限定符：两张表都有 id 时，展开成裸 id 含义不清
+        const scope = picked.length > 1 ? `${ref.alias || ref.table}.` : ''
+        for (const column of args.columnsOf(ref)) {
+          // 保留字 / 含特殊字符的列名同样要带引用符，否则展开出来的 SQL 跑不通
+          names.push(scope + renderIdent(column.name, args.dialect))
+        }
+      }
+      if (names.length) {
+        const listStart = args.prefixStart + tail.start
+        items.push(smartFragmentItem(
+          star.text,
+          `展开为 ${names.length} 列：${previewColumns(names)}`,
+          names.join(', '),
+          { from: listStart + star.start, to: listStart + star.end },
+        ))
+      }
+    }
+  }
+
+  // ② 比较值：`col = |` / `col IN (|` 时给该列的值域（默认来自同名词典）
+  const target = comparisonTarget(args.prefix)
+  if (target && args.metadata.values) {
+    const ref = sourceRefOf(args.scopes, target.qualifier, target.column, args.columnsOf)
+    const meta = ref
+      ? args.columnsOf(ref).find(item => item.name.toLowerCase() === target.column.toLowerCase())
+      : undefined
+    const values = args.metadata.values(
+      args.connId,
+      ref ? ref.schema || args.database : args.database,
+      ref ? ref.table : '',
+      target.column,
+    )
+    if (values.length) {
+      items.push(...smartValueItems(values, meta?.dataType, args.dialect))
+    }
+  }
+
+  // ③ INSERT 列清单：括号内给列名清单，表名之后补上带括号的清单
+  if (args.fragments && args.clause.keyword === 'into') {
+    const table = insertTargetTable(args.prefix)
+    const insideList = args.contextKind === 'insert'
+    if (table && (insideList || args.clause.kind === 'afterSource')) {
+      const ref = refs.find(item => item.table.toLowerCase() === table.table.toLowerCase())
+      const columns = ref
+        ? args.columnsOf(ref)
+        : args.metadata.columns(args.connId, table.schema || args.database, table.table)
+      if (columns.length) {
+        const list = columns.map(column => renderIdent(column.name, args.dialect)).join(', ')
+        items.push(smartFragmentItem(
+          '全部列',
+          `${insideList ? '插入' : '补上'} ${table.table} 的 ${columns.length} 个列名`,
+          insideList ? list : `(${list})`,
+          { from: args.pos, to: args.pos },
+        ))
+      }
+    }
+  }
+
+  return items
+}
+
+/** 候选描述里的列名预览：过长时截断，避免把提示区撑开 */
+function previewColumns(names: string[]): string {
+  const text = names.join(', ')
+  return text.length > 60 ? `${text.slice(0, 57)}…` : text
+}
+
+/** 把表引用转成关联条件生成所需的形态（物理表查元数据，派生表用静态列） */
+function joinSideOf(
+  ref: TableRef,
+  connId: number,
+  database: string,
+  metadata: MetadataProvider,
+): JoinSide {
+  const schema = ref.schema || database
+  const columns = ref.virtualColumns
+    ? ref.virtualColumns.map(column => ({ name: column.name, dataType: column.dataType }))
+    : metadata.columns(connId, schema, ref.table)
+        .map(column => ({ name: column.name, dataType: column.dataType }))
+  return {
+    table: ref.table,
+    alias: ref.alias || ref.table,
+    columns,
+    // 外键只存在于物理表；元数据提供者未实现该能力时为空数组（走命名启发式）
+    foreignKeys: ref.virtualColumns ? [] : (metadata.foreignKeys?.(connId, schema, ref.table) ?? []),
+  }
+}
+
+/**
+ * ON 位置的关联条件候选。
+ *
+ * 用当前作用域里「最后加进来的表」与其余表逐个配对：
+ * `FROM users u JOIN orders o ON |` → 左值是 orders（刚写的），
+ * 右值依次是 users。配不出任何条件时返回空数组（不猜）。
+ */
+function joinConditionSuggestions(
+  scopes: TableRef[][],
+  connId: number,
+  database: string,
+  metadata: MetadataProvider,
+): Completion[] {
+  const refs = scopes[0] ?? []
+  if (refs.length < 2) {
+    return []
+  }
+  const sides = refs.map(ref => joinSideOf(ref, connId, database, metadata))
+  const left = sides[sides.length - 1]
+  return joinConditionItems({ left, others: sides.slice(0, -1) })
 }
 
 // ---------------------------------------------------------------- 悬停提示
@@ -543,9 +1218,9 @@ function resolveAfterDot(
     if (matchedRef) {
       const virtual = matchedRef.virtualColumns
       if (virtual) {
-        return virtualColumnSuggestions(virtual, matchedRef.alias)
+        return virtualColumnSuggestions(virtual, matchedRef.alias, dialect)
       }
-      return columnSuggestions(connId, matchedRef.schema || database, matchedRef.table, metadata)
+      return columnSuggestions(connId, matchedRef.schema || database, matchedRef.table, dialect, metadata)
     }
   }
 
@@ -555,19 +1230,19 @@ function resolveAfterDot(
       ref => !ref.alias && ref.table.toLowerCase() === qualifier && ref.virtualColumns,
     )
     if (cteRef?.virtualColumns) {
-      return virtualColumnSuggestions(cteRef.virtualColumns, cteRef.table)
+      return virtualColumnSuggestions(cteRef.virtualColumns, cteRef.table, dialect)
     }
   }
 
   // 3) 显式两段（mydb.user.）：倒数第二段是库/模式名
   if (segments.length > 1) {
     const schema = segments[segments.length - 2]
-    return columnSuggestions(connId, schema, last, metadata)
+    return columnSuggestions(connId, schema, last, dialect, metadata)
   }
 
   // 4) 当前库里的表名
   if (metadata.tables(connId, database).some(name => name.toLowerCase() === qualifier)) {
-    return columnSuggestions(connId, database, last, metadata)
+    return columnSuggestions(connId, database, last, dialect, metadata)
   }
 
   // 5) 库名 → 该库的表
@@ -576,32 +1251,36 @@ function resolveAfterDot(
   }
 
   // 6) 兜底：按当前库的表取字段（顺带预热缓存）
-  return columnSuggestions(connId, database, last, metadata)
+  return columnSuggestions(connId, database, last, dialect, metadata)
 }
 
 // ColumnDetail / ColumnCompletion / columnItem 见 ./sqlCompletionInsert.ts
 
-/** 字段补全项（某张表的列） */
+/**
+ * 字段补全项（某张表的列）。
+ *
+ * 走列候选池：候选项按表缓存（元数据刷新才失效），超宽表按前缀取舍。
+ * `prefix` 是光标前正在输入的词，只有超宽表才会用到它。
+ */
 function columnSuggestions(
   connId: number,
   database: string,
   table: string,
+  dialect: SqlDialect,
   metadata: MetadataProvider,
+  prefix = '',
 ): Completion[] {
-  return metadata.columns(connId, database, table).map(column => columnItem(column.name, {
-    dataType: column.dataType,
-    from: table,
-    comment: column.comment,
-  }))
+  return pooledColumnItems(metadata.columns(connId, database, table), table, dialect, prefix)
 }
 
 /** 派生表 / CTE 的字段补全（列名与类型来自静态解析 + 元数据） */
-function virtualColumnSuggestions(columns: VirtualColumn[], source: string): Completion[] {
-  return columns.map(column => columnItem(column.name, {
-    dataType: column.dataType,
-    from: column.from ?? source,
-    comment: column.comment,
-  }))
+function virtualColumnSuggestions(
+  columns: VirtualColumn[],
+  source: string,
+  dialect: SqlDialect,
+  prefix = '',
+): Completion[] {
+  return pooledColumnItems(columns, source, dialect, prefix)
 }
 
 /** 派生表 / CTE 别名候选的提示：所有列来源一致时点出源头表 */
@@ -611,20 +1290,48 @@ function derivedSourceDetail(columns: VirtualColumn[]): string {
   return `派生表${from}（${columns.length} 列）`
 }
 
-/** 表补全项 */
+/**
+ * 表补全项（表名一律带引用符，插入时吃掉用户已经敲下的开引号）。
+ *
+ * `autoAlias` 为真（设置项开启 **且** 当前位置是 FROM / JOIN 之后）时，
+ * 每张表给两条候选：带自动别名的排在前面（boost 更高，列表默认高亮的也是它），
+ * 以及一条「不加别名」的原样候选 —— 单表查询常常不需要别名，不能只给一种。
+ */
 function tableSuggestions(
   connId: number,
   database: string,
   dialect: SqlDialect,
   metadata: MetadataProvider,
+  autoAlias = false,
 ): Completion[] {
-  return metadata.tables(connId, database).map(table => ({
-    label: table,
-    type: 'class',
-    detail: '表 / 视图',
-    boost: BOOST_TABLE,
-    apply: quoteIdent(table, dialect),
-  }))
+  return metadata.tables(connId, database).flatMap((table) => {
+    const quoted = quoteIdent(table, dialect)
+    const plain: Completion = {
+      label: table,
+      type: 'class',
+      detail: '表 / 视图',
+      boost: BOOST_TABLE,
+      apply: quotedIdentApply(quoted),
+    }
+    if (!autoAlias) {
+      return [plain]
+    }
+
+    const alias = aliasForTable(table)
+    if (!alias) {
+      return [plain]
+    }
+    return [
+      {
+        ...plain,
+        label: aliasedTableText(table, alias),
+        detail: `表 / 视图 · 自动别名 ${alias}`,
+        boost: BOOST_TABLE + 5,
+        apply: quotedIdentApply(aliasedTableText(quoted, alias)),
+      },
+      { ...plain, detail: '表 / 视图 · 不加别名' },
+    ]
+  })
 }
 
 // ---------------------------------------------------------------- 普通补全
@@ -710,6 +1417,21 @@ const COLUMN_CLAUSE_KEYWORDS = new Set([
 ])
 
 /**
+ * 反向扫描出的子句结论。
+ *
+ * 除位置类别外还带上「命中的关键字」与「它左边那个关键字」：
+ * 位置细分（关联条件 / 分组 / INSERT 列清单）要靠这两个词区分，
+ * 而它们本来就是同一次扫描读出来的，没必要再扫一遍。
+ */
+interface ClauseScan {
+  kind: ClauseKind
+  /** 命中的关键字（小写）；未命中为空串 */
+  keyword: string
+  /** 命中关键字左边的那个词（如 `GROUP BY` 的 group、`o.user_id` 的 o） */
+  previousKeyword: string
+}
+
+/**
  * 判断光标处属于哪个子句。
  *
  * 用「光标前的同一语句文本 + 反向扫描」而不是完整语法树：
@@ -723,10 +1445,19 @@ const COLUMN_CLAUSE_KEYWORDS = new Set([
  * 但 `INSERT INTO t (` / `CREATE TABLE t (` 后面是列清单，同样是列位置。
  */
 function readClauseKind(prefix: string): ClauseKind {
+  return scanClause(prefix).kind
+}
+
+/** 反向扫描子句上下文（readClauseKind 的实现，额外透出命中的关键字） */
+function scanClause(prefix: string): ClauseScan {
   let index = prefix.length
   let depth = 0
   /** 反向扫描时是否跨过了一个左括号 */
   let enteredParen = false
+  /** 已读过的上一个词（用于区分 GROUP BY / ORDER BY 这类两词结构） */
+  let previousKeyword = ''
+
+  const result = (kind: ClauseKind, keyword = ''): ClauseScan => ({ kind, keyword, previousKeyword })
 
   while (index > 0) {
     const ch = prefix[index - 1] ?? ''
@@ -772,7 +1503,7 @@ function readClauseKind(prefix: string): ClauseKind {
       if (depth === 0) {
         // 括号里的列清单：INSERT INTO t (a, |) / CREATE TABLE t (a |)
         if (enteredParen && (lower === 'into' || lower === 'update' || lower === 'table')) {
-          return 'column'
+          return result('column', lower)
         }
         /*
          * `AS` 之后就是别名本身（表别名 / 列别名）：
@@ -780,7 +1511,23 @@ function readClauseKind(prefix: string): ClauseKind {
          * 别名已经写完（`AS t1 |`）则回到「表之后」，接下来是 JOIN / WHERE 这些子句关键字。
          */
         if (lower === 'as') {
-          return prefix.slice(index).trim() ? 'afterSource' : 'alias'
+          return result(prefix.slice(index).trim() ? 'afterSource' : 'alias', lower)
+        }
+        /*
+         * BY 是两词结构的后半截（GROUP BY / ORDER BY），命中时前半截还没读到：
+         * 再往左读一个词填进 previousKeyword —— 位置细分才能把「分组」认出来
+         * （早先这里直接返回，previousKeyword 永远不是 group，group-by 成了死分支）。
+         */
+        if (lower === 'by') {
+          let head = word.start
+          while (head > 0 && /\s/.test(prefix[head - 1] ?? '')) {
+            head--
+          }
+          const previous = readWordBackward(prefix, head)
+          if (previous) {
+            previousKeyword = previous.text.toLowerCase()
+          }
+          return result('column', lower)
         }
         if (TABLE_CLAUSE_KEYWORDS.has(lower)) {
           /*
@@ -790,17 +1537,18 @@ function readClauseKind(prefix: string): ClauseKind {
            */
           const tail = prefix.slice(index).trim()
           if (!tail || tail.endsWith(',')) {
-            return 'source'
+            return result('source', lower)
           }
           if (tail.includes('(') || tail.includes(')')) {
-            return 'any'
+            return result('any', lower)
           }
-          return 'afterSource'
+          return result('afterSource', lower)
         }
         if (COLUMN_CLAUSE_KEYWORDS.has(lower)) {
-          return 'column'
+          return result('column', lower)
         }
       }
+      previousKeyword = lower
       index = word.start
       continue
     }
@@ -809,7 +1557,7 @@ function readClauseKind(prefix: string): ClauseKind {
   }
 
   // 进了括号又判断不出关键字：按表达式位置处理（函数参数、子查询列清单等）
-  return enteredParen ? 'column' : 'any'
+  return result(enteredParen ? 'column' : 'any')
 }
 
 /** 从 index 向左读一个词，返回词与起始下标 */
@@ -900,6 +1648,13 @@ function generalSuggestions(
   dialect: SqlDialect,
   kind: ClauseKind,
   metadata: MetadataProvider,
+  flags: CompletionFeatureFlags = {},
+  /** 已由智能项推荐过的列（小写列名）：不再重复出现一次 */
+  skipColumns?: Set<string>,
+  /** 光标前正在输入的词（只有超宽表的候选取舍会用到） */
+  prefix = '',
+  /** 表名是否带自动别名（设置项开启 **且** 当前位置是 FROM / JOIN 之后） */
+  autoAlias = false,
 ): Completion[] {
   const suggestions: Completion[] = []
 
@@ -923,33 +1678,25 @@ function generalSuggestions(
         }
         seenAliases.add(sourceKey)
 
-        if (ref.virtualColumns) {
-          for (const column of ref.virtualColumns) {
-            const key = column.name.toLowerCase()
-            if (seenColumns.has(key)) {
-              continue
-            }
-            seenColumns.add(key)
-            suggestions.push(columnItem(column.name, {
-              dataType: column.dataType,
-              from: column.from ?? source,
-              comment: column.comment,
-            }))
+        /*
+         * 列候选走候选池（按表缓存 + 超宽表按前缀取舍）：
+         * 派生表用静态解析出的列，物理表用元数据；两边的来源描述都保持一致。
+         */
+        const pool = ref.virtualColumns
+          ? pooledColumnItems(ref.virtualColumns, source, dialect, prefix)
+          : pooledColumnItems(
+              metadata.columns(connId, ref.schema || database, ref.table),
+              ref.table,
+              dialect,
+              prefix,
+            )
+        for (const item of pool) {
+          const key = item.label.toLowerCase()
+          if (seenColumns.has(key) || skipColumns?.has(key)) {
+            continue
           }
-        }
-        else {
-          for (const column of metadata.columns(connId, ref.schema || database, ref.table)) {
-            const key = column.name.toLowerCase()
-            if (seenColumns.has(key)) {
-              continue
-            }
-            seenColumns.add(key)
-            suggestions.push(columnItem(column.name, {
-              dataType: column.dataType,
-              from: ref.table,
-              comment: column.comment,
-            }))
-          }
+          seenColumns.add(key)
+          suggestions.push(item)
         }
 
         // 语句里已定义的别名 / 无别名的 CTE：选它自动补上点号并继续弹字段
@@ -975,7 +1722,7 @@ function generalSuggestions(
   }
 
   if (kind !== 'column') {
-    suggestions.push(...tableSuggestions(connId, database, dialect, metadata))
+    suggestions.push(...tableSuggestions(connId, database, dialect, metadata, autoAlias))
     suggestions.push(...namespaceSuggestions(connId, dialect, metadata))
   }
 
@@ -993,8 +1740,8 @@ function generalSuggestions(
     })
   }
 
-  // 函数只在表达式位置给：表名、表之后、别名位置都用不到
-  if (kind === 'column') {
+  // 函数只在表达式位置给：表名、表之后、别名位置都用不到（也可由 featureFlags 关掉）
+  if (kind === 'column' && !flags.disableFunctions) {
     for (const [name, signature] of Object.entries(SQL_FUNCTIONS)) {
       suggestions.push({
         label: name,
@@ -1009,6 +1756,22 @@ function generalSuggestions(
   return suggestions
 }
 
+/**
+ * 库名候选的插入：吃掉用户已经敲下的开引号，插入 `` `db`. `` 并再弹一次
+ * （接着就能选该库的表）。
+ */
+function namespaceApply(identifier: string) {
+  return (view: EditorView, _completion: Completion, from: number, to: number) => {
+    const open = openingQuoteBefore(view.state.doc.toString(), from)
+    const start = open ? open.start : from
+    view.dispatch({
+      changes: { from: start, to, insert: identifier },
+      selection: { anchor: start + identifier.length },
+    })
+    setTimeout(() => startCompletion(view), 0)
+  }
+}
+
 /** 库名候选：选中后自动补点号并再弹一次（接着就能选该库的表） */
 function namespaceSuggestions(
   connId: number,
@@ -1020,7 +1783,7 @@ function namespaceSuggestions(
     type: 'namespace',
     detail: '数据库',
     boost: BOOST_NAMESPACE,
-    apply: applyAndTrigger(`${quoteIdent(name, dialect)}.`),
+    apply: namespaceApply(`${quoteIdent(name, dialect)}.`),
   }))
 }
 
@@ -1037,6 +1800,40 @@ export const defaultMetadataProvider: MetadataProvider = {
   databases: connId => metadata().ensureDatabases(connId),
   tables: (connId, database) => metadata().ensureTables(connId, database),
   columns: (connId, database, table) => metadata().ensureColumns(connId, database, table),
+  values: (_connId, _database, _table, column) => dictionaryValues(column),
+  // 外键：有关联关系时优先给出「外键推导的条件」，没有/拿不到就退化为命名启发式
+  foreignKeys: (connId, database, table) => metadata().ensureForeignKeys(connId, database, table),
+}
+
+/**
+ * 比较值的默认来源：**同名词典**。
+ *
+ * 词典与结果列的绑定关系存在模板的字段映射里，而编辑器拿不到「当前语句对应哪个
+ * 结果列」，因此这里按「词典名与列名同名」匹配（忽略大小写）——一个字段一个词典
+ * 正是本项目里词典的主要用法。
+ * 词典未加载、或没有同名词典时返回空数组（不提供比较值候选，不算错误）。
+ */
+function dictionaryValues(column: string): SmartCompareValue[] {
+  const dict = dictionaryStore()
+  const target = dict.dictionaries.find(item => item.name.toLowerCase() === column.toLowerCase())
+  if (!target) {
+    return []
+  }
+  return (dict.items[target.id] ?? []).map(item => ({
+    value: item.value,
+    meaning: item.meaning,
+    source: `词典 ${target.name}`,
+  }))
+}
+
+/**
+ * 延迟解析词典 store 实例（与 metadata() 同理）：
+ * 这些函数都在补全回调里执行，此时 pinia 已激活；模块加载期不能调用。
+ */
+let dictionaryStoreCache: ReturnType<typeof useDictStore> | null = null
+function dictionaryStore(): ReturnType<typeof useDictStore> {
+  dictionaryStoreCache ??= useDictStore()
+  return dictionaryStoreCache
 }
 
 /**

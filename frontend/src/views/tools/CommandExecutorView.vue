@@ -111,7 +111,6 @@ function toQueryResult(data: ExecutorResult): QueryResult {
   }
 }
 
-/** 单条语句的结果（非脚本执行时展示） */
 /**
  * 实际生效的库：下拉框选中的库，没选则用连接配置里的默认库。
  *
@@ -1335,7 +1334,7 @@ watch([connId, database, sql, pageSize], notifyChange)
       @mousedown="startResize($event)"
     />
 
-    <!-- 结果区：执行日志固定页签在最前，摘要与各结果页签随后；概要徽标浮在页签栏右侧 -->
+    <!-- 结果区：执行日志固定页签在最前，摘要与各结果页签随后 -->
     <section class="executor__result">
       <el-tabs v-model="activeScriptTab" class="executor__tabs">
         <el-tab-pane label="执行日志" name="log" lazy>
@@ -1469,13 +1468,9 @@ watch([connId, database, sql, pageSize], notifyChange)
   min-height: 0;
   /* 页签栏贴住分界线：上方不留多余空白 */
   padding: 2px 16px 0;
-  /* 徽标相对结果区右上角定位 */
-  position: relative;
   /* 与 SQL 查询页一致：结果区上方有一条分界线 */
   border-top: 1px solid var(--border-color);
 }
-
-/* 结果表格自带滚动，分页控件固定在底部（见 ResultPagination） */
 
 /* 结果表格自己滚动；横向留白与摘要表格对齐（分栏 padding 已足够，不再另加） */
 .executor__result :deep(.result-table) {

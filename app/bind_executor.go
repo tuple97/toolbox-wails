@@ -58,3 +58,17 @@ func (a *App) ListTableColumns(ctx context.Context, connID int64, database strin
 	}
 	return a.dbService.ListTableColumns(ctx, connID, database, table)
 }
+
+// ListForeignKeys 返回指定表的外键约束（智能补全的关联条件用）。
+func (a *App) ListForeignKeys(ctx context.Context, connID int64, database string, table string) ([]services.ForeignKey, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	if connID <= 0 {
+		return nil, fmt.Errorf("请先选择数据库连接")
+	}
+	if table == "" {
+		return nil, fmt.Errorf("表名不能为空")
+	}
+	return a.dbService.ListForeignKeys(ctx, connID, database, table)
+}

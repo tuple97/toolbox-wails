@@ -44,12 +44,24 @@ import { javascript, localCompletionSource, snippets } from '@codemirror/lang-ja
 import { useConfigStore } from '@/stores/configStore'
 import {
   columnHoverAt,
+  contextKindAt,
   createSqlCompletion,
+  defaultMetadataProvider,
   isColumnMarked,
+  isPositionalEligible,
   sqlContextOf,
   toggleColumnMark,
 } from '@/utils/sql/sqlCompletion'
-import type { ColumnCompletion, CompletionMode, SqlColumnInfo } from '@/utils/sql/sqlCompletion'
+import type {
+  ColumnCompletion,
+  CompletionFeatureFlags,
+  CompletionMode,
+  CompletionRuntime,
+  SqlColumnInfo,
+} from '@/utils/sql/sqlCompletion'
+import { parseSqlTriggerMode, sqlCompletionTrigger } from '@/utils/sql/sqlCompletionTrigger'
+import { inTemplateFragment } from '@/utils/sql/sqlTemplateCompletion'
+import { inLiteralOrComment } from '@/utils/sql/sqlSyntax'
 import { createStatementBoxExtension } from '@/utils/sql/sqlStatementBox'
 import { sqlStatementRunGutter, type RunnableStatement } from '@/utils/sql/sqlRunGutter'
 import {
@@ -108,6 +120,16 @@ const props = withDefaults(defineProps<{
   showStatementFrames?: boolean
   /** 是否在行号左侧显示「执行这条语句」按钮（仅 sql 语言生效，命令执行器用） */
   showRunButtons?: boolean
+  /**
+   * 页面注入的动态补全上下文（可按需覆盖 sql / 模板变量 / 脚本全局标识符）。
+   *
+   * 与「登记式」上下文（registerCompletionContext 等）的关系：登记的是**实例级**默认值，
+   * 这个函数是**页面级**覆盖，且每次查询都重新求值 —— 于是模板变量改了配置、
+   * 查询页换了连接之后，同一个编辑器无需重建就能拿到新上下文。
+   */
+  completionContext?: () => Partial<CompletionRuntime> | undefined
+  /** 定向扩展开关（关掉函数候选、只留变量等轻量场景） */
+  featureFlags?: CompletionFeatureFlags
 }>(), {
   language: 'sql',
   theme: '',
@@ -232,17 +254,71 @@ function completionSources(): CompletionSource[] {
   const mode = resolvedCompletionMode()
 
   if (mode === 'sql' || mode === 'sql-template') {
-    sources.push(createSqlCompletion(() => viewRef.value, mode))
+    sources.push(createSqlCompletion(() => viewRef.value, mode, defaultMetadataProvider, pageContext))
   }
 
   if (mode === 'javascript') {
-    sources.push(createSqlCompletion(() => viewRef.value, 'javascript'))
+    sources.push(createSqlCompletion(() => viewRef.value, 'javascript', defaultMetadataProvider, pageContext))
     sources.push(completeFromList([...snippets]))
     sources.push(localCompletionSource)
     sources.push(completeAnyWord)
   }
 
   return sources
+}
+
+/**
+ * 页面级动态上下文：组件 prop 给出的内容每次查询重新求值。
+ *
+ * `featureFlags` 以 prop 为底、页面上下文里的为准（页面更清楚自己要什么）。
+ */
+function pageContext(): Partial<CompletionRuntime> {
+  const page = props.completionContext?.() ?? {}
+  return {
+    ...page,
+    featureFlags: {
+      ...props.featureFlags,
+      // 设置项：表名补全后自动补别名（每次查询重新读，改完设置下一次补全即生效）
+      autoTableAlias: configStore.values.sql_completion_alias === 'true',
+      ...page.featureFlags,
+    },
+  }
+}
+
+/**
+ * 打字触发（仅 SQL / SQL 模板）。
+ *
+ * 本版 CodeMirror 的打字触发开关只接受布尔值，无法按位置逐次判定，
+ * 因此 SQL 侧统一关掉它、改由本扩展按「触发策略」显式打开（见 sqlCompletionTrigger）。
+ */
+function triggerExtension(): Extension {
+  const mode = resolvedCompletionMode()
+  if (props.disableSuggestions || (mode !== 'sql' && mode !== 'sql-template')) {
+    return []
+  }
+  /*
+   * 模板编辑器：`{{ … }}` 片段优先于「字符串 / 注释」与位置判定
+   * （与补全的分派顺序一致）—— 模板里 `'{{ device_no }}'` 这种引号内插值
+   * 是最常见的写法，不这样特判的话片段里打字永远不会自动弹候选。
+   */
+  const templateMode = mode === 'sql-template'
+  return sqlCompletionTrigger({
+    getMode: () => parseSqlTriggerMode(configStore.values.sql_completion_trigger),
+    getPositionalEligible: (state) => {
+      const pos = state.selection.main.head
+      if (templateMode && inTemplateFragment(state, pos)) {
+        return true
+      }
+      return isPositionalEligible(contextKindAt(state, pos, props.dbType ?? ''))
+    },
+    getInLiteralOrComment: (state) => {
+      const pos = state.selection.main.head
+      if (templateMode && inTemplateFragment(state, pos)) {
+        return false
+      }
+      return inLiteralOrComment(state, pos)
+    },
+  })
 }
 
 /** 智能提示（日志等只读场景可用 disableSuggestions 关闭；none 模式一律不装） */
@@ -254,9 +330,16 @@ function completionExtension(): Extension {
   if (!sources.length) {
     return []
   }
+  const mode = resolvedCompletionMode()
   return autocompletion({
     override: sources,
     maxRenderedOptions: 50,
+    /*
+     * SQL / SQL 模板的「打字自动弹」由 triggerExtension 按触发策略接管：
+     * 这里必须关掉编辑器自带的开关，否则位置判定形同虚设。
+     * JavaScript 保持自带行为（语言源需要它）。
+     */
+    activateOnTyping: mode !== 'sql' && mode !== 'sql-template',
     /*
      * 打开列表即高亮第一项（CM6 默认 false）。
      * 默认行为下「刚弹出列表时按回车」会因为没有任何高亮项而落到
@@ -592,6 +675,7 @@ onMounted(() => {
     extensions: [
       ...baseExtensions(),
       completionExtension(),
+      triggerExtension(),
       columnHoverExtension(),
       languageCompartment.of(languageExtension()),
       themeCompartment.of(editorThemeExtensions(themeName())),
