@@ -24,6 +24,7 @@
 import type { EditorState } from '@codemirror/state'
 import { splitSqlStatements } from '@/utils/sql/sqlStatementRanges'
 import type { TextRange } from '@/utils/sql/sqlSyntax'
+import { readAlias, readQualifiedName } from './sqlSchema'
 
 /** 补全所处位置的候选类型 */
 export type CompletionContextKind =
@@ -37,8 +38,10 @@ export type CompletionContextKind =
   | 'keyword'
   /** 别名位置（AS 之后），此处不给候选 */
   | 'alias'
-  /** 关联条件位置（JOIN … ON 之后） */
+  /** 关联条件位置（`JOIN … ON |`：这里该写整条条件） */
   | 'join-on'
+  /** JOIN 条件表达式内部（`ON o.user_id = u.|`：只给列，不再给整条条件） */
+  | 'join-expression'
   /** 分组位置（GROUP BY 之后） */
   | 'group-by'
   /** INSERT 列清单内 */
@@ -93,6 +96,13 @@ export interface ClauseScan {
   keyword: string
   /** 命中关键字左边的那个词（如 `GROUP BY` 的 group、`o.user_id` 的 o） */
   previousKeyword: string
+  /**
+   * 命中关键字之后、到光标之间的文本（已 trim）。
+   *
+   * 判断「这里是不是刚开了个头」用：`ON |` 还空着（该写整条条件），
+   * `ON o.user_id = |` 已经在表达式里了（只该给列）。
+   */
+  tail: string
 }
 
 /** 判断光标处属于哪个子句 */
@@ -109,7 +119,8 @@ export function scanClause(prefix: string): ClauseScan {
   /** 已读过的上一个词（用于区分 GROUP BY / ORDER BY 这类两词结构） */
   let previousKeyword = ''
 
-  const result = (kind: ClauseKind, keyword = ''): ClauseScan => ({ kind, keyword, previousKeyword })
+  const result = (kind: ClauseKind, keyword = '', at = index): ClauseScan =>
+    ({ kind, keyword, previousKeyword, tail: prefix.slice(at).trim() })
 
   while (index > 0) {
     const ch = prefix[index - 1] ?? ''
@@ -290,8 +301,18 @@ export function sqlContextKindOf(scan: ClauseScan, statementText: string): Compl
     case 'afterSource':
       return 'keyword'
     case 'column':
-      // 关联条件：ON 且同一条语句里出现过 JOIN（ON 也会出现在 CREATE INDEX 等语句里）
+      /*
+       * 关联条件：ON 且同一条语句里出现过 JOIN（ON 也会出现在 CREATE INDEX 等语句里）。
+       *
+       * 但只有「ON 之后还空着」才是「该写整条条件」的位置：
+       * `ON |` → join-on（给 `o.user_id = u.id`）；
+       * `ON o.user_id = u.|` → join-expression（只给列）。
+       */
       if (scan.keyword === 'on' && /\bjoin\b/i.test(statementText)) {
+        return scan.tail ? 'join-expression' : 'join-on'
+      }
+      // `ON … AND |`：还在同一个 ON 子句里，可以再给一条条件
+      if ((scan.keyword === 'and' || scan.keyword === 'or') && !scan.tail && isInsideJoinClause(statementText)) {
         return 'join-on'
       }
       // 分组：GROUP BY（previousKeyword 是同一个扫描里读出来的 group）
@@ -306,6 +327,16 @@ export function sqlContextKindOf(scan: ClauseScan, statementText: string): Compl
     default:
       return 'statement-start'
   }
+}
+
+/** 光标处是否还在 ON 子句里（最近的 ON 晚于最近的 WHERE / HAVING） */
+function isInsideJoinClause(statementText: string): boolean {
+  const lower = statementText.toLowerCase()
+  const on = lower.lastIndexOf(' on ')
+  if (on < 0) {
+    return false
+  }
+  return on > lower.lastIndexOf(' where ') && on > lower.lastIndexOf(' having ')
 }
 
 // ---------------------------------------------------------------- 光标语义
@@ -329,6 +360,13 @@ export interface SqlCursorText {
   kind: CompletionContextKind
   /** 语句的主关键字（select / update / insert / delete…），判不出为空串 */
   command: string
+  /**
+   * 当前 JOIN 的源（最近一个 `JOIN` 后面的表与别名）。
+   *
+   * 关联条件生成用它当「ON 左侧的表」，而不是靠作用域数组的先后顺序猜 ——
+   * 派生表、CTE、多级 JOIN 混在一起时，顺序并不可靠。取不到时为 null。
+   */
+  joinTarget: { table: string, alias: string } | null
 }
 
 /** 分析光标（只做文本扫描，不查元数据，可在每次按键时廉价调用） */
@@ -349,7 +387,35 @@ export function analyzeSqlCursorText(
     clause,
     kind: sqlContextKindOf(clause, clausePrefix),
     command: mainCommandOf(clausePrefix),
+    joinTarget: joinTargetOf(clausePrefix),
   }
+}
+
+/**
+ * 取最近一个 `JOIN` 后面的表与别名。
+ *
+ * `JOIN orders o ON …` → `{ table: 'orders', alias: 'o' }`。
+ * `JOIN (SELECT …) o ON …` 这种派生表拿不到（返回 null），
+ * 调用方退回「作用域里最后加入的表」。
+ */
+function joinTargetOf(clausePrefix: string): { table: string, alias: string } | null {
+  let end = -1
+  for (const match of clausePrefix.matchAll(/\bjoin\b/gi)) {
+    end = (match.index ?? 0) + match[0].length
+  }
+  if (end < 0) {
+    return null
+  }
+
+  const rest = clausePrefix.slice(end)
+  const parsed = readQualifiedName(rest, 0)
+  if (!parsed?.parts.length) {
+    return null
+  }
+
+  const table = parsed.parts[parsed.parts.length - 1]
+  const alias = readAlias(rest, parsed.end)?.alias ?? table
+  return { table, alias }
 }
 
 /** 语句的主关键字：跳过前导空白与注释后的第一个词（select / with / update…） */

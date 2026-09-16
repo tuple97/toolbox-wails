@@ -32,7 +32,9 @@ import {
   quotedIdentApply,
   renderIdent,
 } from './sqlCompletionInsert'
+import type { ColumnCompletion } from './sqlCompletionInsert'
 import { pooledColumnItems } from './sqlCompletionColumnPool'
+import type { PoolColumn, PoolSource } from './sqlCompletionColumnPool'
 import { aliasForTable, aliasedTableText } from './sqlTableAlias'
 import { joinConditionItems } from './sqlCompletionJoin'
 import type { JoinSide } from './sqlCompletionJoin'
@@ -141,12 +143,27 @@ export function groupByPromotion(
     const meta = ref
       ? columnsOf(ref).find(item => item.name.toLowerCase() === key)
       : undefined
+    // SELECT 里写过的限定符优先（`u.created_at` 的推荐项也带 u.），与普通列候选保持一致
+    const source = column.qualifier || ref?.alias || ref?.table || ''
+    const ident = renderIdent(column.column, dialect)
     items.push({
-      ...columnItem(column.column, {
-        dataType: meta?.dataType,
-        from: ref ? ref.alias || ref.table : undefined,
-        comment: meta?.comment,
-      }, dialect),
+      ...columnItem({
+        name: column.column,
+        displayName: source ? `${source}.${column.column}` : undefined,
+        insertText: source ? `${source}.${ident}` : ident,
+        columnId: {
+          schema: ref?.schema,
+          table: ref?.table ?? source,
+          source,
+          column: column.column,
+        },
+        detail: {
+          dataType: meta?.dataType,
+          from: ref ? ref.alias || ref.table : undefined,
+          comment: meta?.comment,
+        },
+        dialect,
+      }),
       boost: BOOST_SMART_COLUMN,
     })
   }
@@ -295,23 +312,20 @@ export function previewColumns(names: string[]): string {
   return text.length > 60 ? `${text.slice(0, 57)}…` : text
 }
 
-export function joinSideOf(
-  ref: TableRef,
-  connId: number,
-  database: string,
-  metadata: MetadataProvider,
-): JoinSide {
-  const schema = ref.schema || database
+export function joinSideOf(ref: TableRef, deps: SqlSuggestDeps): JoinSide {
+  const schema = ref.schema || deps.database
   const columns = ref.virtualColumns
     ? ref.virtualColumns.map(column => ({ name: column.name, dataType: column.dataType }))
-    : metadata.columns(connId, schema, ref.table)
+    : deps.metadata.columns(deps.connId, schema, ref.table)
         .map(column => ({ name: column.name, dataType: column.dataType }))
   return {
     table: ref.table,
     alias: ref.alias || ref.table,
     columns,
     // 外键只存在于物理表；元数据提供者未实现该能力时为空数组（走命名启发式）
-    foreignKeys: ref.virtualColumns ? [] : (metadata.foreignKeys?.(connId, schema, ref.table) ?? []),
+    foreignKeys: ref.virtualColumns
+      ? []
+      : (deps.metadata.foreignKeys?.(deps.connId, schema, ref.table) ?? []),
   }
 }
 
@@ -322,15 +336,32 @@ export function joinSideOf(
  * `FROM users u JOIN orders o ON |` → 左值是 orders（刚写的），
  * 右值依次是 users。配不出任何条件时返回空数组（不猜）。
  */
-export function joinConditionSuggestions(scopes: TableRef[][], deps: SqlSuggestDeps): Completion[] {
-  const { connId, database, metadata } = deps
+export function joinConditionSuggestions(
+  scopes: TableRef[][],
+  deps: SqlSuggestDeps,
+  joinTarget?: { table: string, alias: string } | null,
+): Completion[] {
   const refs = scopes[0] ?? []
   if (refs.length < 2) {
     return []
   }
-  const sides = refs.map(ref => joinSideOf(ref, connId, database, metadata))
-  const left = sides[sides.length - 1]
-  return joinConditionItems({ left, others: sides.slice(0, -1) })
+
+  const sides = refs.map(ref => joinSideOf(ref, deps))
+  const index = joinTarget ? indexOfJoinTarget(sides, joinTarget) : -1
+  const active = index >= 0 ? index : sides.length - 1
+
+  return joinConditionItems({
+    left: sides[active],
+    others: sides.filter((_, position) => position !== active),
+  })
+}
+
+/** 在已解析的来源里定位「当前 JOIN 的源」（别名优先，其次表名） */
+function indexOfJoinTarget(sides: JoinSide[], target: { table: string, alias: string }): number {
+  const alias = target.alias.toLowerCase()
+  const table = target.table.toLowerCase()
+  return sides.findIndex(side =>
+    side.alias.toLowerCase() === alias || side.table.toLowerCase() === table)
 }
 
 /**
@@ -377,20 +408,17 @@ export function resolveAfterDot(
   segments: string[],
   scopes: TableRef[][],
   deps: SqlSuggestDeps,
+  prefix = '',
 ): Completion[] {
-  const { connId, database, dialect, metadata } = deps
+  const { connId, database, metadata } = deps
   const last = segments[segments.length - 1]
   const qualifier = last.toLowerCase()
 
   // 1) 逐层找别名（派生表 / CTE 的列来自静态解析，物理表走元数据）
   for (const refs of scopes) {
-    const matchedRef = refs.find(ref => ref.alias.toLowerCase() === qualifier)
+    const matchedRef = refs.find(ref => (ref.alias || ref.table).toLowerCase() === qualifier)
     if (matchedRef) {
-      const virtual = matchedRef.virtualColumns
-      if (virtual) {
-        return virtualColumnSuggestions(virtual, matchedRef.alias, dialect)
-      }
-      return columnSuggestions(connId, matchedRef.schema || database, matchedRef.table, dialect, metadata)
+      return sourceColumnSuggestions(matchedRef, deps, prefix)
     }
   }
 
@@ -400,54 +428,98 @@ export function resolveAfterDot(
       ref => !ref.alias && ref.table.toLowerCase() === qualifier && ref.virtualColumns,
     )
     if (cteRef?.virtualColumns) {
-      return virtualColumnSuggestions(cteRef.virtualColumns, cteRef.table, dialect)
+      return virtualColumnSuggestions(
+        cteRef.virtualColumns,
+        { schema: cteRef.schema, table: cteRef.table, alias: cteRef.table },
+        deps.dialect,
+        prefix,
+        true,
+      )
     }
   }
 
-  // 3) 显式两段（mydb.user.）：倒数第二段是库/模式名
+  /*
+   * 3) 显式两段（mydb.user.）：倒数第二段是库 / 模式名。
+   * 这是**唯一**允许绕过作用域直接查元数据的形式 —— 用户明确写出了库名。
+   */
   if (segments.length > 1) {
     const schema = segments[segments.length - 2]
-    return columnSuggestions(connId, schema, last, dialect, metadata)
+    return columnSuggestions(
+      metadata.columns(connId, schema, last),
+      { schema, table: last, alias: last },
+      deps.dialect,
+      prefix,
+      true,
+    )
   }
 
-  // 4) 当前库里的表名
+  // 4) 当前库里的表名（`users.` 这种写法在库内同样常见）
   if (metadata.tables(connId, database).some(name => name.toLowerCase() === qualifier)) {
-    return columnSuggestions(connId, database, last, dialect, metadata)
+    return columnSuggestions(
+      metadata.columns(connId, database, last),
+      { schema: database, table: last, alias: last },
+      deps.dialect,
+      prefix,
+      true,
+    )
   }
 
   // 5) 库名 → 该库的表
   if (metadata.databases(connId).some(name => name.toLowerCase() === qualifier)) {
-    return tableSuggestions(connId, last, dialect, metadata)
+    return tableSuggestions(connId, last, deps.dialect, metadata)
   }
 
-  // 6) 兜底：按当前库的表取字段（顺带预热缓存）
-  return columnSuggestions(connId, database, last, dialect, metadata)
+  /*
+   * 作用域里没有这个来源，也不再「按当前库的同名表猜一次」：
+   * 那会让 `WHERE x.|` 突然冒出一张跟当前语句无关的表的字段 ——
+   * 用户感知就是「这里为什么莫名有这些字段」。想要按元数据查，写全 `库.表.`。
+   */
+  return []
+}
+
+/** 某个作用域来源的列候选：一律带限定符（文档里的 `u.` 会被替换掉，插入时要写回去） */
+function sourceColumnSuggestions(
+  ref: TableRef,
+  deps: SqlSuggestDeps,
+  prefix: string,
+): ColumnCompletion[] {
+  const source = { schema: ref.schema, table: ref.table, alias: ref.alias || ref.table }
+  return ref.virtualColumns
+    ? virtualColumnSuggestions(ref.virtualColumns, source, deps.dialect, prefix, true)
+    : columnSuggestions(
+        deps.metadata.columns(deps.connId, ref.schema || deps.database, ref.table),
+        source,
+        deps.dialect,
+        prefix,
+        true,
+      )
 }
 
 /**
- * 字段补全项（某张表的列）。
+ * 一组列的候选（走候选池：按来源缓存，超宽表按前缀取舍）。
  *
- * 走列候选池：候选项按表缓存（元数据刷新才失效），超宽表按前缀取舍。
- * `prefix` 是光标前正在输入的词，只有超宽表才会用到它。
+ * `prefix` 是光标前正在输入的词（只有超宽表才会用到）；
+ * `qualified` 决定展示名与插入文本是否带限定符（多来源 / 点号补全时为真）。
  */
 export function columnSuggestions(
-  connId: number,
-  database: string,
-  table: string,
+  columns: readonly PoolColumn[],
+  source: PoolSource,
   dialect: SqlDialect,
-  metadata: MetadataProvider,
   prefix = '',
-): Completion[] {
-  return pooledColumnItems(metadata.columns(connId, database, table), table, dialect, prefix)
+  qualified = false,
+): ColumnCompletion[] {
+  return pooledColumnItems(columns, source, dialect, prefix, qualified)
 }
 
+/** 派生表 / CTE 的输出列候选（同样走候选池） */
 export function virtualColumnSuggestions(
   columns: VirtualColumn[],
-  source: string,
+  source: PoolSource,
   dialect: SqlDialect,
   prefix = '',
-): Completion[] {
-  return pooledColumnItems(columns, source, dialect, prefix)
+  qualified = false,
+): ColumnCompletion[] {
+  return pooledColumnItems(columns, source, dialect, prefix, qualified)
 }
 
 export function derivedSourceDetail(columns: VirtualColumn[]): string {
@@ -576,6 +648,12 @@ export function generalSuggestions(args: GeneralSuggestArgs): Completion[] {
     const seenColumns = new Set<string>()
     const aliasSuggestions: Completion[] = []
 
+    /*
+     * 多来源（JOIN / 逗号多表）时列候选一律带限定符：`u.created_at` 与 `o.created_at`
+     * 是两个不同的候选，展示与插入都能区分；单来源时保持裸列名，不啰嗦。
+     */
+    const qualified = (scopes[0] ?? []).length > 1
+
     for (const refs of scopes) {
       for (const ref of refs) {
         const source = ref.alias || ref.table
@@ -587,20 +665,29 @@ export function generalSuggestions(args: GeneralSuggestArgs): Completion[] {
         seenAliases.add(sourceKey)
 
         /*
-         * 列候选走候选池（按表缓存 + 超宽表按前缀取舍）：
-         * 派生表用静态解析出的列，物理表用元数据；两边的来源描述都保持一致。
+         * 列候选走候选池（按来源缓存 + 超宽表按前缀取舍）：
+         * 派生表用静态解析出的列，物理表用元数据；来源用「别名优先」的限定符，
+         * 于是 `FROM users u` 的列是 u.*，与派生表 / CTE 的行为一致。
          */
         const pool = ref.virtualColumns
-          ? pooledColumnItems(ref.virtualColumns, source, dialect, prefix)
-          : pooledColumnItems(
-              metadata.columns(connId, ref.schema || database, ref.table),
-              ref.table,
+          ? virtualColumnSuggestions(
+              ref.virtualColumns,
+              { schema: ref.schema, table: ref.table, alias: source },
               dialect,
               prefix,
+              qualified,
+            )
+          : pooledColumnItems(
+              metadata.columns(connId, ref.schema || database, ref.table),
+              { schema: ref.schema, table: ref.table, alias: source },
+              dialect,
+              prefix,
+              qualified,
             )
         for (const item of pool) {
-          const key = item.label.toLowerCase()
-          if (seenColumns.has(key) || skipColumns?.has(key)) {
+          // 去重按「候选身份」：不同来源的同名列是两个候选，不能只留一个
+          const key = item.columnKey ?? item.label.toLowerCase()
+          if (seenColumns.has(key) || skipColumns?.has(item.label.toLowerCase())) {
             continue
           }
           seenColumns.add(key)

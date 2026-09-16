@@ -1,5 +1,5 @@
 /**
- * 列候选池：按表缓存候选项，并在超宽表上按前缀取舍。
+ * 列候选池：按「来源」缓存候选项，并在超宽表上按前缀取舍。
  *
  * 为什么需要：
  *  - **缓存**：补全在每一次按键都会跑，宽表 / 多表 JOIN 时每轮都要把成百上千个
@@ -10,9 +10,12 @@
  *    列表膨胀、每轮排序变慢。超过上限时按「已输入前缀命中 → 中文列名（可能靠拼音命中）
  *    → 元数据顺序」取值，保证用户正在打的列名不会被截掉。
  *
+ * 候选项带**身份**（表 + 来源 + 列）与**插入文本**（多来源时带限定符）：
+ * `u.created_at` 与 `o.created_at` 是两个不同的候选，不会再被去重吞掉。
+ *
  * 纯数据模块：不依赖 EditorState / DOM，可在单测里直接验证。
  */
-import { columnItem } from './sqlCompletionInsert'
+import { columnItem, renderIdent } from './sqlCompletionInsert'
 import type { ColumnCompletion } from './sqlCompletionInsert'
 import type { SqlDialect } from './rowSql'
 
@@ -31,6 +34,16 @@ export interface PoolColumn {
   from?: string
 }
 
+/** 候选池的来源描述 */
+export interface PoolSource {
+  /** 库 / 模式名（未限定为空） */
+  schema?: string
+  /** 物理表名 / 派生表名 / CTE 名 */
+  table: string
+  /** 来源限定符：别名；没有别名时就是表名 */
+  alias: string
+}
+
 /** 中文列名：前缀是 ASCII 时它们仍可能靠拼音首字母命中，截断时要优先保住 */
 const CJK_RE = /[\u4e00-\u9fa5]/
 
@@ -41,17 +54,23 @@ const CJK_RE = /[\u4e00-\u9fa5]/
  */
 const MAX_TRIMMED_PREFIXES = 8
 
-/** 元数据数组 → （来源 + 方言）→ 全量候选 */
+/** 元数据数组 → （来源 + 方言 + 是否带限定符）→ 全量候选 */
 const pools = new WeakMap<readonly PoolColumn[], Map<string, ColumnCompletion[]>>()
 
-/** 元数据数组 → （来源 + 方言）→ 前缀 → 截断后的候选 */
+/** 元数据数组 → 缓存键 → 前缀 → 截断后的候选 */
 const trimmedPools = new WeakMap<readonly PoolColumn[], Map<string, Map<string, ColumnCompletion[]>>>()
 
-/** 取（或建立）某张表的全量候选（引用稳定：同一份元数据只构造一次） */
+/** 缓存键：来源 / 方言 / 是否带限定符任一不同就是另一组候选 */
+function poolKey(source: PoolSource, dialect: SqlDialect, qualified: boolean): string {
+  return `${dialect}\u0000${source.schema ?? ''}\u0000${source.alias}\u0000${qualified ? 'q' : 'p'}`
+}
+
+/** 取（或建立）某个来源的全量候选（引用稳定：同一份元数据只构造一次） */
 function fullPool(
   columns: readonly PoolColumn[],
-  source: string,
+  source: PoolSource,
   dialect: SqlDialect,
+  qualified: boolean,
 ): ColumnCompletion[] {
   let byKey = pools.get(columns)
   if (!byKey) {
@@ -59,14 +78,31 @@ function fullPool(
     pools.set(columns, byKey)
   }
 
-  const key = `${dialect}\u0000${source}`
+  const key = poolKey(source, dialect, qualified)
   let items = byKey.get(key)
   if (!items) {
-    items = columns.map(column => columnItem(column.name, {
-      dataType: column.dataType,
-      from: column.from ?? source,
-      comment: column.comment,
-    }, dialect))
+    const qualifier = renderIdent(source.alias, dialect)
+    items = columns.map(column => {
+      const ident = renderIdent(column.name, dialect)
+      return columnItem({
+        name: column.name,
+        displayName: qualified ? `${source.alias}.${column.name}` : undefined,
+        insertText: qualified ? `${qualifier}.${ident}` : ident,
+        columnId: {
+          schema: source.schema,
+          table: source.table,
+          source: source.alias,
+          column: column.name,
+        },
+        detail: {
+          dataType: column.dataType,
+          // 派生列自带来源表时用它：`(SELECT * FROM users) t1` 的列来自 users
+          from: column.from ?? source.alias,
+          comment: column.comment,
+        },
+        dialect,
+      })
+    })
     byKey.set(key, items)
   }
   return items
@@ -75,8 +111,8 @@ function fullPool(
 /**
  * 超限时的取舍：前缀命中 > 中文列名 > 元数据顺序。
  *
- * 前缀为空（Ctrl+Space 且没输入任何字符）时用户没给任何信号，
- * 直接按元数据顺序截断——不做任何重排，行为最可预期。
+ * 前缀匹配用**搜索名**（`label`，裸列名）而不是展示名：用户打的是 `crea`，
+ * 不该被 `u.` 前缀影响命中。
  */
 function keepByPrefix(items: ColumnCompletion[], prefix: string): ColumnCompletion[] {
   if (!prefix) {
@@ -103,24 +139,26 @@ function keepByPrefix(items: ColumnCompletion[], prefix: string): ColumnCompleti
 }
 
 /**
- * 某张表的列候选。
+ * 某个来源的列候选。
  *
- * @param columns 元数据里的列数组（引用即缓存键）
- * @param source  候选描述里的来源表 / 别名
- * @param dialect 方言：决定标识符引用符
- * @param prefix  光标前正在输入的词（用于超宽表的取舍，可为空）
+ * @param columns   元数据里的列数组（引用即缓存键）
+ * @param source    来源（表名 + 别名）：身份、展示与插入都靠它
+ * @param dialect   方言：决定标识符引用符
+ * @param prefix    光标前正在输入的词（用于超宽表的取舍，可为空）
+ * @param qualified 是否带限定符（多来源 / 点号补全时为真）
  */
 export function pooledColumnItems(
   columns: readonly PoolColumn[],
-  source: string,
+  source: PoolSource,
   dialect: SqlDialect,
   prefix: string,
+  qualified: boolean,
 ): ColumnCompletion[] {
   if (!columns.length) {
     return []
   }
 
-  const all = fullPool(columns, source, dialect)
+  const all = fullPool(columns, source, dialect, qualified)
   if (all.length <= MAX_TABLE_COLUMNS) {
     return all
   }
@@ -131,7 +169,7 @@ export function pooledColumnItems(
     trimmedPools.set(columns, bySource)
   }
 
-  const sourceKey = `${dialect}\u0000${source}`
+  const sourceKey = poolKey(source, dialect, qualified)
   let byPrefix = bySource.get(sourceKey)
   if (!byPrefix) {
     byPrefix = new Map()

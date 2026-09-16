@@ -539,6 +539,16 @@ function setCheckState(el: HTMLElement, checked: boolean) {
 }
 
 /**
+ * 列候选的身份键。
+ *
+ * 用候选自己的 `columnKey`（`schema.table@source.column`）而不是裸列名：
+ * 多表 JOIN 下 `u.id` 与 `o.id` 是两个候选，按列名当键会互相影响。
+ */
+function columnKeyOf(completion: Completion): string {
+  return (completion as ColumnCompletion).columnKey ?? completion.label
+}
+
+/**
  * 在列名候选项最左侧渲染勾选框（其它类型不渲染）。
  * position 10 排在默认内容之前（CM6 内置：icon 20 / label 50 / detail 80）。
  */
@@ -552,17 +562,18 @@ function renderColumnCheckbox(
     return null
   }
 
+  const key = columnKeyOf(completion)
   const box = view.dom.ownerDocument.createElement('span')
   box.className = 'cm-sqlcheck'
   box.setAttribute('aria-hidden', 'true')
-  setCheckState(box, isColumnMarked(view, completion.label))
+  setCheckState(box, isColumnMarked(view, key))
 
   let nodes = checkNodes.get(view)
   if (!nodes) {
     nodes = new Map()
     checkNodes.set(view, nodes)
   }
-  nodes.set(completion.label, box)
+  nodes.set(key, box)
   return box
 }
 
@@ -581,8 +592,12 @@ function toggleCheckedColumn(view: EditorView): boolean {
     return false
   }
 
-  const checked = toggleColumnMark(view, completion.label)
-  const box = checkNodes.get(view)?.get(completion.label)
+  // 勾选按候选身份记录，并带上该候选自己的插入文本（一次插入多列时各带各的别名）
+  const key = columnKeyOf(completion)
+  const insertText = (completion as ColumnCompletion).columnInsert ?? completion.label
+  const checked = toggleColumnMark(view, key, insertText)
+
+  const box = checkNodes.get(view)?.get(key)
   if (box) {
     setCheckState(box, checked)
   }

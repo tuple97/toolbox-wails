@@ -44,6 +44,61 @@ export const NON_ALIAS_KEYWORDS = new Set([
   'not', 'null', 'in', 'exists', 'straight_join', 'force', 'use', 'ignore',
 ])
 
+/**
+ * 每个字符的括号深度（引号与注释里的括号不算）。
+ *
+ * 用于「只看本层来源」：深度 > 0 的关键字属于嵌套层，由那一层自己解析。
+ */
+function parenDepths(text: string): Int8Array {
+  const depths = new Int8Array(text.length)
+  let depth = 0
+  let index = 0
+
+  while (index < text.length) {
+    const ch = text[index]
+
+    // 引号 / 注释整体跳过
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      const end = skipQuoted(text, index)
+      depths.fill(depth, index, end)
+      index = end
+      continue
+    }
+    if (ch === '-' && text[index + 1] === '-') {
+      const lineEnd = text.indexOf('\n', index)
+      const end = lineEnd < 0 ? text.length : lineEnd
+      depths.fill(depth, index, end)
+      index = end
+      continue
+    }
+    if (ch === '/' && text[index + 1] === '*') {
+      const blockEnd = text.indexOf('*/', index + 2)
+      const end = blockEnd < 0 ? text.length : blockEnd + 2
+      depths.fill(depth, index, end)
+      index = end
+      continue
+    }
+
+    if (ch === '(') {
+      depths[index] = depth
+      depth++
+      index++
+      continue
+    }
+    if (ch === ')') {
+      depth = Math.max(0, depth - 1)
+      depths[index] = depth
+      index++
+      continue
+    }
+
+    depths[index] = depth
+    index++
+  }
+
+  return depths
+}
+
 /** 跳过空白 */
 export function skipSpaces(text: string, index: number): number {
   let i = index
@@ -131,6 +186,15 @@ export function readAlias(text: string, start: number): { alias: string, end: nu
 
 /** 表引用解析的可选依赖（由调用方按当前连接提供） */
 export interface TableRefOptions {
+  /**
+   * 只看**本层**的来源（跳过括号里的 FROM / JOIN）。
+   *
+   * 作用域链已经把嵌套层单独拆出来了：`FROM users u JOIN (SELECT … FROM logs) t`
+   * 在这一层只有 `users` 与 `t` 两个来源，`logs` 属于派生表自己那层。
+   * 不跳的话本层来源会被算多 —— 「是否多来源」的判断（要不要给列加限定符）
+   * 与关联条件配对都会跟着错。
+   */
+  topLevelOnly?: boolean
   /** 光标所在定义体的 CTE：不作为可见来源（递归自引用） */
   excludeCte?: (name: string) => boolean
   /**
@@ -191,8 +255,16 @@ export function collectTableRefs(
 
   const intro = /\b(?:from|join|update|insert\s+into|delete\s+from)\b/gi
 
+  /** 只看本层来源时，用括号深度表过滤掉嵌套层的关键字 */
+  const depths = options.topLevelOnly ? parenDepths(statement) : null
+
   for (const match of statement.matchAll(intro)) {
-    let index = (match.index ?? 0) + match[0].length
+    const at = match.index ?? 0
+    if (depths && depths[at] > 0) {
+      continue
+    }
+
+    let index = at + match[0].length
     // FROM / JOIN 后面可以是逗号分隔的多张表
     for (;;) {
       const probe = skipSpaces(statement, index)
@@ -212,6 +284,7 @@ export function collectTableRefs(
           const body = statement.slice(probe + 1, close)
           // 内层表引用：把输出列溯源到具体来源表（限定符匹配 / 单表归属）
           const innerRefs = collectTableRefs(body, {
+            resolveStarColumns: options.resolveStarColumns,
             resolveColumnMeta: options.resolveColumnMeta,
             resolveCteColumns: options.resolveCteColumns,
           })
@@ -578,7 +651,11 @@ export function starColumnsOf(
     return null
   }
 
-  const refs = collectTableRefs(selectText.slice(fromIndex))
+  const refs = collectTableRefs(selectText.slice(fromIndex), {
+    topLevelOnly: true,
+    // 嵌套派生表（`SELECT * FROM (SELECT * FROM t) x`）的展开也要能查到元数据
+    resolveStarColumns: ref => lookup(ref.table),
+  })
   const wanted = qualifier.toLowerCase()
   const ordered = wanted
     ? [
@@ -589,7 +666,12 @@ export function starColumnsOf(
     : refs
 
   for (const ref of ordered) {
-    const columns = lookup(ref.table)
+    /*
+     * 派生表 / CTE 在 collectTableRefs 里已经解析出自己的列（ref.virtualColumns），
+     * 直接用；物理表才走 lookup 查元数据。只查 lookup 的话，
+     * `SELECT * FROM (SELECT * FROM t) x` 这类嵌套派生会在这里断掉。
+     */
+    const columns = ref.virtualColumns ?? lookup(ref.table)
     if (columns) {
       return columns
     }

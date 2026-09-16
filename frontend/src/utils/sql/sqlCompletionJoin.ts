@@ -101,7 +101,12 @@ export function joinConditionsForPair(left: JoinSide, other: JoinSide): Completi
     items.push({ label: text, type: 'text', detail, apply: text })
   }
 
-  const columnsOf = (side: JoinSide) => new Map(side.columns.map(column => [column.name, column]))
+  /*
+   * 列名一律小写做键：元数据可能返回 `USER_ID` 而外键信息写的是 `user_id`，
+   * 直接按原样查会静默匹配不到（不同数据库的大小写习惯差异很大）。
+   */
+  const columnsOf = (side: JoinSide) =>
+    new Map(side.columns.map(column => [column.name.toLowerCase(), column]))
   const leftColumns = columnsOf(left)
   const otherColumns = columnsOf(other)
 
@@ -110,38 +115,36 @@ export function joinConditionsForPair(left: JoinSide, other: JoinSide): Completi
     if (fk.referencedTable.toLowerCase() !== other.table.toLowerCase()) {
       continue
     }
-    const local = leftColumns.get(fk.column)
-    const remote = otherColumns.get(fk.referencedColumn)
+    const local = leftColumns.get(fk.column.toLowerCase())
+    const remote = otherColumns.get(fk.referencedColumn.toLowerCase())
     if (!local || !remote || !typesCompatible(local.dataType, remote.dataType)) {
       continue
     }
-    push(`${qualifierOf(left)}.${fk.column} = ${qualifierOf(other)}.${fk.referencedColumn}`, '关联条件 · 外键')
+    push(`${qualifierOf(left)}.${local.name} = ${qualifierOf(other)}.${remote.name}`, '关联条件 · 外键')
   }
   for (const fk of other.foreignKeys ?? []) {
     if (fk.referencedTable.toLowerCase() !== left.table.toLowerCase()) {
       continue
     }
-    const local = otherColumns.get(fk.column)
-    const remote = leftColumns.get(fk.referencedColumn)
+    const local = otherColumns.get(fk.column.toLowerCase())
+    const remote = leftColumns.get(fk.referencedColumn.toLowerCase())
     if (!local || !remote || !typesCompatible(local.dataType, remote.dataType)) {
       continue
     }
-    push(`${qualifierOf(other)}.${fk.column} = ${qualifierOf(left)}.${fk.referencedColumn}`, '关联条件 · 外键')
+    push(`${qualifierOf(other)}.${local.name} = ${qualifierOf(left)}.${remote.name}`, '关联条件 · 外键')
   }
 
   // 2. 命名启发式：`{对方表单数}_id = 对方.id`
-  const expectLeft = `${singularTableName(other.table)}_id`
-  const leftKey = leftColumns.get(expectLeft)
+  const leftKey = leftColumns.get(`${singularTableName(other.table)}_id`.toLowerCase())
   const leftId = otherColumns.get('id')
   if (leftKey && leftId && typesCompatible(leftKey.dataType, leftId.dataType)) {
-    push(`${qualifierOf(left)}.${expectLeft} = ${qualifierOf(other)}.id`, '关联条件')
+    push(`${qualifierOf(left)}.${leftKey.name} = ${qualifierOf(other)}.${leftId.name}`, '关联条件')
   }
 
-  const expectOther = `${singularTableName(left.table)}_id`
-  const otherKey = otherColumns.get(expectOther)
+  const otherKey = otherColumns.get(`${singularTableName(left.table)}_id`.toLowerCase())
   const otherId = leftColumns.get('id')
   if (otherKey && otherId && typesCompatible(otherKey.dataType, otherId.dataType)) {
-    push(`${qualifierOf(other)}.${expectOther} = ${qualifierOf(left)}.id`, '关联条件')
+    push(`${qualifierOf(other)}.${otherKey.name} = ${qualifierOf(left)}.${otherId.name}`, '关联条件')
   }
 
   return items

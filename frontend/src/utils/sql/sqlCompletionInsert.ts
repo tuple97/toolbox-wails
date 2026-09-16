@@ -1,9 +1,15 @@
 /**
- * 列候选的「勾选多选」与插入逻辑。
+ * 列候选的「身份、勾选多选与插入」。
  *
- * 从 sqlCompletion.ts 拆出：多选状态、限定符补全、一次性插入多列、
- * 标识符的引用符处理，都只服务于「把列名正确写进文档」这一件事，
- * 与作用域 / 候选生成无关。
+ * 三条约定（都是踩过坑换来的）：
+ *
+ *  1. **身份不是列名**：`users u` 与 `orders o` 都有 `created_at`，它们是两个候选。
+ *     因此候选项带 `columnKey`（`schema.table@source.column`）—— 去重、勾选、渲染缓存
+ *     全部按它走；裸列名只作为「搜索名」（label）用于前缀匹配。
+ *  2. **展示名与插入文本由候选给出**：多来源时展示 `u.created_at`、插入也带限定符；
+ *     单来源时就是裸列名。展示走 CM6 的 `displayLabel`。
+ *  3. **apply 不再解析 SQL**：替换范围由补全引擎统一给出（词 + 点号限定符），
+ *     apply 只做「替换 + 插入候选自带的文本」，不再回头读文档里的 `u.`。
  */
 import type { Completion } from '@codemirror/autocomplete'
 import type { EditorView } from '@codemirror/view'
@@ -85,6 +91,46 @@ export function quotedIdentApply(identifier: string) {
   }
 }
 
+/** 限定符回看长度：别名不会离光标太远，避免全文扫描 */
+const QUALIFIER_LOOKBACK = 128
+
+/** 光标左侧的限定符：`t1.`、`` `db`.`t`. `` 等，允许点号前有多段 */
+const QUALIFIER_BEFORE = /(?:(?:`[^`]*`|"[^"]*"|[A-Za-z_$][\w$]*)\.)+$/
+
+/**
+ * 读出替换起点左侧紧邻的限定符（含点号），没有则返回空串。
+ *
+ * 由光标分析层使用（`hybridCursor`）：它把「词 + 限定符」算成统一替换范围，
+ * apply 阶段不再调用它。
+ */
+export function qualifierBeforeCursor(text: string, from: number): string {
+  const start = Math.max(0, from - QUALIFIER_LOOKBACK)
+  return QUALIFIER_BEFORE.exec(text.slice(start, from))?.[0] ?? ''
+}
+
+// ---------------------------------------------------------------- 列候选
+
+/** 列候选的「身份」：同一张表的同一列，在不同来源（别名）下是两个候选 */
+export interface ColumnCandidateId {
+  /** 库 / 模式名（未限定时为空） */
+  schema?: string
+  /** 物理表名（派生表 / CTE 则是它自己的名字） */
+  table: string
+  /** 来源限定符：别名；无别名时等于表名 */
+  source: string
+  /** 列名 */
+  column: string
+}
+
+/**
+ * 身份键：去重、勾选与渲染缓存都用它。
+ *
+ * 形如 `testdb.users@u.created_at`（一律小写，数据库标识符大小写不敏感）。
+ */
+export function columnCandidateKey(id: ColumnCandidateId): string {
+  return `${id.schema ?? ''}.${id.table}@${id.source}.${id.column}`.toLowerCase()
+}
+
 /** 列候选项的描述片段：提示栏里分段渲染并配图标（见 CodeEditor.vue 的 renderColumnDetail） */
 export interface ColumnDetail {
   /** 完整类型（varchar(32)） */
@@ -95,33 +141,48 @@ export interface ColumnDetail {
   comment?: string
 }
 
-/** 带列描述的补全项：CM6 会把同一个对象交给渲染回调，附加字段可安全携带 */
+/** 带列描述与身份的补全项：CM6 会把同一个对象交给渲染回调，附加字段可安全携带 */
 export interface ColumnCompletion extends Completion {
   columnDetail?: ColumnDetail
+  /** 候选身份键（多选状态与渲染缓存用它，而不是裸列名） */
+  columnKey?: string
+  /** 该候选实际插入的文本（可能带限定符：`u.created_at`） */
+  columnInsert?: string
+}
+
+/** 构造列候选的输入 */
+export interface ColumnItemArgs {
+  /** 列名：label / 搜索名（保持裸列名，前缀匹配才能命中） */
+  name: string
+  /** 展示文本（多来源时 `u.created_at`；与 name 相同则省略） */
+  displayName?: string
+  /** 插入文本（多来源 / 点号补全时带限定符） */
+  insertText: string
+  /** 身份 */
+  columnId: ColumnCandidateId
+  detail?: ColumnDetail
+  dialect: SqlDialect
 }
 
 /**
  * 列名候选项（**所有列名都必须经由这里构造**）。
  *
- * 普通补全（Ctrl+Space / 输入中）与点号补全两条路径都会用到它；
- * 一旦漏掉 `apply`，回车时就会退回 CM6 的默认「只插入标签本身」，
- * 勾选的多列不会被一起插入（曾踩过：普通补全那条路径漏了 apply，
- * 表现为「勾选多个后回车只出来刚回车的那一条」）。
- *
- * 描述（类型 / 来源 / 注释）不放 `detail`：那是纯文本，只能串成一串 `·`；
- * 改挂在 columnDetail 上，由编辑器渲染成「图标 + 文本」的分段。
+ * - `label` 是搜索名（裸列名）：编辑器与自有排序都按它做前缀匹配；
+ * - `displayLabel` 是展示名（多来源时带别名），列表里一眼能看出列来自哪张表；
+ * - `columnKey` 是身份（多选与去重）；
+ * - `apply` 只做替换 + 插入 `insertText`，不再解析 SQL（见文件头约定 3）。
  */
-export function columnItem(
-  name: string,
-  columnDetail: ColumnDetail,
-  dialect: SqlDialect,
-): ColumnCompletion {
+export function columnItem(args: ColumnItemArgs): ColumnCompletion {
+  const key = columnCandidateKey(args.columnId)
   return {
-    label: name,
+    label: args.name,
+    displayLabel: args.displayName && args.displayName !== args.name ? args.displayName : undefined,
     type: 'field',
     boost: BOOST_COLUMN,
-    apply: columnApply(name, dialect),
-    columnDetail,
+    columnDetail: args.detail,
+    columnKey: key,
+    columnInsert: args.insertText,
+    apply: columnApply(key, args.insertText),
   }
 }
 
@@ -132,57 +193,50 @@ export function columnItem(
  * 勾选状态，配合编辑器封装层实现：
  *  - 候选项左侧的复选框：CodeEditor.vue 通过 autocompletion 的 `addToOptions` 渲染；
  *  - 空格切换勾选：CodeEditor.vue 的键位；
- *  - 回车生成：勾选项由下面的 `columnApply` 一次性插入，用 ", " 连接
- *    （没有勾选时就是当前这一项，行为与普通补全一致）。
+ *  - 回车生成：勾选项由 `columnApply` 一次性插入，用 ", " 连接。
  *
- * 勾选状态属于「本次筛选」：补全源被重新查询（输入字符、重新打开列表）即清空，
- * 避免界面上看不见旧勾选却被悄悄插入。
+ * 键是**候选身份**（`columnKey`）而不是裸列名 —— 否则 `u.id` 与 `o.id`
+ * 会互相影响；值是该候选自己的插入文本（一次插入多列时要各带各的别名）。
  */
-const markedColumns = new WeakMap<EditorView, string[]>()
+const markedColumns = new WeakMap<EditorView, Map<string, string>>()
 /** 上一次插入结束的光标位置，用于判断是否要补 ", " */
 const insertSessions = new WeakMap<EditorView, { head: number }>()
 
 /** 已勾选的列（按勾选顺序；只读，勿直接修改） */
-export function columnsMarked(view: EditorView): string[] {
-  return markedColumns.get(view) ?? []
+export function markedColumnsOf(view: EditorView): Array<{ key: string, insertText: string }> {
+  const marked = markedColumns.get(view)
+  return marked ? [...marked].map(([key, insertText]) => ({ key, insertText })) : []
 }
 
-/** 某列是否已勾选 */
-export function isColumnMarked(view: EditorView, label: string): boolean {
-  return columnsMarked(view).includes(label)
+/** 已勾选的候选身份（按勾选顺序） */
+export function columnsMarked(view: EditorView): string[] {
+  return markedColumnsOf(view).map(item => item.key)
+}
+
+/** 某个候选是否已勾选 */
+export function isColumnMarked(view: EditorView, key: string): boolean {
+  return markedColumns.get(view)?.has(key) ?? false
 }
 
 /** 切换勾选，返回切换后的状态 */
-export function toggleColumnMark(view: EditorView, label: string): boolean {
-  const current = columnsMarked(view)
-  const next = current.includes(label)
-    ? current.filter(item => item !== label)
-    : [...current, label]
-  markedColumns.set(view, next)
-  return next.includes(label)
+export function toggleColumnMark(view: EditorView, key: string, insertText: string): boolean {
+  let marked = markedColumns.get(view)
+  if (!marked) {
+    marked = new Map()
+    markedColumns.set(view, marked)
+  }
+
+  if (marked.has(key)) {
+    marked.delete(key)
+    return false
+  }
+  marked.set(key, insertText)
+  return true
 }
 
 /** 清空勾选（插入完成后调用） */
 export function clearColumnMarks(view: EditorView) {
   markedColumns.delete(view)
-}
-
-/** 限定符回看长度：别名不会离光标太远，避免全文扫描 */
-const QUALIFIER_LOOKBACK = 128
-
-/** 光标左侧的限定符：`t1.`、`` `db`.`t`. `` 等，允许点号前有多段 */
-const QUALIFIER_BEFORE = /(?:(?:`[^`]*`|"[^"]*"|[A-Za-z_$][\w$]*)\.)+$/
-
-/**
- * 读出补全替换起点左侧紧邻的限定符（含点号），没有则返回空串。
- *
- * 这里传的应是补全的替换起点（当前正在输入的词的首字符，`sqlBundle` 的 `from`），
- * 而不是光标位置——点号补全时 `t1.` 正好贴在它左边。
- * 点号补全的候选项 label 只有列名，插入时靠它把别名补回去；抽成纯函数便于单测。
- */
-export function qualifierBeforeCursor(text: string, from: number): string {
-  const start = Math.max(0, from - QUALIFIER_LOOKBACK)
-  return QUALIFIER_BEFORE.exec(text.slice(start, from))?.[0] ?? ''
 }
 
 /**
@@ -192,30 +246,21 @@ export function qualifierBeforeCursor(text: string, from: number): string {
  * 紧接在上一次插入之后（中间没有手动输入）时自动补一个 ", "，
  * 所以连续挑列不会粘在一起。
  *
- * 引号由 renderIdent 统一处理：用户已敲开引号就沿用并闭合，否则只在必要时加。
+ * `from` / `to` 由补全引擎给出（已含点号限定符），这里不再解析文档内容；
+ * 只额外看一眼光标左侧有没有用户敲下的开引号，需要时把它一起替换掉。
  */
-function columnApply(label: string, dialect: SqlDialect) {
+function columnApply(key: string, insertText: string) {
   return (view: EditorView, _completion: Completion, from: number, to: number) => {
-    const marked = columnsMarked(view)
-    const labels = marked.length ? marked : [label]
+    const marked = markedColumnsOf(view)
+    const inserts = marked.length ? marked.map(item => item.insertText) : [insertText]
     const session = insertSessions.get(view)
     const continued = Boolean(session) && session?.head === from
 
-    const doc = view.state.doc.toString()
-    // 用户可能先敲了开引号（`` `na ``）：把引号一并纳入替换，插入时补上右引号
-    const open = openingQuoteBefore(doc, from)
-    const wordStart = open ? open.start : from
+    // 用户可能先敲了开引号（`` `na ``）：把引号一并纳入替换
+    const open = openingQuoteBefore(view.state.doc.toString(), from)
+    const start = open ? open.start : from
 
-    /*
-     * 点号补全（`SELECT t1.`）时把已输入的限定符一起纳入替换范围，
-     * 于是一次插入多列时每一列都会带上别名（`t1.a, t1.b`），
-     * 而不是只有第一列沾了文档里那个 `t1.` 的光。
-     * 限定符在开引号左边，所以从 wordStart 往左读。
-     */
-    const qualifier = qualifierBeforeCursor(doc, wordStart)
-    const start = wordStart - qualifier.length
-    const names = labels.map(name => `${qualifier}${renderIdent(name, dialect, open?.quote)}`)
-    const insert = `${continued ? ', ' : ''}${names.join(', ')}`
+    const insert = `${continued ? ', ' : ''}${inserts.join(', ')}`
     const head = start + insert.length
 
     view.dispatch({

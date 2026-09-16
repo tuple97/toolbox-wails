@@ -383,6 +383,7 @@ export function isPositionalEligible(kind: CompletionContextKind): boolean {
     case 'statement-start':
     case 'keyword':
     case 'join-on':
+    case 'join-expression':
     case 'group-by':
     case 'insert':
       return true
@@ -628,13 +629,19 @@ function sqlBundle(
   const lineBefore = line.text.slice(0, pos - line.from)
 
   const word = cursor.prefix
-  const from = cursor.wordRange.from
+  /*
+   * 替换范围用光标分析给出的**统一范围**（词 + 左侧点号限定符），
+   * 而不是裸词范围：点号补全时文档里的 `u.` 属于本次替换 ——
+   * 候选自带的插入文本（`u.email`）已经把限定符写了回去，
+   * 于是 apply 阶段不必再回头解析文档。
+   */
+  const range = cursor.range
 
   // 没有登记连接上下文（模板编辑器未绑定连接）：退化为关键字 + 函数
   if (!runtime.sql || !runtime.sql.connId) {
     return {
-      from,
-      to: cursor.wordRange.to,
+      from: range.from,
+      to: range.to,
       options: staticOptions(runtime.featureFlags),
       contextKind: 'statement-start',
     }
@@ -690,7 +697,7 @@ function sqlBundle(
 
   const qualifier = readQualifierBeforeCursor(lineBefore)
   const options = qualifier
-    ? resolveAfterDot(qualifier, scopes, deps)
+    ? resolveAfterDot(qualifier, scopes, deps, word)
     : generalSuggestions({
         intent,
         scopes,
@@ -706,7 +713,7 @@ function sqlBundle(
    * 与普通列候选并存：想自己写条件的人照样能挑列名。
    */
   if (contextKind === 'join-on' && runtime.featureFlags.joinSuggestions !== false) {
-    options.push(...joinConditionSuggestions(scopes, deps))
+    options.push(...joinConditionSuggestions(scopes, deps, intent.joinTarget))
   }
 
   options.push(...promoted.items)
@@ -721,7 +728,7 @@ function sqlBundle(
     }))
   }
 
-  return { from, to: cursor.wordRange.to, options, contextKind }
+  return { from: range.from, to: range.to, options, contextKind }
 }
 
 /** 表引用 → 列清单（派生表用静态列，物理表查元数据） */
@@ -851,6 +858,8 @@ export function buildScopes(
 
   return scopes.map((scope) => {
     const refs = collectTableRefs(scope.text, {
+      // 只看本层来源：嵌套层由作用域链上更内层的那一层负责
+      topLevelOnly: true,
       excludeCte: name => hiddenCtes.has(name),
       resolveStarColumns: resolveStarWithCtes,
       resolveColumnMeta,
