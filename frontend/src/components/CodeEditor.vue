@@ -61,7 +61,11 @@ import type {
 } from '@/utils/sql/sqlCompletion'
 import { parseSqlTriggerMode, sqlCompletionTrigger } from '@/utils/sql/sqlCompletionTrigger'
 import { inTemplateFragment } from '@/utils/sql/sqlTemplateCompletion'
-import { inLiteralOrComment } from '@/utils/sql/sqlSyntax'
+import {
+  jumpToNextPlaceholder,
+  templatePlaceholderExtension,
+} from '@/utils/sql/template/templatePlaceholder'
+import { analyzeHybridCursor } from '@/utils/sql/hybridCursor'
 import { createStatementBoxExtension } from '@/utils/sql/sqlStatementBox'
 import { sqlStatementRunGutter, type RunnableStatement } from '@/utils/sql/sqlRunGutter'
 import {
@@ -96,8 +100,8 @@ const props = withDefaults(defineProps<{
   language?: string
   /**
    * 数据库类型（mysql / postgres…），决定 SQL 方言。
-   * 方言影响 Lezer 语法树的词法：默认（标准 SQL）会把 MySQL 的反引号标识符
-   * 判成错误节点，语法树与补全的作用域分析都会变差。
+   * 方言影响语法树的词法：默认（标准 SQL）会把 MySQL 的反引号标识符判成错误节点，
+   * 语法树与补全的作用域分析都会变差。
    */
   dbType?: string
   /** 主题名（应用主题键，如 toolbox-dark）；留空时跟随全局配置 */
@@ -156,7 +160,7 @@ const fontCompartment = new Compartment()
 
 // ---------------------------------------------------------------- 各层扩展
 
-/** 连接类型 → Lezer SQL 方言；未知类型返回 undefined（用标准 SQL） */
+/** 连接类型 → SQL 方言；未知类型返回 undefined（用标准 SQL） */
 function sqlDialectOf(dbType: string): SQLDialect | undefined {
   switch (dbType.toLowerCase()) {
     case 'mysql':
@@ -309,14 +313,16 @@ function triggerExtension(): Extension {
       if (templateMode && inTemplateFragment(state, pos)) {
         return true
       }
-      return isPositionalEligible(contextKindAt(state, pos, props.dbType ?? ''))
+      // 位置类别与补全用同一套语言区域分析（模板识别交给引擎，不再单独判断）
+      return isPositionalEligible(contextKindAt(state, pos, props.dbType ?? '', mode))
     },
     getInLiteralOrComment: (state) => {
       const pos = state.selection.main.head
-      if (templateMode && inTemplateFragment(state, pos)) {
-        return false
-      }
-      return inLiteralOrComment(state, pos)
+      /*
+       * 模板片段不算「字符串 / 注释」：那里是模板语言的地盘（引号内插值是最常见的写法）。
+       * 语言区域一次判清，不再靠「先判模板再判字符串」的顺序。
+       */
+      return analyzeHybridCursor(state, pos, { mode }).inLiteral
     },
   })
 }
@@ -611,11 +617,18 @@ function baseExtensions(): Extension[] {
       ...defaultKeymap,
       ...historyKeymap,
       { key: 'Space', run: toggleCheckedColumn },
+      /*
+       * Tab 先走「模板占位跳转」：块片段插入后条件位与块体是链上的两个占位，
+       * 走完（或没有占位）时返回 false，自然落回下面的缩进行为。
+       */
+      { key: 'Tab', run: jumpToNextPlaceholder },
       indentWithTab,
     ]),
     EditorView.updateListener.of(handleUpdate),
     // 错误波浪线的装饰位（未设置错误时为空，不产生任何开销）
     editorErrorField,
+    // 模板占位链的位置存储（没有占位时为空数组，零开销）
+    templatePlaceholderExtension(),
   ]
 
   /*

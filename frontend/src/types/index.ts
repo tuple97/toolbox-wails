@@ -275,6 +275,8 @@ export interface DictionaryItem {
 export interface ColumnMeta {
   name: string
   type: string
+  /** 字段注释（后端从数据字典反查；表达式列 / 别名列 / 非 MySQL 方言为空） */
+  comment: string
 }
 
 /** 查询结果，与后端 services.QueryResult 对应 */

@@ -31,6 +31,14 @@ export class ColumnMeta {
              */
             this["type"] = "";
         }
+        if (!("comment" in $$source)) {
+            /**
+             * Comment 字段注释（从数据字典反查；表达式列 / 别名列 / 非 MySQL 方言为空）
+             * @member
+             * @type {string}
+             */
+            this["comment"] = "";
+        }
 
         Object.assign(this, $$source);
     }

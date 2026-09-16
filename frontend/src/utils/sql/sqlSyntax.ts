@@ -1,5 +1,5 @@
 /**
- * Lezer 语法树（CM6 自带的 SQL 语法树）辅助：只做它擅长的两件事，
+ * 语法树辅助（编辑器自带的 SQL 语法树）：只做它擅长的两件事，
  * 语句切分与光标归属都交给 `sqlStatementRanges.ts` 的扫描器。
  *
  * 分工原因：语法树是**高亮用**的，容错但不精确——`Statement` 节点会吞掉语句末尾
@@ -13,7 +13,7 @@ import { statementAtCursor } from '@/utils/sql/sqlStatementRanges'
 
 /**
  * 语法树节点类型：从 `syntaxTree` 的返回值推导。
- * 不 import `@lezer/common`——它不是本项目的直接依赖，
+ * 不 import 语法树的底层包——它不是本项目的直接依赖，
  * pnpm 的严格 node_modules 布局下取不到它的类型声明（会直接编译报错）。
  */
 type SyntaxNode = ReturnType<ReturnType<typeof syntaxTree>['resolveInner']>
@@ -27,7 +27,7 @@ export interface TextRange {
 /**
  * 光标是否落在字符串或注释里。
  *
- * 节点名按 Lezer SQL 语法：`String` / `LineComment` / `BlockComment`
+ * 节点名按 SQL 语法树的命名：`String` / `LineComment` / `BlockComment`
  *（实测确认；没有统一的 `Comment` 节点，写错名字会静默失效）。
  */
 export function inLiteralOrComment(state: EditorState, pos: number): boolean {

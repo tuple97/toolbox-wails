@@ -15,14 +15,15 @@ import type { EditorView } from '@codemirror/view'
 import { inLiteralOrComment } from '@/utils/sql/sqlSyntax'
 import {
   buildScopes,
-  completionStatementRange,
   defaultMetadataProvider,
   qualifierBeforeCursor,
   sqlContextFromRuntime,
   sqlContextOf,
-  unquoteIdent,
 } from './sqlCompletion'
-import type { CompletionRuntime, MetadataProvider, SqlContext, TableRef } from './sqlCompletion'
+import type { CompletionRuntime, MetadataProvider, SqlContext } from './sqlCompletion'
+import { unquoteIdent } from './sqlSchema'
+import type { TableRef } from './sqlSchema'
+import { completionStatementRange } from './sqlCursor'
 
 /** 悬停提示里展示的列信息 */
 export interface SqlColumnInfo {

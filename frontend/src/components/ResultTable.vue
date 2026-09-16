@@ -66,6 +66,16 @@ function rowIndex(index: number): number {
   const size = props.result.pageSize ?? 0
   return (page - 1) * size + index + 1
 }
+
+/**
+ * 列头悬停提示：列名 / 类型 / 备注的完整文本。
+ *
+ * 列头本身每行都会被截断（列宽固定、也不能让长注释把表头撑高），
+ * 完整内容放 title 里，鼠标停一下就能看到全的。
+ */
+function headTitle(col: { label: string, type: string, comment: string }): string {
+  return [col.label, col.type, col.comment].filter(Boolean).join('\n')
+}
 </script>
 
 <template>
@@ -92,9 +102,17 @@ function rowIndex(index: number): number {
         :align="col.align"
         show-overflow-tooltip
       >
-        <!-- 列头不换行：长列名截断为省略号，完整名称走 title（应用内小提示） -->
+        <!--
+          列头三行：列名 / 类型 / 备注。
+          后两行浅色小字、按需出现（类型或备注为空则整行不渲染），
+          每行各自截断，完整内容走 title（应用内小提示）。
+        -->
         <template #header>
-          <span class="result-table__head" :title="col.label">{{ col.label }}</span>
+          <div class="result-table__head" :title="headTitle(col)">
+            <span class="result-table__head-name">{{ col.label }}</span>
+            <span v-if="col.type" class="result-table__head-meta">{{ col.type }}</span>
+            <span v-if="col.comment" class="result-table__head-meta">{{ col.comment }}</span>
+          </div>
         </template>
         <template #default="{ row }">
           <!-- 每格只计算一次渲染结果，避免重复调用 -->
@@ -127,20 +145,36 @@ function rowIndex(index: number): number {
 }
 
 /*
- * 列头一律单行：默认 .cell 会换行，长列名会把表头撑成多行、挤掉结果区高度。
- * 这里改为省略号截断（宽度仍由列宽决定，不会自动加宽）。
+ * 列头是三行结构，每行单独单行截断（宽度仍由列宽决定，不会自动加宽）。
+ * Element Plus 默认的 .cell 有内边距与 nowrap，这里只放开换行，
+ * 具体行数与截断交给下面的 .result-table__head*。
  */
 .result-table :deep(.el-table__header .cell) {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  line-height: 1.35;
 }
 
 .result-table__head {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.result-table__head-name,
+.result-table__head-meta {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * 类型与备注：比列名小一号、弱化颜色。
+ * 字号必须走主题变量，否则「设置 → 字体大小」对它们无效。
+ */
+.result-table__head-meta {
+  color: var(--text-muted);
+  font-size: var(--app-font-size-2xs);
+  font-weight: 400;
 }
 
 .result-table__cell {

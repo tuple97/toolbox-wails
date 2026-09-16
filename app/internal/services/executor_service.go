@@ -207,6 +207,11 @@ func (s *DBService) ExecuteStatement(ctx context.Context, req ExecutorRequest) (
 		if err != nil {
 			return nil, hintDatabaseError(err)
 		}
+
+		// 结果列注释：查一次数据字典补上（独立短超时，失败静默跳过）
+		commentCtx, cancelComments := context.WithTimeout(ctx, metaTimeout)
+		annotateColumnComments(commentCtx, session, conn.DBType, effectiveDB, countableSQL, columns)
+		cancelComments()
 		result := &ExecutorResult{
 			Kind:      "query",
 			Columns:   columns,

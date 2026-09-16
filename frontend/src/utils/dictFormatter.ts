@@ -89,13 +89,21 @@ export function renderTemplate(
  *
  * 依据映射配置决定列顺序、别名、宽度与对齐；
  * 未被映射的列追加在后面，保证结果集不会丢列。
+ * 类型与注释一并带出，供表头三行展示（类型 / 注释都来自数据库元信息）。
  */
 export function buildColumns(
   columns: ColumnMeta[],
   mappings: FieldMapping[],
-): Array<{ column: string, label: string, width?: number, align: 'left' | 'center' | 'right', type: string }> {
+): Array<{
+  column: string
+  label: string
+  width?: number
+  align: 'left' | 'center' | 'right'
+  type: string
+  comment: string
+}> {
   const names = columns.map(c => c.name)
-  const typeOf = new Map(columns.map(c => [c.name, c.type]))
+  const metaOf = new Map(columns.map(c => [c.name, c]))
   const mapped = new Map(mappings.map(m => [m.column, m]))
 
   const result: Array<{
@@ -104,6 +112,7 @@ export function buildColumns(
     width?: number
     align: 'left' | 'center' | 'right'
     type: string
+    comment: string
   }> = []
 
   // 已配置映射的列，按配置顺序优先展示
@@ -116,7 +125,8 @@ export function buildColumns(
       label: mapping.label || mapping.column,
       width: mapping.width,
       align: mapping.align ?? 'left',
-      type: typeOf.get(mapping.column) ?? '',
+      type: metaOf.get(mapping.column)?.type ?? '',
+      comment: metaOf.get(mapping.column)?.comment ?? '',
     })
   }
 
@@ -125,7 +135,13 @@ export function buildColumns(
     if (mapped.has(name)) {
       continue
     }
-    result.push({ column: name, label: name, align: 'left', type: typeOf.get(name) ?? '' })
+    result.push({
+      column: name,
+      label: name,
+      align: 'left',
+      type: metaOf.get(name)?.type ?? '',
+      comment: metaOf.get(name)?.comment ?? '',
+    })
   }
 
   return result

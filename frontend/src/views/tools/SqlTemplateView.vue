@@ -6,6 +6,7 @@ import type { EditorView } from '@codemirror/view'
 import CodeEditor from '@/components/CodeEditor.vue'
 import { registerScriptGlobals } from '@/utils/sql/sqlCompletion'
 import type { CompletionRuntime } from '@/utils/sql/sqlCompletion'
+import { templateVariablesOf } from '@/utils/sql/template/templateVariables'
 import VariableConfigPanel from '@/components/VariableConfigPanel.vue'
 import FieldMappingPanel from '@/components/FieldMappingPanel.vue'
 import ConnectionSelect from '@/components/ConnectionSelect.vue'
@@ -353,7 +354,7 @@ async function handleDelete(item: TemplateListItem) {
  *
  * 两样东西都是「按需实时求值」：
  *  - `sql`：模板所属连接的表 / 列元数据（连接从模板配置来，库名与方言从连接列表取）；
- *  - `templateVariables`：本模板的变量配置。
+ *  - `templateVariables`：本模板的变量配置（含值类型，供参数位与点号取值使用）。
  *
  * 因为写成了函数，改连接、改变量配置后补全立即跟着变，不需要重建编辑器。
  */
@@ -363,7 +364,7 @@ function templateCompletionContext(): Partial<CompletionRuntime> {
     sql: conn
       ? { connId: conn.id, database: conn.database ?? '', dbType: conn.dbType }
       : undefined,
-    templateVariables: variableConfigs.value.map(item => ({ name: item.name, label: item.label })),
+    templateVariables: templateVariablesOf(variableConfigs.value),
   }
 }
 

@@ -41,6 +41,8 @@ type ColumnMeta struct {
 	Name string `json:"name"`
 	// Type 数据库类型名（驱动提供时填充，否则为空）
 	Type string `json:"type"`
+	// Comment 字段注释（从数据字典反查；表达式列 / 别名列 / 非 MySQL 方言为空）
+	Comment string `json:"comment"`
 }
 
 // 分页参数的取值边界：与仓储层的落库约束保持一致。
@@ -167,6 +169,14 @@ func (s *DBService) Execute(ctx context.Context, req ExecuteRequest) (*QueryResu
 		return nil, err
 	}
 	elapsed := time.Since(start).Milliseconds()
+
+	/*
+	 * 结果列注释：查一次数据字典补上（独立短超时，失败静默跳过）。
+	 * 表名取「未加分页的原文」，与结果列同源。
+	 */
+	commentCtx, cancelComments := context.WithTimeout(ctx, metaTimeout)
+	annotateColumnComments(commentCtx, db, conn.DBType, conn.Database, countableSQL, columns)
+	cancelComments()
 
 	// 4. 后置脚本：对结果集做加工
 	post, err := s.engine.RunPostScript(req.PostScript, rows)
