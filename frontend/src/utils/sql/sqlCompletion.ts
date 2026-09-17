@@ -631,12 +631,13 @@ function sqlBundle(
 
   const word = cursor.prefix
   /*
-   * 替换范围用光标分析给出的**统一范围**（词 + 左侧点号限定符），
-   * 而不是裸词范围：点号补全时文档里的 `u.` 属于本次替换 ——
-   * 候选自带的插入文本（`u.email`）已经把限定符写了回去，
-   * 于是 apply 阶段不必再回头解析文档。
+   * 替换范围 = 词范围（不含左侧的点号限定符）。
+   *
+   * 编辑器会把 from..to 的文本当作候选项的匹配输入：`u.` 算进来后
+   * pattern 就成了 `u.`，而列候选的搜索名是裸列名 —— 全被过滤掉，列表是空的。
+   * 限定符由候选自带的前缀写回（见 sqlCompletionInsert 的 `columnPrefix`）。
    */
-  const range = cursor.range
+  const range = cursor.wordRange
 
   // 没有登记连接上下文（模板编辑器未绑定连接）：退化为关键字 + 函数
   if (!runtime.sql || !runtime.sql.connId) {

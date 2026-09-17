@@ -8,8 +8,10 @@
  *     全部按它走；裸列名只作为「搜索名」（label）用于前缀匹配。
  *  2. **展示名与插入文本由候选给出**：多来源时展示 `u.created_at`、插入也带限定符；
  *     单来源时就是裸列名。展示走 CM6 的 `displayLabel`。
- *  3. **apply 不再解析 SQL**：替换范围由补全引擎统一给出（词 + 点号限定符），
- *     apply 只做「替换 + 插入候选自带的文本」，不再回头读文档里的 `u.`。
+ *  3. **替换范围只覆盖词**：编辑器会把替换范围里的文本当作匹配输入，
+ *     把 `u.` 算进去会让所有列候选（搜索名是裸列名）匹配失败。限定符因此
+ *     由候选自带（`columnPrefix`）写回 —— apply 不解析 SQL，只在
+ *     「文档里已经写着这个前缀」时不再重复插入。
  */
 import type { Completion } from '@codemirror/autocomplete'
 import type { EditorView } from '@codemirror/view'
@@ -152,6 +154,13 @@ export interface ColumnCompletion extends Completion {
   /** 该候选实际插入的文本（可能带限定符：`u.created_at`） */
   columnInsert?: string
   /**
+   * 插入文本里的限定符部分（`u.`，无则空）。
+   *
+   * 只用于判断「文档里是不是已经写着了」：点号补全（`u.|`）的替换范围只有词，
+   * 左侧的 `u.` 本来就在文档里，插入时不该再来一遍（否则 `u.u.id`）。
+   */
+  columnPrefix?: string
+  /**
    * 这次补全的列模式（单选 / 多选）。
    *
    * 由补全引擎按**光标意图**（`readColumnIntent`）在候选上打标：
@@ -169,6 +178,8 @@ export interface ColumnItemArgs {
   displayName?: string
   /** 插入文本（多来源 / 点号补全时带限定符） */
   insertText: string
+  /** 插入文本里的限定符部分（`u.`；无则省略） */
+  prefix?: string
   /** 身份 */
   columnId: ColumnCandidateId
   detail?: ColumnDetail
@@ -193,6 +204,7 @@ export function columnItem(args: ColumnItemArgs): ColumnCompletion {
     columnDetail: args.detail,
     columnKey: key,
     columnInsert: args.insertText,
+    columnPrefix: args.prefix || undefined,
     apply: columnApply(key, args.insertText),
   }
 }
@@ -288,15 +300,28 @@ function columnApply(key: string, insertText: string) {
      */
     const multi = (completion as ColumnCompletion).columnMode === 'multi'
     const marked = multi ? markedColumnsOf(view) : []
-    const inserts = marked.length ? marked.map(item => item.insertText) : [insertText]
+    const items = marked.length ? marked.map(item => item.insertText) : [insertText]
     const session = insertSessions.get(view)
     const continued = Boolean(session) && session?.head === from
 
     // 用户可能先敲了开引号（`` `na ``）：把引号一并纳入替换
-    const open = openingQuoteBefore(view.state.doc.toString(), from)
+    const doc = view.state.doc
+    const open = openingQuoteBefore(doc.toString(), from)
     const start = open ? open.start : from
 
-    const insert = `${continued ? ', ' : ''}${inserts.join(', ')}`
+    /*
+     * 落在替换范围内的那一项要检查文档里是否已经写着限定符：
+     * 点号补全（`u.|`）的替换范围只有词，左侧的 `u.` 本来就在文档里，
+     * 再插一次会得到 `u.u.id`。多选 / 连续插入的后续项都在新位置，照常带前缀。
+     */
+    const prefix = (completion as ColumnCompletion).columnPrefix ?? ''
+    const written = prefix !== ''
+      && doc.sliceString(Math.max(0, start - prefix.length), start) === prefix
+    const first = written && !continued && items[0].startsWith(prefix)
+      ? items[0].slice(prefix.length)
+      : items[0]
+
+    const insert = `${continued ? ', ' : ''}${[first, ...items.slice(1)].join(', ')}`
     const head = start + insert.length
 
     view.dispatch({

@@ -67,17 +67,23 @@ describe('语言区域判定', () => {
   })
 })
 
-describe('替换范围', () => {
-  it('词范围 + 点号限定符构成最终替换范围', () => {
+describe('替换范围与限定符', () => {
+  it('替换范围只覆盖词，左侧限定符单独给出', () => {
     const cursor = analyzeAt('SELECT u.na§me FROM users u', 'sql')
     expect(cursor.wordRange).toEqual({ from: 9, to: 13 })
-    expect(cursor.range).toEqual({ from: 7, to: 13 })
     expect(cursor.qualifier).toBe('u.')
   })
 
-  it('模板里只算词，不带点号限定符', () => {
+  it('点号紧贴光标：范围退化成空词，限定符照常识别', () => {
+    // 替换范围不含 `u.` 是补全能出候选的前提（编辑器拿它当匹配输入）
+    const cursor = analyzeAt('SELECT u.§', 'sql')
+    expect(cursor.wordRange).toEqual({ from: 9, to: 9 })
+    expect(cursor.qualifier).toBe('u.')
+  })
+
+  it('模板里没有点号限定符', () => {
     const cursor = analyzeAt('{{ device_n§ }}', 'sql-template')
-    expect(cursor.range).toEqual({ from: 3, to: 11 })
+    expect(cursor.wordRange).toEqual({ from: 3, to: 11 })
     expect(cursor.qualifier).toBe('')
   })
 })

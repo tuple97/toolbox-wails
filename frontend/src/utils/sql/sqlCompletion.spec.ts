@@ -9,6 +9,8 @@ import { EditorState } from '@codemirror/state'
 import { MySQL, sql } from '@codemirror/lang-sql'
 import { describe, expect, it } from 'vitest'
 import { collectCompletions, columnHoverAt, qualifierBeforeCursor } from '@/utils/sql/sqlCompletion'
+import { sortByRank } from '@/utils/sql/sqlCompletionRank'
+import { scanClause } from '@/utils/sql/sqlCursor'
 import type { Completion } from '@codemirror/autocomplete'
 import type {
   ColumnCompletion,
@@ -304,6 +306,80 @@ describe('SQL 补全：派生列的来源与类型', () => {
     expect(detail?.from).toBe('t1')
     expect(detail?.dataType).toBeUndefined()
     expect(detail?.comment).toBeUndefined()
+  })
+})
+
+describe('补全位置与次序（回归）', () => {
+  it('FR 前缀：子句关键字排在函数前面', () => {
+    const items = itemsOf('SELECT * FR|')
+    const keyword = items.find(item => item.label === 'FROM')
+    const fn = items.find(item => item.label === 'FROM_UNIXTIME')
+    expect(keyword).toBeTruthy()
+    expect(fn).toBeTruthy()
+
+    /*
+     * 两者同属「前缀命中」档，先后由 boost 的类别层次决定：
+     * 结构关键字（FROM）压过函数（FROM_UNIXTIME）——用户在这里接的是子句骨架。
+     */
+    expect(sortByRank([fn!, keyword!], 'FR')[0].label).toBe('FROM')
+  })
+
+  it('扫描层区分「紧贴关键字」与「关键字后空位」', () => {
+    // 三种情形各有语义：紧贴关键字 / 紧贴的名字被让过 / 真的空出槽位
+    expect(scanClause('SELECT * FROM').tight).toBe('keyword')
+    expect(scanClause('SELECT * FROM or').tight).toBe('name')
+    expect(scanClause('SELECT * FROM ').tight).toBe('none')
+  })
+
+  it('FROM| 不给表与库（还在写 FROM 这个词）', () => {
+    const labels = labelsOf('SELECT * FROM|')
+    expect(labels).not.toContain('users')
+    expect(labels).not.toContain('testdb')
+  })
+
+  it('FROM | 才给表与库', () => {
+    const labels = labelsOf('SELECT * FROM |')
+    expect(labels).toContain('users')
+    expect(labels).toContain('testdb')
+  })
+
+  it('INSERT INTO| 同样不给表与库', () => {
+    const labels = labelsOf('INSERT INTO|')
+    expect(labels).not.toContain('users')
+    expect(labels).not.toContain('testdb')
+  })
+
+  it('紧贴的是正在输入的名字（FROM or|）：表名照给，库名不给', () => {
+    const labels = labelsOf('SELECT * FROM or|')
+    expect(labels).toContain('orders')
+    expect(labels).not.toContain('testdb')
+  })
+
+  it('ON| / WHERE| 紧贴：不给库名', () => {
+    expect(labelsOf('SELECT * FROM users u JOIN orders o ON|')).not.toContain('testdb')
+    expect(labelsOf('SELECT * FROM users u WHERE|')).not.toContain('testdb')
+  })
+
+  it('点号紧贴光标：替换范围只有词，限定符由候选自带', () => {
+    const doc = 'SELECT u.| FROM users u'
+    const pos = doc.indexOf('|')
+    const text = doc.replace('|', '')
+    const state = EditorState.create({ doc: text, extensions: [sql({ dialect: MySQL })] })
+    const bundle = collectCompletions(state, pos, {
+      mode: 'sql',
+      sql: { connId: 1, database: 'testdb', dbType: 'mysql' },
+      metadata,
+    })
+
+    /*
+     * 替换范围里的文本就是编辑器用来匹配候选项的输入：必须是词（这里为空），
+     * 不能含 `u.` —— 含了就一个列候选都匹配不上（搜索名是裸列名）。
+     */
+    expect(bundle).toBeTruthy()
+    expect(text.slice(bundle!.from, bundle!.to)).toBe('')
+    const name = (bundle!.options as ColumnCompletion[]).find(item => item.label === 'name')
+    expect(name?.columnPrefix).toBe('u.')
+    expect(name?.columnInsert).toBe('u.name')
   })
 })
 

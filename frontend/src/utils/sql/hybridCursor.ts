@@ -7,7 +7,7 @@
  * ```
  *   Cursor
  *     ↓  语言区域（SQL / 模板 / 字符串注释 / 脚本）
- *   HybridCursor（含统一的替换范围）
+ *   HybridCursor（含替换范围与限定符）
  *     ↓  各自的语义层
  *   候选 → 排序 → 插入
  * ```
@@ -40,10 +40,14 @@ export interface HybridCursor {
   language: HybridLanguage
   /** 正在输入的词（无则为空串） */
   prefix: string
-  /** 词的范围（不含点号限定符） */
+  /**
+   * 词范围：**补全的替换范围**（所有候选都用它）。
+   *
+   * 只覆盖词本身，不含左侧的点号限定符：编辑器会把这段文本当作候选项的
+   * **匹配输入**，把 `u.` 算进来会让所有列候选都匹配失败（搜索名是裸列名）；
+   * 限定符的写回由候选自带的前缀负责（见 sqlCompletionInsert 的 `columnPrefix`）。
+   */
   wordRange: TextRange
-  /** 统一的替换范围：词 + 左侧点号限定符（所有候选都用它） */
-  range: TextRange
   /** 左侧点号限定符（`u.` / `` `db`.`t`. ``），无则为空串） */
   qualifier: string
   /** 模板区域的边界（`language === 'template'` 时给出） */
@@ -96,12 +100,10 @@ export function analyzeHybridCursor(
   const tail = WORD_AFTER.exec(doc.slice(pos, pos + WORD_LOOKAHEAD))?.[0] ?? ''
   const wordRange: TextRange = { from: pos - prefix.length, to: pos + tail.length }
   const qualifier = qualifierBeforeCursor(doc, wordRange.from)
-  const range: TextRange = { from: wordRange.from - qualifier.length, to: wordRange.to }
 
   const base: Omit<HybridCursor, 'language' | 'templateRegion' | 'inLiteral'> = {
     prefix,
     wordRange,
-    range,
     qualifier,
   }
 

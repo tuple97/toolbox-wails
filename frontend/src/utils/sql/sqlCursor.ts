@@ -104,7 +104,26 @@ export interface ClauseScan {
    * `ON o.user_id = |` 已经在表达式里了（只该给列）。
    */
   tail: string
+  /**
+   * 光标是否**紧贴刚读到的那个词**（`FROM|` 对 `FROM |`）。
+   *
+   * 紧贴说明用户还在写这个词，位置语义还没进入「关键字之后的那个槽位」——
+   * 上层据此收窄候选（明细见 `TightKind`）。
+   */
+  tight: TightKind
 }
+
+/**
+ * 「紧贴」的三种情形。
+ *
+ * - `'none'`：不紧贴（`FROM |`）—— 空位就是下一个槽位，表 / 库都该给；
+ * - `'keyword'`：紧贴的就是命中的关键字（`FROM|`、`INTO|`）—— 表和库都不该给，
+ *   否则 `FROM|` 的 pattern 会把长库名当子序列匹配上、再由高 boost 顶到第一位；
+ * - `'name'`：紧贴的词被当成「正在输入的名字」让过（`FROM or|` 的 `or`）——
+ *   表名候选正是用户要的（`orders`），照给；库名在这种「还在写标识符」的位置
+ *   只会是噪音（`ON|` 也会匹配上 `information_schema`），不给。
+ */
+export type TightKind = 'none' | 'keyword' | 'name'
 
 /** 判断光标处属于哪个子句 */
 export function readClauseKind(prefix: string): ClauseKind {
@@ -119,9 +138,17 @@ export function scanClause(prefix: string): ClauseScan {
   let enteredParen = false
   /** 已读过的上一个词（用于区分 GROUP BY / ORDER BY 这类两词结构） */
   let previousKeyword = ''
+  /** 是否让过了一个紧贴光标的词（`FROM or|` 的 `or`）—— 位置结论来自它左边的关键字 */
+  let skippedName = false
 
-  const result = (kind: ClauseKind, keyword = '', at = index): ClauseScan =>
-    ({ kind, keyword, previousKeyword, tail: prefix.slice(at).trim() })
+  const result = (kind: ClauseKind, keyword = '', at = index, tight: TightKind = 'none'): ClauseScan => ({
+    kind,
+    keyword,
+    previousKeyword,
+    tail: prefix.slice(at).trim(),
+    // 让过名字的情形优先级最低：显式判定为紧贴关键字时以它为准
+    tight: tight === 'none' && skippedName ? 'name' : tight,
+  })
 
   while (index > 0) {
     const ch = prefix[index - 1] ?? ''
@@ -175,7 +202,13 @@ export function scanClause(prefix: string): ClauseScan {
          * 别名已经写完（`AS t1 |`）则回到「表之后」，接下来是 JOIN / WHERE 这些子句关键字。
          */
         if (lower === 'as') {
-          return result(prefix.slice(index).trim() ? 'afterSource' : 'alias', lower)
+          // `AS|` 紧贴：这个词还没写完，位置也没进入别名之后
+          return result(
+            prefix.slice(index).trim() ? 'afterSource' : 'alias',
+            lower,
+            index,
+            index === prefix.length ? 'keyword' : 'none',
+          )
         }
         /*
          * BY 是两词结构的后半截（GROUP BY / ORDER BY），命中时前半截还没读到：
@@ -190,7 +223,8 @@ export function scanClause(prefix: string): ClauseScan {
           if (previous) {
             previousKeyword = previous.text.toLowerCase()
           }
-          return result('column', lower)
+          // `GROUP BY|` / `ORDER BY|` 紧贴：BY 本身还在写
+          return result('column', lower, index, index === prefix.length ? 'keyword' : 'none')
         }
         if (TABLE_CLAUSE_KEYWORDS.has(lower)) {
           /*
@@ -199,13 +233,18 @@ export function scanClause(prefix: string): ClauseScan {
            * `FROM t, |` → 逗号后面又该接表名，回到 source。
            */
           const tail = prefix.slice(index).trim()
+          /*
+           * `FROM|`（紧贴，还没敲空格）与 `FROM |` 位置不同：
+           * 前者还在写这个词，表 / 库都不该给；后者才是「该写表名」的空位。
+           */
+          const tight: TightKind = index === prefix.length ? 'keyword' : 'none'
           if (!tail || tail.endsWith(',')) {
-            return result('source', lower)
+            return result('source', lower, index, tight)
           }
           if (tail.includes('(') || tail.includes(')')) {
-            return result('any', lower)
+            return result('any', lower, index, tight)
           }
-          return result('afterSource', lower)
+          return result('afterSource', lower, index, tight)
         }
         if (COLUMN_CLAUSE_KEYWORDS.has(lower)) {
           /*
@@ -217,6 +256,7 @@ export function scanClause(prefix: string): ClauseScan {
            * `AS` / `BY` 两个两词结构在上面单独处理，也不受影响。
            */
           if (index === prefix.length) {
+            skippedName = true
             previousKeyword = lower
             index = word.start
             continue

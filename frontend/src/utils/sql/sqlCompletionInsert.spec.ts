@@ -5,8 +5,9 @@
  * 这类问题（少引号导致 SQL 跑不通、多引号导致 `` ``users` ``、多列没带别名）
  * 只有看到最终文本才能确认。
  *
- * 注意新契约：**替换范围由补全引擎给出**（可能含点号限定符），
- * apply 不再自己回头解析文档；候选自带插入文本（多来源时带 `u.`）。
+ * 注意新契约：**替换范围只覆盖词**（不含点号限定符 —— 编辑器拿这段文本
+ * 当匹配输入），限定符由候选自带（`columnPrefix`）写回，apply 只在
+ * 「文档里已经写着这个前缀」时不再重复插入。
  */
 import { describe, expect, it } from 'vitest'
 import type { Completion } from '@codemirror/autocomplete'
@@ -27,13 +28,19 @@ import type { SqlDialect } from '@/utils/sql/rowSql'
  * 假编辑器：只实现插入逻辑用到的那几件事。
  *
  * - `state.doc.toString()`：读文档（开引号判断要用）
+ * - `state.doc.sliceString(from, to)`：看替换范围左侧有没有已经写着的限定符
  * - `dispatch`：把 changes 记下来
  * - 勾选状态走 WeakMap，用同一个假 view 对象即可
  */
 function fakeView(doc: string) {
   const changes: Array<{ from: number, to: number, insert: string }> = []
   const view = {
-    state: { doc: { toString: () => doc } },
+    state: {
+      doc: {
+        toString: () => doc,
+        sliceString: (from: number, to?: number) => doc.slice(from, to),
+      },
+    },
     dispatch: (spec: { changes: { from: number, to: number, insert: string } }) => {
       changes.push(spec.changes)
     },
@@ -64,6 +71,7 @@ function qualifiedColumn(source: string, name: string, dialect: SqlDialect = 'my
     name,
     displayName: `${source}.${name}`,
     insertText: `${source}.${renderIdent(name, dialect)}`,
+    prefix: `${source}.`,
     columnId: { table: 'users', source, column: name },
     dialect,
   })
@@ -185,15 +193,21 @@ describe('列插入：最终写进文档的文本', () => {
     expect(applyColumn(doc, column('order'))?.insert).toBe('`order`')
   })
 
-  it('点号补全：替换范围含已输入的 `u.`，候选自带限定符', () => {
+  it('点号补全：替换范围只有词，文档里已写着的 `u.` 不会被重复插入', () => {
     const doc = 'SELECT u.`na'
     const item = qualifiedColumn('u', 'name')
-    // 引擎给出的替换范围从限定符开始（第 7 位）；apply 不再自己解析 `u.`
-    expect(applyColumn(doc, item, [], 7)).toEqual({ from: 7, to: 12, insert: 'u.name' })
+    // 替换范围从词首开始（第 10 位，`na`）；左侧的 `u.` 留在文档里，最终得到 `u.name`
+    expect(applyColumn(doc, item, [], 10)).toEqual({ from: 9, to: 12, insert: 'name' })
 
-    // 需要引用符的列名，候选自带引用符（限定符照旧）
+    // 需要引用符的列名，候选自带引用符（限定符依旧不重复）
     const reserved = qualifiedColumn('u', 'order')
-    expect(applyColumn(doc, reserved, [], 7)?.insert).toBe('u.`order`')
+    expect(applyColumn(doc, reserved, [], 10)?.insert).toBe('`order`')
+  })
+
+  it('替换范围左侧没有限定符时，候选自带的 `u.` 照常写进去', () => {
+    // 普通（非点号）补全：文档里只有词，插入必须带上来源前缀
+    const doc = 'SELECT crea'
+    expect(applyColumn(doc, qualifiedColumn('u', 'created_at'))?.insert).toBe('u.created_at')
   })
 
   it('多表场景：不同来源的同名列是两个候选（身份不同）', () => {

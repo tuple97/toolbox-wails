@@ -19,12 +19,14 @@ import {
   BOOST_FUNCTION,
   BOOST_NAMESPACE,
   BOOST_SMART_COLUMN,
+  BOOST_STATEMENT_KEYWORD,
   BOOST_TABLE,
   CLAUSE_KEYWORDS,
   EXPRESSION_KEYWORDS,
   JOIN_KEYWORDS,
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
+  STATEMENT_KEYWORD_SET,
 } from './sqlCompletionKeywords'
 import {
   columnItem,
@@ -151,6 +153,7 @@ export function groupByPromotion(
         name: column.column,
         displayName: source ? `${source}.${column.column}` : undefined,
         insertText: source ? `${source}.${ident}` : ident,
+        prefix: source ? `${source}.` : undefined,
         columnId: {
           schema: ref?.schema,
           table: ref?.table ?? source,
@@ -604,7 +607,16 @@ export function keywordsFor(kind: ClauseKind): string[] {
   }
 }
 
+/**
+ * 关键字权重：语句 → 表达式 → 子句，三层依次降低（层间距见 sqlCompletionKeywords）。
+ *
+ * 分层的意义只在「同前缀冲突」时可见（`FR` 同时命中 FROM 与 FROM_UNIXTIME 这类），
+ * 层内先后仍由编辑器的匹配分决定。
+ */
 export function keywordBoost(keyword: string): number {
+  if (STATEMENT_KEYWORD_SET.has(keyword)) {
+    return BOOST_STATEMENT_KEYWORD
+  }
   return EXPRESSION_KEYWORD_SET.has(keyword) ? BOOST_EXPRESSION_KEYWORD : BOOST_CLAUSE_KEYWORD
 }
 
@@ -730,8 +742,19 @@ export function generalSuggestions(args: GeneralSuggestArgs): Completion[] {
     suggestions.push(...aliasSuggestions)
   }
 
-  if (kind !== 'column') {
+  /*
+   * 表 / 库候选只在位置**真的进入下一个槽位**时才给（三种紧贴情形见 TightKind）：
+   *  - 紧贴关键字本身（`FROM|`、`INTO|`）→ 表与库都不给：用户还在写这个词，
+   *    此刻的库名（长词，fuzzy 能把 `FROM` 当子序列匹配上、boost 又是最高一档）
+   *    会被顶到第一位，回车直接插成 `` `information_schema`. ``；
+   *  - 紧贴的是正在输入的名字（`FROM or|`）→ 表名照给（`orders` 正是用户要的），
+   *    库名不给 —— 还在写标识符的位置轮不到库名。
+   */
+  const tight = args.intent.clause.tight
+  if (kind !== 'column' && tight !== 'keyword') {
     suggestions.push(...tableSuggestions(connId, database, dialect, metadata, autoAlias))
+  }
+  if (kind !== 'column' && tight === 'none') {
     suggestions.push(...namespaceSuggestions(connId, dialect, metadata))
   }
 

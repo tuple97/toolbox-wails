@@ -41,12 +41,17 @@ const metadata: MetadataProvider = {
       ]),
 }
 
-/** 假编辑器：只实现列插入用到的 `state.doc.toString()` 与 `dispatch` */
+/** 假编辑器：只实现列插入用到的 `state.doc` 读取与 `dispatch` */
 function fakeView(doc: string) {
   let text = doc
   const changes: Array<{ from: number, to: number, insert: string }> = []
   const view = {
-    state: { doc: { toString: () => text } },
+    state: {
+      doc: {
+        toString: () => text,
+        sliceString: (from: number, to?: number) => text.slice(from, to),
+      },
+    },
     dispatch(spec: { changes?: { from: number, to: number, insert: string } }) {
       if (spec.changes) {
         changes.push(spec.changes)
@@ -86,10 +91,11 @@ describe('列补全模式：光标意图', () => {
     expect(intent.isColumnList).toBe(true)
     expect(intent.qualifier).toBe('t')
     expect(intent.prefix).toBe('')
-    // 替换范围只到 `t.`（filterRange 为空），不能因为多选而扩大
-    expect(bundle?.from).toBe(7)
+    // 替换范围只覆盖「词」（这里是空的）：`t.` 留在文档里，
+    // 由候选自带的前缀写回，不能扩到限定符上（编辑器拿范围文本做匹配）
+    expect(bundle?.from).toBe(9)
     expect(bundle?.to).toBe(9)
-    expect(doc.slice(bundle!.from, bundle!.to)).toBe('t.')
+    expect(doc.slice(bundle!.from, bundle!.to)).toBe('')
   })
 
   it('t.user_id,| 是单选：逗号紧跟光标', () => {
@@ -197,10 +203,11 @@ describe('列补全模式：空格与多选插入', () => {
     const apply = first?.apply
     expect(typeof apply).toBe('function')
     if (typeof apply === 'function') {
-      apply(view as never, first as Completion, 7, 9)
+      // 真实链路给的范围是「词」（这里为空，光标紧贴 `t.`）
+      apply(view as never, first as Completion, 9, 9)
     }
 
-    expect(changes[0]?.from).toBe(7)
+    expect(changes[0]?.from).toBe(9)
     expect(textOf()).toBe('SELECT t.id, t.email, t.created_at')
   })
 })

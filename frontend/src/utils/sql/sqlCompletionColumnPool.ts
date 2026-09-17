@@ -88,6 +88,8 @@ function fullPool(
         name: column.name,
         displayName: qualified ? `${source.alias}.${column.name}` : undefined,
         insertText: qualified ? `${qualifier}.${ident}` : ident,
+        // 限定符单独给一份：插入时据此判断文档里是不是已经写着了
+        prefix: qualified ? `${qualifier}.` : undefined,
         columnId: {
           schema: source.schema,
           table: source.table,

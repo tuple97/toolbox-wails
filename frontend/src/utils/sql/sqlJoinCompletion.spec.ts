@@ -3,7 +3,7 @@
  *
  * 覆盖之前漏掉、却最容易出错的位置：
  *   `ON |` / `ON o.|` / `ON o.user_|` / `ON a = |` / `ON a = u.|` / `ON a = u.i|` / `ON a AND |`
- * 以及「多来源同名列必须同时存在」与「点号补全的替换范围含限定符」。
+ * 以及「多来源同名列必须同时存在」与「点号补全的替换范围只有词、前缀由候选自带」。
  *
  * 位置标记用 `§`。
  */
@@ -111,13 +111,13 @@ describe('JOIN 条件位置', () => {
     expect(id?.columnInsert).toBe('u.id')
   })
 
-  it('ON a = u.i 正在输入：同样只给列，替换范围含 `u.`', () => {
+  it('ON a = u.i 正在输入：同样只给列，替换范围只有词', () => {
     const doc = 'SELECT * FROM users u JOIN orders o ON o.user_id = u.i§'
     expect(labelsOf(doc)).toContain('id')
-    // 替换范围从限定符开始（`u.` 也会被替换，候选自带 u.）
+    // 替换范围只覆盖词（`i`）：左侧的 `u.` 留在文档里，由候选自带的前缀写回
     const range = rangeOf(doc)
-    const qualifierStart = doc.replace(MARK, '').lastIndexOf('u.i')
-    expect(range).toEqual({ from: qualifierStart, to: qualifierStart + 3 })
+    const wordStart = doc.replace(MARK, '').lastIndexOf('u.i') + 2
+    expect(range).toEqual({ from: wordStart, to: wordStart + 1 })
   })
 
   it('ON … AND 之后：又能给下一条条件', () => {

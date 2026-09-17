@@ -6,35 +6,46 @@
  */
 
 /**
- * 候选权重：CodeMirror 的 `boost` 参与候选排序。
+ * 候选权重（CodeMirror 的 `boost`）—— **类别次序的唯一出处**。
  *
- * 只靠 push 顺序不稳：补全列表会先按匹配分数排，多个类别命中同一前缀时，
- * 必须用 boost 把「该出现的东西」稳定地顶上去——
- * 列 → 别名 → 表 / 库 → 函数 → 表达式关键字 → 子句关键字。
+ * 读法分两层：
+ *  1. **层与层之间**决定「同一前缀下谁排前面」。层间距取 1000 量级，
+ *     远大于编辑器匹配分的波动（同前缀候选通常只差几十分），
+ *     所以类别次序稳定，不会被「词更长 / 匹配更绕」翻盘。
+ *  2. **同一层内**交给编辑器的匹配分（更短、更精确的词自然靠前）；
+ *     层内的小偏移（`+5`、`-5`、高频关键字加成）只做微调，不改变层间次序。
+ *
+ * 为什么**关键字高于函数**：`SELECT * FR|` 里用户要写的是子句骨架（FROM），
+ * 函数（FROM_UNIXTIME）只是前缀撞车。结构关键字位置明确、写下去就是语法结构；
+ * 函数在写全 `(` 之前都只是备选。
  */
-export const BOOST_COLUMN = 90
-export const BOOST_ALIAS = 80
-export const BOOST_TABLE = 70
-export const BOOST_NAMESPACE = 65
-export const BOOST_FUNCTION = 50
-export const BOOST_EXPRESSION_KEYWORD = 30
-export const BOOST_CLAUSE_KEYWORD = 10
+export const BOOST_COLUMN = 8000
+export const BOOST_ALIAS = 7000
+export const BOOST_TABLE = 6000
+export const BOOST_NAMESPACE = 5500
+/** 语句级 / DDL：`SELECT`、`INSERT INTO` … */
+export const BOOST_STATEMENT_KEYWORD = 2000
+/** 表达式：`AND`、`CASE`、`AS` … */
+export const BOOST_EXPRESSION_KEYWORD = 1500
+/** 子句：`FROM`、`WHERE`、`GROUP BY` … */
+export const BOOST_CLAUSE_KEYWORD = 1200
+export const BOOST_FUNCTION = 1000
 
 /**
- * 智能项（`*` 展开 / 分组列 / 比较值 / INSERT 列清单）：100。
+ * 智能项（`*` 展开 / 分组列 / 比较值 / INSERT 列清单）：9000。
  *
- * 高于列（90）——它们只在该位置才有意义，出来了就该排在最前面，
+ * 高于列 —— 它们只在该位置才有意义，出来了就该排在最前面，
  * 常规列名候选紧随其后。
  */
-export const BOOST_SMART_ITEM = 100
+export const BOOST_SMART_ITEM = 9000
 
 /**
  * 「上下文优先的列」：如 GROUP BY 位置上的 SELECT 非聚合列。
  *
- * 略高于普通列（90），但仍低于片段型智能项，
+ * 略高于普通列，但仍低于片段型智能项，
  * 这样「补齐全部列」的入口在最前、它推荐的那些列紧跟其后、其余列照旧。
  */
-export const BOOST_SMART_COLUMN = 95
+export const BOOST_SMART_COLUMN = 8500
 
 /*
  * 关键字按「允许出现的位置」分类，补全只给该位置写得出来的那些，
@@ -70,6 +81,9 @@ export const SQL_KEYWORDS = [
 
 /** 表达式关键字的集合版，用于决定候选权重 */
 export const EXPRESSION_KEYWORD_SET = new Set(EXPRESSION_KEYWORDS)
+
+/** 语句关键字的集合版，用于决定候选权重 */
+export const STATEMENT_KEYWORD_SET = new Set(STATEMENT_KEYWORDS)
 
 /**
  * 需要引用符才能当标识符用的保留字。
