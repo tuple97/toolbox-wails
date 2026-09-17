@@ -13,6 +13,7 @@
  */
 import type { Completion } from '@codemirror/autocomplete'
 import type { EditorView } from '@codemirror/view'
+import type { ColumnCompletionMode } from './sqlCursor'
 import { BOOST_COLUMN, RESERVED_WORDS } from './sqlCompletionKeywords'
 import { quoteIdent } from './rowSql'
 import type { SqlDialect } from './rowSql'
@@ -150,6 +151,14 @@ export interface ColumnCompletion extends Completion {
   columnKey?: string
   /** 该候选实际插入的文本（可能带限定符：`u.created_at`） */
   columnInsert?: string
+  /**
+   * 这次补全的列模式（单选 / 多选）。
+   *
+   * 由补全引擎按**光标意图**（`readColumnIntent`）在候选上打标：
+   * 复选框与空格键都只认它，不再自己判断上下文 —— 于是「是否显示复选框」
+   * 是意图的语义结果，而不是「候选恰好是列」的自然结果。
+   */
+  columnMode?: ColumnCompletionMode
 }
 
 /** 构造列候选的输入 */
@@ -242,6 +251,23 @@ export function clearColumnMarks(view: EditorView) {
 }
 
 /**
+ * 空格键是否该被「勾选列名」消费。
+ *
+ * 只在**多选列模式**消费：单选场景（`SELECT t.user_id,|`、`t.em|`）里空格必须
+ * 原样插入 —— 用户按空格是想分隔，不是想勾选。判定完全来自候选身上的
+ * `columnMode`（引擎按光标意图打的标），不看位置、不看文本。
+ */
+export function shouldConsumeSpaceForColumn(
+  status: string | null,
+  completion: Completion | null | undefined,
+): boolean {
+  if (status !== 'active' || !completion || completion.type !== 'field') {
+    return false
+  }
+  return (completion as ColumnCompletion).columnMode === 'multi'
+}
+
+/**
  * 列名插入逻辑。
  *
  * 勾选了多项就一次插入全部（", " 连接）；没勾选只插入当前项。
@@ -252,8 +278,16 @@ export function clearColumnMarks(view: EditorView) {
  * 只额外看一眼光标左侧有没有用户敲下的开引号，需要时把它一起替换掉。
  */
 function columnApply(key: string, insertText: string) {
-  return (view: EditorView, _completion: Completion, from: number, to: number) => {
-    const marked = markedColumnsOf(view)
+  return (view: EditorView, completion: Completion, from: number, to: number) => {
+    /*
+     * 只有**多选列**的候选才消费勾选集合。
+     *
+     * 单选场景里勾选状态一律无效：同一个弹层里可能从多选切到单选
+     * （勾了几列后又继续打字过滤，`validFor` 让列表没有重建），
+     * 此时回车只该插入当前这一项，而不是把之前勾的整批塞进去。
+     */
+    const multi = (completion as ColumnCompletion).columnMode === 'multi'
+    const marked = multi ? markedColumnsOf(view) : []
     const inserts = marked.length ? marked.map(item => item.insertText) : [insertText]
     const session = insertSessions.get(view)
     const continued = Boolean(session) && session?.head === from

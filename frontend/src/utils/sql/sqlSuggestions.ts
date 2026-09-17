@@ -203,6 +203,14 @@ export interface GeneralSuggestArgs {
   prefix?: string
   /** 表名是否带自动别名（设置项开启 **且** 当前位置是 FROM / JOIN 之后） */
   autoAlias?: boolean
+  /**
+   * 上一个输出项用的限定符（`SELECT t.user_id, |` 的 `t`）。
+   *
+   * 多选列时新列要沿用它的 `t.` —— 用户写了一个带别名的列，接着勾选一批列，
+   * 期望它们属于同一个来源；不给的话就会出现 `t.user_id, id, email` 这种半截结果。
+   * 只在多选模式由宿主传入（单选时保持既有「单来源裸列名」的规则）。
+   */
+  preferredQualifier?: string
 }
 
 export interface SmartItemArgs {
@@ -651,8 +659,11 @@ export function generalSuggestions(args: GeneralSuggestArgs): Completion[] {
     /*
      * 多来源（JOIN / 逗号多表）时列候选一律带限定符：`u.created_at` 与 `o.created_at`
      * 是两个不同的候选，展示与插入都能区分；单来源时保持裸列名，不啰嗦。
+     *
+     * 例外是多选列（`SELECT t.user_id, |` 这种）：前一项用了 `t.`，新勾的列必须
+     * 沿用同一个来源，否则勾出来会变成 `t.user_id, id, email`。
      */
-    const qualified = (scopes[0] ?? []).length > 1
+    const preferred = (args.preferredQualifier ?? '').toLowerCase()
 
     for (const refs of scopes) {
       for (const ref of refs) {
@@ -669,6 +680,9 @@ export function generalSuggestions(args: GeneralSuggestArgs): Completion[] {
          * 派生表用静态解析出的列，物理表用元数据；来源用「别名优先」的限定符，
          * 于是 `FROM users u` 的列是 u.*，与派生表 / CTE 的行为一致。
          */
+        // 该来源的列是否带限定符：多来源一律带；多选列时前一项用的那个来源也带
+        const qualified = (scopes[0] ?? []).length > 1
+          || (preferred !== '' && source.toLowerCase() === preferred)
         const pool = ref.virtualColumns
           ? virtualColumnSuggestions(
               ref.virtualColumns,

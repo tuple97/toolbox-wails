@@ -115,6 +115,7 @@ export {
   clearColumnMarks,
   columnsMarked,
   isColumnMarked,
+  shouldConsumeSpaceForColumn,
   toggleColumnMark,
   qualifierBeforeCursor,
   type ColumnCompletion,
@@ -695,9 +696,19 @@ function sqlBundle(
   const autoAlias = runtime.featureFlags.autoTableAlias === true
     && (scan.keyword === 'from' || scan.keyword === 'join')
 
+  /*
+   * 列补全意图由光标层给出（`readColumnIntent`）：`t.|` 与 `t.user_id, |` 是多选，
+   * `t.user_id,|` 与 `t.em|` 是单选。多选时新列要沿用前一项的限定符 ——
+   * 用户写了 `t.user_id, ` 之后勾出来的列必须还是 `t.*`。
+   */
+  const columnIntent = intent.column
+  const multiColumn = columnIntent.mode === 'multi'
+  const preferredQualifier = multiColumn ? columnIntent.previousQualifier : ''
+
   const qualifier = readQualifierBeforeCursor(lineBefore)
+  // 点号路径的候选直接来自候选池（数组是共享缓存）：先复制再追加，别写坏缓存
   const options = qualifier
-    ? resolveAfterDot(qualifier, scopes, deps, word)
+    ? [...resolveAfterDot(qualifier, scopes, deps, word)]
     : generalSuggestions({
         intent,
         scopes,
@@ -706,6 +717,7 @@ function sqlBundle(
         skipColumns: promoted.skip,
         prefix: word,
         autoAlias,
+        preferredQualifier,
       })
 
   /*
@@ -728,20 +740,17 @@ function sqlBundle(
     }))
   }
 
-  return { from: range.from, to: range.to, options, contextKind }
+  /*
+   * 给列候选打上本次的列模式：复选框渲染与空格键都只认这个标记。
+   * 这里复制成新对象，候选池里共享的那份保持干净。
+   */
+  const stamped = multiColumn
+    ? options.map(option =>
+        (option.type === 'field' ? { ...option, columnMode: 'multi' as const } : option))
+    : options
+
+  return { from: range.from, to: range.to, options: stamped, contextKind }
 }
-
-/** 表引用 → 列清单（派生表用静态列，物理表查元数据） */
-
-
-
-/** 智能项的参数（列与值的来源由 sqlBundle 注入） */
-
-
-/** 候选描述里的列名预览：过长时截断，避免把提示区撑开 */
-
-/** 把表引用转成关联条件生成所需的形态（物理表查元数据，派生表用静态列） */
-
 
 // ---------------------------------------------------------------- 悬停提示
 //

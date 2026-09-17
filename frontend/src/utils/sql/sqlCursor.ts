@@ -24,7 +24,8 @@
 import type { EditorState } from '@codemirror/state'
 import { splitSqlStatements } from '@/utils/sql/sqlStatementRanges'
 import type { TextRange } from '@/utils/sql/sqlSyntax'
-import { readAlias, readQualifiedName } from './sqlSchema'
+import { IDENT_BODY_SOURCE, IDENT_SOURCE } from './sqlLexemes'
+import { readAlias, readIdentifier, readQualifiedName, skipQuoted } from './sqlSchema'
 
 /** 补全所处位置的候选类型 */
 export type CompletionContextKind =
@@ -207,6 +208,19 @@ export function scanClause(prefix: string): ClauseScan {
           return result('afterSource', lower)
         }
         if (COLUMN_CLAUSE_KEYWORDS.has(lower)) {
+          /*
+           * 贴住光标的词更像「正在输入的名字」：`SELECT * FROM or|` 里的 `or`
+           * 其实要写成 `orders`，不能让它当关键字抢走 context。
+           * 跳过它继续往左找真正的子句关键字（于是落到 `from` → afterSource，照样给表名）。
+           *
+           * 只在词**紧贴光标**时让步：写完关键字再敲空格（`FROM or |`）不受影响，
+           * `AS` / `BY` 两个两词结构在上面单独处理，也不受影响。
+           */
+          if (index === prefix.length) {
+            previousKeyword = lower
+            index = word.start
+            continue
+          }
           return result('column', lower)
         }
       }
@@ -339,13 +353,305 @@ function isInsideJoinClause(statementText: string): boolean {
   return on > lower.lastIndexOf(' where ') && on > lower.lastIndexOf(' having ')
 }
 
+// ---------------------------------------------------------------- 列补全意图
+
+/**
+ * 列补全模式。
+ *
+ * - `single`：普通单选补全（选一个候选继续写）；**不出现复选框**；
+ * - `multi`：多选列模式（勾选若干列，回车一次插入）；**出现复选框**。
+ *
+ * 这是「补全意图」的语义结果，不是候选类型的自然结果 ——
+ * 列候选在任何地方都长得一样，是否多选取决于光标处在什么状态。
+ */
+export type ColumnCompletionMode = 'single' | 'multi'
+
+/** 光标前那一个输出项是什么（决定 `,|` 与 `, |` 的差别） */
+export type PreviousItemKind = 'column' | 'expression' | 'function' | 'unknown'
+
+/**
+ * 光标处的列补全意图。
+ *
+ * 文档要求把 `t.|`、`t.user_id,|`、`t.user_id, |` 三种状态分开表达，
+ * 这里就是那份表达：**由结构推导**（子句关键字 + 括号深度 + 逗号位置），
+ * 而不是 `prefix === ''` 或 `text.includes(',')` 这类字符串条件。
+ */
+export interface SqlColumnIntent {
+  /** 是否处于 SELECT 列表的列位置（其它子句的列位置不算） */
+  isColumnList: boolean
+  /** 左侧点号限定符（`t.` 的 t）；没有为空串 */
+  qualifier: string
+  /** 正在输入的词 */
+  prefix: string
+  /** 光标左侧是否处于「逗号之后的新输出项」 */
+  afterComma: boolean
+  /** 逗号之后是否已经落了空白（`,|` 与 `, |` 的分界） */
+  commaFollowedBySpace: boolean
+  /** 上一个输出项的类型 */
+  previousItemKind: PreviousItemKind
+  /** 上一个输出项用的限定符（多选时新列沿用它的 `t.`）；没有为空串 */
+  previousQualifier: string
+  /** 列选择模式 */
+  mode: ColumnCompletionMode
+}
+
+/** 不在列位置时的默认意图（单选、无限定符） */
+function emptyColumnIntent(): SqlColumnIntent {
+  return {
+    isColumnList: false,
+    qualifier: '',
+    prefix: '',
+    afterComma: false,
+    commaFollowedBySpace: false,
+    previousItemKind: 'unknown',
+    previousQualifier: '',
+    mode: 'single',
+  }
+}
+
+/** 忽略引号后的括号深度（> 0 表示在函数参数 / 子查询括号里） */
+function parenDepthOf(text: string): number {
+  let depth = 0
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i] ?? ''
+    if (ch === `'` || ch === '"' || ch === '`') {
+      i = skipQuoted(text, i)
+      continue
+    }
+    if (ch === '(') {
+      depth++
+    }
+    else if (ch === ')') {
+      depth--
+    }
+    i++
+  }
+  return depth
+}
+
+/** 光标所在输出项：原文 + 它的起点是逗号还是 SELECT */
+interface OutputItemTail {
+  /** 从上一个同层逗号 / SELECT 关键字之后到光标的原文（**保留空白**） */
+  text: string
+  /** 起点是不是逗号（即「光标落在逗号之后的新一项」） */
+  afterComma: boolean
+}
+
+/**
+ * 光标所在**输出项**的原文 + 起点类型。
+ *
+ * 保留空白很关键：`,|` 与 `, |` 的区别就是逗号后面有没有落空格，
+ * 任何 trim 过的中间结果都会把这条信息丢掉（`ClauseScan.tail` 正是 trim 过的）。
+ *
+ * 必须**从左往右**扫：只有正向扫描才知道某个逗号处在第几层括号里。
+ * 反向扫描会踩坑 —— `SELECT func(a,|` 里那个逗号左边还有 `(`，
+ * 但反向扫到它时还没见过 `(`，于是被误判成「输出项边界」（真实 bug，已修）。
+ */
+function itemTailOf(prefix: string): OutputItemTail {
+  let depth = 0
+  let boundary = 0
+  let afterComma = false
+  let i = 0
+
+  while (i < prefix.length) {
+    const ch = prefix[i] ?? ''
+    if (ch === `'` || ch === '"' || ch === '`') {
+      i = skipQuoted(prefix, i)
+      continue
+    }
+    if (ch === '(') {
+      depth++
+      i++
+      continue
+    }
+    if (ch === ')') {
+      depth = Math.max(0, depth - 1)
+      i++
+      continue
+    }
+    if (ch === ',' && depth === 0) {
+      boundary = i + 1
+      afterComma = true
+      i++
+      continue
+    }
+    const ident = readIdentifier(prefix, i)
+    if (ident) {
+      if (depth === 0 && ident.name.toLowerCase() === 'select') {
+        boundary = ident.end
+        afterComma = false
+      }
+      i = ident.end
+      continue
+    }
+    i++
+  }
+
+  return { text: prefix.slice(boundary), afterComma }
+}
+
+/**
+ * 上一个输出项的原文（最后一个同层逗号**之前那一项**的内容，不含 SELECT 等前导）。
+ *
+ * 同样从左往右扫，只在「新一项还没开始输入」时调用，用来取它的类型与限定符：
+ * `t.user_id` 得到限定符 `t`，于是多选新列能沿用同一个来源。
+ */
+function previousItemText(prefix: string): string {
+  let depth = 0
+  let boundary = 0
+  let prevBoundary = 0
+  let lastComma = -1
+  let i = 0
+
+  while (i < prefix.length) {
+    const ch = prefix[i] ?? ''
+    if (ch === `'` || ch === '"' || ch === '`') {
+      i = skipQuoted(prefix, i)
+      continue
+    }
+    if (ch === '(') {
+      depth++
+      i++
+      continue
+    }
+    if (ch === ')') {
+      depth = Math.max(0, depth - 1)
+      i++
+      continue
+    }
+    if (ch === ',' && depth === 0) {
+      prevBoundary = boundary
+      boundary = i + 1
+      lastComma = i
+      i++
+      continue
+    }
+    const ident = readIdentifier(prefix, i)
+    if (ident) {
+      if (depth === 0 && ident.name.toLowerCase() === 'select') {
+        boundary = ident.end
+      }
+      i = ident.end
+      continue
+    }
+    i++
+  }
+
+  return lastComma < 0 ? '' : prefix.slice(prevBoundary, lastComma)
+}
+
+/** 输出项的类型：完整列引用 / 函数调用 / 其它表达式 / 空 */
+function itemKindOf(item: string): PreviousItemKind {
+  const trimmed = item.trim()
+  if (!trimmed) {
+    return 'unknown'
+  }
+  const bare = new RegExp(`^${IDENT_SOURCE}$`)
+  const qualified = new RegExp(`^${IDENT_SOURCE}\\s*\\.\\s*(${IDENT_SOURCE}|\\*)$`)
+  if (bare.test(trimmed) || qualified.test(trimmed)) {
+    return 'column'
+  }
+  return trimmed.endsWith(')') ? 'function' : 'expression'
+}
+
+/**
+ * 从「语句内光标之前的文本」推导列补全意图。
+ *
+ * 规则完全由结构给出：
+ *
+ * | 光标状态            | 依据                                   | 模式    |
+ * | ------------------- | -------------------------------------- | ------- |
+ * | `SELECT t.`         | SELECT 列表内 + 限定符 + 空前缀         | multi   |
+ * | `SELECT `           | SELECT 列表内 + 新项，还没输入          | multi   |
+ * | `SELECT t.user_id, `| 逗号后已落空白（新项还没开始输入）      | multi   |
+ * | `SELECT t.user_id,` | 逗号紧跟光标（还在上一项的收尾手感里）  | single  |
+ * | `SELECT t.em`       | 已经在输入词                            | single  |
+ * | `SELECT func(a, `   | 括号深度 > 0，不是 SELECT 列表          | single  |
+ * | `INSERT INTO t (a,` | 命中关键字不是 select                   | single  |
+ *
+ * 「逗号紧跟光标 = single」是产品规则：`t.user_id,|` 是**继续写下一列**的手感，
+ * 此时不该弹一屏复选框；用户主动落下空格（`, |`）才算「开始新的一项」。
+ */
+export function readColumnIntent(prefix: string): SqlColumnIntent {
+  const scan = scanClause(prefix)
+  const intent = emptyColumnIntent()
+  if (scan.kind !== 'column' || scan.keyword !== 'select') {
+    return intent
+  }
+
+  /*
+   * tail 是「当前输出项」的原文（光标前最后一个同层逗号 / SELECT 之后的全部文本，
+   * **保留空白**）：`,|` 与 `, |` 的差别全在里面，所以不能用 ClauseScan.tail ——
+   * 那份是 trim 过的，正好把要判的那个空格吃掉了。
+   */
+  const item = itemTailOf(prefix)
+  if (parenDepthOf(item.text) !== 0) {
+    return intent
+  }
+
+  const afterComma = item.afterComma
+  const itemText = item.text
+  const commaFollowedBySpace = afterComma && /^\s/.test(itemText)
+  const previousText = afterComma ? previousItemText(prefix) : ''
+
+  const { qualifier, prefix: word } = qualifierAndPrefix(itemText)
+  const mode: ColumnCompletionMode = (() => {
+    // 逗号紧跟光标：继续写下一列的单选状态
+    if (afterComma && !commaFollowedBySpace) {
+      return 'single'
+    }
+    // 逗号后落空白 / 限定符后空前缀 / 列表刚开：都是「新的一项还没开始输入」
+    if (!word) {
+      return 'multi'
+    }
+    return 'single'
+  })()
+
+  return {
+    isColumnList: true,
+    qualifier,
+    prefix: word,
+    afterComma,
+    commaFollowedBySpace,
+    previousItemKind: itemKindOf(previousText),
+    previousQualifier: previousQualifierOf(previousText),
+    mode,
+  }
+}
+
+/**
+ * 输出项里的「词 + 左侧限定符」。
+ *
+ * `t.` → qualifier `t`、prefix 空串；`t.em` → `t` / `em`；`em` → 空串 / `em`。
+ * 限定符必须紧贴点号，所以「表达式里的点号」（`a + b.`）不会被误认成限定符。
+ */
+function qualifierAndPrefix(itemText: string): { qualifier: string, prefix: string } {
+  const trimmed = itemText.trimEnd()
+  const word = new RegExp(`${IDENT_BODY_SOURCE}$`).exec(trimmed)?.[0] ?? ''
+  const before = trimmed.slice(0, trimmed.length - word.length)
+  const dot = /\.\s*$/.exec(before)
+  if (!dot) {
+    return { qualifier: '', prefix: word }
+  }
+  const head = before.slice(0, dot.index).trimEnd()
+  const qualifier = new RegExp(`(${IDENT_SOURCE})$`).exec(head)?.[1] ?? ''
+  return { qualifier, prefix: word }
+}
+
+/** 上一个输出项用的限定符（`t.user_id` → `t`；没有则空串） */
+function previousQualifierOf(itemText: string): string {
+  const trail = new RegExp(`(${IDENT_SOURCE})\\s*\\.\\s*${IDENT_SOURCE}\\s*$`).exec(itemText.trim())
+  return trail?.[1] ?? ''
+}
+
 // ---------------------------------------------------------------- 光标语义
 
 /**
  * SQL 光标语义（文本层）。
  *
- * 一次分析把「在哪条语句 / 什么位置 / 正在输入什么」全部落在这个对象上，
- * 上层（触发策略、候选生成）不再各自推导。
+ * 一次分析把「在哪条语句 / 什么位置 / 正在输入什么 / 列补全是什么意图」全部落在
+ * 这个对象上，上层（触发策略、候选生成、复选框渲染）不再各自推导。
  */
 export interface SqlCursorText {
   /** 光标所在语句 */
@@ -358,6 +664,8 @@ export interface SqlCursorText {
   clause: ClauseScan
   /** 位置类别（触发策略与候选生成共用） */
   kind: CompletionContextKind
+  /** 列补全意图（列模式 / 限定符 / 逗号状态；复选框与空格都据此判断） */
+  column: SqlColumnIntent
   /** 语句的主关键字（select / update / insert / delete…），判不出为空串 */
   command: string
   /**
@@ -386,6 +694,7 @@ export function analyzeSqlCursorText(
     prefixStart: pos - clausePrefix.length,
     clause,
     kind: sqlContextKindOf(clause, clausePrefix),
+    column: readColumnIntent(clausePrefix),
     command: mainCommandOf(clausePrefix),
     joinTarget: joinTargetOf(clausePrefix),
   }

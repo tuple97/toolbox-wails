@@ -208,7 +208,13 @@ describe('列插入：最终写进文档的文本', () => {
 
   it('勾选多列时插入各自候选的文本（各自的引用符 / 别名）', () => {
     const doc = 'SELECT `n'
-    const change = applyColumn(doc, column('name'), ['name', '`order`'])
+    /*
+     * 勾选集合只有**多选列**的候选才会消费（见 columnApply）：候选必须带
+     * `columnMode: 'multi'` —— 单选场景里残留勾选一律无效。
+     * 生产链路上这个标记由补全引擎按光标意图打上（见 sqlColumnCompletionMode.spec.ts）。
+     */
+    const item = { ...column('name'), columnMode: 'multi' as const }
+    const change = applyColumn(doc, item, ['name', '`order`'])
     expect(change).toEqual({ from: 7, to: 9, insert: 'name, `order`' })
   })
 

@@ -50,6 +50,7 @@ import {
   defaultMetadataProvider,
   isColumnMarked,
   isPositionalEligible,
+  shouldConsumeSpaceForColumn,
   sqlContextOf,
   toggleColumnMark,
 } from '@/utils/sql/sqlCompletion'
@@ -863,6 +864,15 @@ function renderColumnCheckbox(
     return null
   }
 
+  /*
+   * 只有「多选列」意图才给复选框：`t.|`、`, |` 是多选，`t.user_id,|`、`t.em|` 是普通单选。
+   * 判断完全来自候选身上的 `columnMode`（引擎按光标意图打的标），
+   * 这里不再自己看文本或位置。
+   */
+  if ((completion as ColumnCompletion).columnMode !== 'multi') {
+    return null
+  }
+
   const key = columnKeyOf(completion)
   const box = view.dom.ownerDocument.createElement('span')
   box.className = 'cm-sqlcheck'
@@ -881,15 +891,14 @@ function renderColumnCheckbox(
 /**
  * 空格：勾选 / 取消勾选当前高亮的列名。
  *
- * 只有「补全列表打开且高亮项是列名」时才消费按键，其余情况返回 false，
- * 空格照常输入。勾选后回车会一次性插入所有勾选项（见 utils/sqlCompletion.ts）。
+ * **只在多选列模式消费**（`t.|`、`, |`）：单选场景（`t.user_id,|`、`t.em|`）里
+ * 空格必须原样插入 —— 用户按空格是想分隔，不是想勾选。判定交给
+ * `shouldConsumeSpaceForColumn`（纯函数，读候选上的 `columnMode`），
+ * 于是「空格归谁」与「有没有复选框」用的是同一个意图。
  */
 function toggleCheckedColumn(view: EditorView): boolean {
-  if (completionStatus(view.state) !== 'active') {
-    return false
-  }
   const completion = selectedCompletion(view.state)
-  if (!completion || completion.type !== 'field') {
+  if (!completion || !shouldConsumeSpaceForColumn(completionStatus(view.state), completion)) {
     return false
   }
 
