@@ -532,6 +532,78 @@ func (s *DBService) ListForeignKeys(ctx context.Context, connID int64, database 
 	return keys, nil
 }
 
+// CreateTableSQL 返回**数据库自己给出的**建表语句（目前仅 MySQL / MariaDB 支持）。
+//
+// 为什么值得优先用它：`SHOW CREATE TABLE` 是数据库的权威定义 —— 索引、主键、
+// 自增、引擎、字符集、默认值、注释全在里面；前端按 information_schema 拼出来的
+// DDL 只能覆盖列定义，索引这些拿不到。
+//
+// 拿不到时返回**空字符串 + nil 错误**：方言不支持（PostgreSQL 没有对应语句，
+// 需要 pg_dump 级别的重建）、表不存在、权限不足都是常态，不是故障 ——
+// 由前端回退到自己的生成器，用户照样能复制到一份可用的 DDL。
+func (s *DBService) CreateTableSQL(
+	ctx context.Context,
+	connID int64,
+	database string,
+	table string,
+) (string, error) {
+	if strings.TrimSpace(table) == "" {
+		return "", nil
+	}
+
+	// 同 ListTables：连接用连接自身的库，库 / schema 只作为查询条件
+	conn, db, closeDB, err := s.openExecutorConn(connID, "")
+	if err != nil {
+		return "", err
+	}
+	defer closeDB()
+
+	if isPostgresType(conn.DBType) {
+		return "", nil
+	}
+
+	queryCtx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
+
+	target := quoteMySQLIdent(table)
+	if schema := schemaName(database, conn.DBType); schema != "" {
+		target = quoteMySQLIdent(schema) + "." + target
+	}
+
+	rows, err := db.QueryContext(queryCtx, "SHOW CREATE TABLE "+target)
+	if err != nil {
+		return "", nil
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil || len(columns) < 2 {
+		return "", nil
+	}
+	if !rows.Next() {
+		return "", nil
+	}
+
+	values := make([]sql.NullString, len(columns))
+	scans := make([]any, len(columns))
+	for i := range values {
+		scans[i] = &values[i]
+	}
+	if err := rows.Scan(scans...); err != nil {
+		return "", nil
+	}
+	/*
+		第二列始终是 DDL：表是 (Table, Create Table)，视图是
+		(View, Create View, character_set_client, collation_connection)。
+	*/
+	return strings.TrimSpace(values[1].String), nil
+}
+
+// quoteMySQLIdent 用反引号包裹标识符（内部反引号双写转义）。
+func quoteMySQLIdent(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
 // openExecutorConn 打开命令执行器元数据查询用的连接，并按所选库覆盖默认库。
 func (s *DBService) openExecutorConn(connID int64, dbName string) (*database.DBConnection, *sql.DB, func(), error) {
 	conn, err := s.repo.GetConnection(connID)

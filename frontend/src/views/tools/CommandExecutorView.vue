@@ -24,6 +24,7 @@ import {
 } from '@/utils/sql/sqlCompletion'
 import { useMetadataStore } from '@/stores/metadataStore'
 import { splitSqlStatements, statementAtCursor, statementEndWithSemicolon } from '@/utils/sql/sqlStatementRanges'
+import type { RenameTargetKind } from '@/utils/sql/rename/sqlRenameView'
 import {
   setStatementRunStates,
   statementRunKey,
@@ -86,6 +87,9 @@ const MIN_RESULT = 140
 
 /** 编辑器实例（由 CodeEditor 的 mount 事件给出，即 CM6 的 EditorView） */
 let editorView: EditorView | null = null
+
+/** 编辑器组件实例：右键菜单里的语义动作（重命名 / 复制建表）走它暴露的方法 */
+const editorRef = ref<InstanceType<typeof CodeEditor> | null>(null)
 
 /** 进行中的可取消调用，取消按钮用 */
 let runningCall: { cancel: () => void } | null = null
@@ -243,31 +247,87 @@ function handleRunStatement(statement: RunnableStatement) {
 // ------------------------------------------------------------ 编辑器右键菜单
 
 /**
- * 编辑器右键菜单：执行 / 复制 / 美化 / 压缩。
+ * 编辑器右键菜单：执行 / 复制 / 美化 / 压缩，外加**语义动作**。
  *
  * 与工具条共用同一套动作与范围判定（有选中就用选中，否则用光标所在语句），
  * 所以两处行为一致；执行期间与工具条一样整体禁用。
+ *
+ * 语义动作（重命名表别名 / 复制建表语句）只在「鼠标确实落在表名或表别名上」
+ * 时出现 —— 由语义解析给出结论，解析不出来就不显示，绝不靠正则猜。
  */
-const editorMenuItems = computed<ContextMenuAction[]>(() => [
+/** 菜单里的对象称呼（判定与动作都由编辑器给出，这里只管措辞） */
+const RENAME_LABELS: Record<RenameTargetKind, string> = {
+  'table-alias': '表别名',
+  'cte': 'CTE',
+  'column-alias': '列别名',
+}
+
+const editorMenuItems = computed<ContextMenuAction[]>(() => {
+  const items: ContextMenuAction[] = []
+
+  if (editorMenuRename.value) {
+    items.push({ key: 'rename-symbol', label: `重命名${RENAME_LABELS[editorMenuRename.value]}` })
+  }
+  if (editorMenuGoto.value) {
+    items.push({ key: 'goto-definition', label: '跳转到定义', shortcut: 'F12' })
+  }
+  if (editorMenuCopy.value) {
+    // 表名或别名都指向同一张物理表，都能复制它的建表语句
+    items.push({ key: 'copy-create-table', label: '复制建表语句' })
+  }
+
   // divided 表示「本项之后画一条分隔线」（见 ContextMenu 模板）：
-  // 上半组是「对这条 SQL 做什么」，下半组是「改写编辑器里的文本」
-  { key: 'run', label: '执行', shortcut: 'Ctrl+Enter', disabled: running.value },
-  { key: 'analyze', label: '分析', shortcut: 'EXPLAIN', disabled: running.value },
-  { key: 'copy', label: '复制', shortcut: 'Ctrl+C', divided: true },
-  // 与工具条同一个按钮：标签跟着当前范围的形态走（多行 → 压缩，单行 → 美化）
-  { key: 'format', label: formatAction.value === 'minify' ? '压缩' : '美化', shortcut: 'Alt+Shift+F', disabled: running.value },
-])
+  // 第一组是「对鼠标下的符号做什么」，后面才是「对这条 SQL 做什么」
+  items.push(
+    { key: 'run', label: '执行', shortcut: 'Ctrl+Enter', disabled: running.value, divided: items.length > 0 },
+    { key: 'analyze', label: '分析', shortcut: 'EXPLAIN', disabled: running.value },
+    { key: 'copy', label: '复制', shortcut: 'Ctrl+C', divided: true },
+    // 与工具条同一个按钮：标签跟着当前范围的形态走（多行 → 压缩，单行 → 美化）
+    { key: 'format', label: formatAction.value === 'minify' ? '压缩' : '美化', shortcut: 'Alt+Shift+F', disabled: running.value },
+  )
+  return items
+})
 
 const editorMenuVisible = ref(false)
 const editorMenuX = ref(0)
 const editorMenuY = ref(0)
+/** 右键处的文档位置（语义动作用它） */
+const editorMenuPos = ref<number | null>(null)
+/** 右键处可重命名的对象类型；null 表示该位置没有重命名动作 */
+const editorMenuRename = ref<RenameTargetKind | null>(null)
+/** 右键处是否有可复制建表语句的物理表 */
+const editorMenuCopy = ref(false)
+/** 右键处是否有可跳转的定义 */
+const editorMenuGoto = ref(false)
 
-/** 编辑器内右键：接管浏览器默认菜单，在鼠标位置弹出 */
+/** 编辑器内右键：接管浏览器默认菜单，在鼠标位置弹出，并解析该处的符号 */
 function handleEditorContextMenu(event: MouseEvent) {
   event.preventDefault()
   editorMenuX.value = event.clientX
   editorMenuY.value = event.clientY
   editorMenuVisible.value = true
+  resolveEditorMenuTarget(event)
+}
+
+/**
+ * 解析右键位置能做什么。
+ *
+ * 判定全部交给编辑器组件（它握着语义解析与元数据）：这里只拿两个布尔结论 ——
+ * 「能重命名什么」与「能不能复制建表语句」。这样菜单与实际动作永远同一个口径。
+ */
+function resolveEditorMenuTarget(event: MouseEvent) {
+  const view = editorView
+  const pos = view?.posAtCoords({ x: event.clientX, y: event.clientY }) ?? null
+  editorMenuPos.value = pos
+  if (!view || pos == null) {
+    editorMenuRename.value = null
+    editorMenuGoto.value = false
+    editorMenuCopy.value = false
+    return
+  }
+  editorMenuRename.value = editorRef.value?.renameTargetAt(pos) ?? null
+  editorMenuGoto.value = editorRef.value?.canGoToDefinitionAt(pos) ?? false
+  editorMenuCopy.value = editorRef.value?.canCopyCreateTableAt(pos) ?? false
 }
 
 /** 复制：有选中就复制选中，否则复制光标所在语句（未匹配到则提示） */
@@ -289,6 +349,21 @@ async function copySqlAtCursor() {
 /** 编辑器右键菜单选择 */
 function handleEditorMenuSelect(item: ContextMenuAction) {
   switch (item.key) {
+    case 'rename-symbol':
+      if (editorMenuPos.value != null) {
+        editorRef.value?.renameSymbolAt(editorMenuPos.value)
+      }
+      break
+    case 'goto-definition':
+      if (editorMenuPos.value != null) {
+        editorRef.value?.goToDefinitionAt(editorMenuPos.value)
+      }
+      break
+    case 'copy-create-table':
+      if (editorMenuPos.value != null) {
+        void editorRef.value?.copyCreateTableAt(editorMenuPos.value)
+      }
+      break
     case 'run':
       void runCurrent()
       break
@@ -1314,6 +1389,7 @@ watch([connId, database, sql, pageSize], notifyChange)
       @keydown.capture="handleKeydown"
     >
       <CodeEditor
+        ref="editorRef"
         v-model="sql"
         language="sql"
         completion-mode="sql"

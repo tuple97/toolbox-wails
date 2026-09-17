@@ -59,6 +59,17 @@ func (a *App) ListTableColumns(ctx context.Context, connID int64, database strin
 	return a.dbService.ListTableColumns(ctx, connID, database, table)
 }
 
+// FetchCreateTableSQL 返回数据库自己的建表语句（拿不到时返回空串，由前端生成）。
+func (a *App) FetchCreateTableSQL(ctx context.Context, connID int64, database string, table string) (string, error) {
+	if err := a.ready(); err != nil {
+		return "", err
+	}
+	if connID <= 0 {
+		return "", fmt.Errorf("请先选择数据库连接")
+	}
+	return a.dbService.CreateTableSQL(ctx, connID, database, table)
+}
+
 // ListForeignKeys 返回指定表的外键约束（智能补全的关联条件用）。
 func (a *App) ListForeignKeys(ctx context.Context, connID int64, database string, table string) ([]services.ForeignKey, error) {
 	if err := a.ready(); err != nil {

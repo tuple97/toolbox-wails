@@ -138,6 +138,17 @@ export function ExtractTemplateVariables(sqlText) {
 }
 
 /**
+ * FetchCreateTableSQL 返回数据库自己的建表语句（拿不到时返回空串，由前端生成）。
+ * @param {number} connID
+ * @param {string} database
+ * @param {string} table
+ * @returns {$CancellablePromise<string>}
+ */
+export function FetchCreateTableSQL(connID, database, table) {
+    return $Call.ByID(3199721432, connID, database, table);
+}
+
+/**
  * GetAllSettings 返回全部应用配置。
  * 首次调用会写入默认值，保证前端总能拿到完整配置。
  * @returns {$CancellablePromise<database$0.Setting[]>}

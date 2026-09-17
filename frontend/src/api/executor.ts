@@ -7,6 +7,7 @@
 import type { CancellablePromise } from '@wailsio/runtime'
 import {
   ExecuteStatement,
+  FetchCreateTableSQL,
   ListDatabases,
   ListForeignKeys,
   ListTableColumns,
@@ -56,6 +57,26 @@ export async function fetchTableColumns(
     dataType: String(item?.dataType ?? ''),
     comment: String(item?.comment ?? ''),
   }))
+}
+
+/**
+ * 数据库自己的建表语句（`SHOW CREATE TABLE`，目前 MySQL / MariaDB 支持）。
+ *
+ * 返回空串表示「这个方言 / 这张表拿不到原生 DDL」—— 这是常态而不是故障
+ * （PostgreSQL 没有对应语句、表不存在、权限不足），调用方据此回退到本地生成。
+ * 绑定文件尚未生成（开发期忘了 `pnpm gen:bindings`）时同样按拿不到处理，
+ * 这样旧绑定不会让功能直接崩掉。
+ */
+export async function fetchCreateTableSql(
+  connId: number,
+  database: string,
+  table: string,
+): Promise<string> {
+  if (typeof FetchCreateTableSQL !== 'function') {
+    return ''
+  }
+  const ddl = await FetchCreateTableSQL(connId, database, table)
+  return String(ddl ?? '').trim()
 }
 
 /** 表的外键约束（关联条件补全用） */

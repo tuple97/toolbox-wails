@@ -16,18 +16,20 @@ import type { EditorView } from '@codemirror/view'
 import { BOOST_COLUMN, RESERVED_WORDS } from './sqlCompletionKeywords'
 import { quoteIdent } from './rowSql'
 import type { SqlDialect } from './rowSql'
+import {
+  ASCII_IDENT_RE,
+  IDENT_OR_QUOTED_SOURCE,
+  isIdentBody,
+} from './sqlLexemes'
 
 // ---------------------------------------------------------------- 标识符引用
 
-/** 纯标识符写法：不以数字开头、只含字母数字下划线美元符 */
-const PLAIN_IDENT_RE = /^[A-Za-z_][\w$]*$/
-
 /**
- * 该标识符不加引用符就会出错：不是纯标识符写法（含空格 / 短横线 / 中文等），
+ * 该标识符不加引用符就会出错：不是 ASCII 纯标识符写法（含空格 / 短横线 / 中文等），
  * 或命中保留字（`order`、`key`、`user` 这类列名很常见）。
  */
 export function needsQuoting(name: string): boolean {
-  return !PLAIN_IDENT_RE.test(name) || RESERVED_WORDS.has(name.toLowerCase())
+  return !ASCII_IDENT_RE.test(name) || RESERVED_WORDS.has(name.toLowerCase())
 }
 
 /**
@@ -69,7 +71,7 @@ export function openingQuoteBefore(text: string, from: number): OpeningQuote | n
     return null
   }
   const before = text[from - 2] ?? ''
-  if (/[\w$\u4e00-\u9fa5]/.test(before)) {
+  if (isIdentBody(before)) {
     return null
   }
   return { quote, close: quote === '[' ? ']' : quote, start: from - 1 }
@@ -94,8 +96,8 @@ export function quotedIdentApply(identifier: string) {
 /** 限定符回看长度：别名不会离光标太远，避免全文扫描 */
 const QUALIFIER_LOOKBACK = 128
 
-/** 光标左侧的限定符：`t1.`、`` `db`.`t`. `` 等，允许点号前有多段 */
-const QUALIFIER_BEFORE = /(?:(?:`[^`]*`|"[^"]*"|[A-Za-z_$][\w$]*)\.)+$/
+/** 光标左侧的限定符：`t1.`、`` `db`.`t`. ``、`用户.` 等，允许点号前有多段 */
+const QUALIFIER_BEFORE = new RegExp(`(?:(?:${IDENT_OR_QUOTED_SOURCE})\\.)+$`)
 
 /**
  * 读出替换起点左侧紧邻的限定符（含点号），没有则返回空串。

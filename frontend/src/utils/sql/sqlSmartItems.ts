@@ -14,6 +14,12 @@ import type { Completion } from '@codemirror/autocomplete'
 import { BOOST_SMART_ITEM } from './sqlCompletionKeywords'
 import { formatSqlValue } from './rowSql'
 import type { SqlDialect } from './rowSql'
+import {
+  IDENT_OR_QUOTED_SOURCE,
+  IDENT_SOURCE,
+  isIdentBody,
+  isIdentStart,
+} from './sqlLexemes'
 
 /** 参与智能项的列 */
 export interface SmartColumn {
@@ -86,13 +92,13 @@ function skipQuoted(text: string, start: number): number {
   return text.length
 }
 
-/** 从 index 起读一个词（字母 / 下划线 / $ 开头），读不到返回 null */
+/** 从 index 起读一个词（字母 / 下划线 / $ / 中文开头），读不到返回 null */
 function readWordAt(text: string, index: number): { text: string, end: number } | null {
-  if (!/[A-Za-z_$]/.test(text[index] ?? '')) {
+  if (!isIdentStart(text[index] ?? '')) {
     return null
   }
   let end = index + 1
-  while (end < text.length && /[\w$]/.test(text[end] ?? '')) {
+  while (end < text.length && isIdentBody(text[end] ?? '')) {
     end++
   }
   return { text: text.slice(index, end), end }
@@ -132,13 +138,9 @@ export function splitTopLevelList(text: string): string[] {
  * 中文表名 / 列名在本项目里是常见写法（补全还支持拼音首字母命中），
  * 这里必须认得它们 —— 否则「中文列名 AS 别名」会被当成表达式丢掉。
  */
-const IDENT_START = '[A-Za-z_$\\u4e00-\\u9fa5]'
-const IDENT_BODY = '[\\w$\\u4e00-\\u9fa5]*'
-const IDENT = `${IDENT_START}${IDENT_BODY}`
-/** 带引号的标识符：`` `x` `` / `"x"` / `[x]` */
-const QUOTED_IDENT = '`[^`]*`|"[^"]*"|\\[[^\\]]*\\]'
+const IDENT = IDENT_SOURCE
 /** 一个标识符（裸写或带引号） */
-const IDENT_OR_QUOTED = `${QUOTED_IDENT}|${IDENT}`
+const IDENT_OR_QUOTED = IDENT_OR_QUOTED_SOURCE
 
 const IDENT_RE = new RegExp(`^${IDENT}$`)
 const AS_ALIAS_RE = new RegExp(`\\s+as\\s+(?:${IDENT_OR_QUOTED})\\s*$`, 'i')

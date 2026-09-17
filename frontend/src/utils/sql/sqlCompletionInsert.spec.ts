@@ -15,6 +15,7 @@ import {
   columnItem,
   needsQuoting,
   openingQuoteBefore,
+  qualifierBeforeCursor,
   quotedIdentApply,
   renderIdent,
   toggleColumnMark,
@@ -234,5 +235,22 @@ describe('表候选：吃掉用户已经敲下的开引号', () => {
     const { view, changes } = fakeView(doc)
     quotedIdentApply('`users`')(view, {} as Completion, wordStart(doc), doc.length)
     expect(changes[0]).toEqual({ from: 14, to: 16, insert: '`users`' })
+  })
+})
+
+describe('限定符回看：中文别名同样算数', () => {
+  it('`用户.` 整段算进替换范围', () => {
+    const text = 'SELECT 用户.'
+    expect(qualifierBeforeCursor(text, text.length)).toBe('用户.')
+  })
+
+  it('回看的是一个完整 token：`a用户.` 不会被当成 `用户.`', () => {
+    const text = 'SELECT a用户.'
+    expect(qualifierBeforeCursor(text, text.length)).toBe('a用户.')
+  })
+
+  it('带引号的中文别名也认（`` `用户`. ``）', () => {
+    const text = 'SELECT `用户`.'
+    expect(qualifierBeforeCursor(text, text.length)).toBe('`用户`.')
   })
 })

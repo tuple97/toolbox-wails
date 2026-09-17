@@ -12,6 +12,7 @@
 import { ElMessage } from 'element-plus'
 import { executeStatement } from '@/api/executor'
 import { copyText } from '@/utils/clipboard'
+import { IDENT_SOURCE } from './sqlLexemes'
 import type { ContextMenuAction } from '@/types'
 
 /** SQL 方言 */
@@ -87,7 +88,11 @@ interface TableRef {
  * 解析失败返回 null（比如结果来自函数或复杂子查询）。
  */
 export function parseTableRef(sql: string): TableRef | null {
-  const pattern = /(?:\bfrom\b|\bupdate\b|\binsert\s+into\b|\bdelete\s+from\b)\s+([`"[]?[A-Za-z_$][\w$]*[`"\]]?(?:\s*\.\s*[`"[]?[A-Za-z_$][\w$]*[`"\]]?){0,1})/i
+  const pattern = new RegExp(
+    `(?:\\bfrom\\b|\\bupdate\\b|\\binsert\\s+into\\b|\\bdelete\\s+from\\b)`
+    + `\\s+([\`"[]?${IDENT_SOURCE}[\`"\\]]?(?:\\s*\\.\\s*[\`"[]?${IDENT_SOURCE}[\`"\\]]?){0,1})`,
+    'i',
+  )
   const matched = pattern.exec(sql)
   if (!matched) {
     return null

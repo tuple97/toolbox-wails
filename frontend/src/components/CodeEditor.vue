@@ -30,6 +30,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import {
   autocompletion,
   closeBrackets,
+  CompletionContext,
   closeBracketsKeymap,
   completeAnyWord,
   completeFromList,
@@ -76,6 +77,27 @@ import {
 } from '@/utils/logLanguage'
 import { editorErrorField, errorRangeOf, setEditorErrors } from '@/utils/editorErrors'
 import type { EditorError, ErrorPosition } from '@/utils/editorErrors'
+import { ElMessage } from 'element-plus'
+import { copyText } from '@/utils/clipboard'
+import {
+  isRenaming,
+  renameTargetAt as renameTargetAtSql,
+  sqlRenameExtension,
+  startRenameAt,
+} from '@/utils/sql/rename/sqlRenameView'
+import type { RenameTargetKind } from '@/utils/sql/rename/sqlRenameView'
+import type { SqlRenameViewOptions } from '@/utils/sql/rename/sqlRenameView'
+import { createTableSqlAt, tableHoverAt } from '@/utils/sql/hover/sqlTableHover'
+import { resolveCreateTableSql } from '@/utils/sql/ddl/createTableSqlSource'
+import type { CreateTableSqlResult } from '@/utils/sql/ddl/createTableSqlSource'
+import { resolveTableAtPosition } from '@/utils/sql/semantic/sqlSymbols'
+import {
+  definitionNavigationExtension,
+  definitionTargetAt,
+  goToDefinition,
+} from '@/utils/sql/semantic/sqlDefinition'
+import { symbolHighlightExtension } from '@/utils/sql/semantic/sqlSymbolHighlight'
+import type { SqlTableHover } from '@/utils/sql/hover/sqlTableHover'
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
@@ -268,7 +290,12 @@ function completionSources(): CompletionSource[] {
     sources.push(completeAnyWord)
   }
 
-  return sources
+  /*
+   * 重命名期间不给候选：Enter 必须归重命名（提交），不能被补全截走。
+   * 在候选源这一层挡掉，比「按位置判定」更硬 —— 无论谁触发都不会冒出来。
+   */
+  return sources.map(source => (context: CompletionContext) =>
+    (isRenaming(context.state) ? null : source(context)))
 }
 
 /**
@@ -403,6 +430,280 @@ function columnHoverExtension(): Extension {
       create: () => ({ dom: renderColumnHover(hover.info) }),
     }
   })
+}
+
+/**
+ * 表结构悬停：鼠标停在**表名或表别名**上时展示列清单。
+ *
+ * 与列悬停并列（那个答「这一列是什么」，这个答「这张表长什么样」），
+ * 但共用同一套语义解析与元数据缓存：别名 `u` 解析到 `users` 后取它的列。
+ * 模板区域先挡掉 —— `FROM {{ table }}` 里的 `table` 是模板变量，不是物理表。
+ */
+function tableHoverExtension(): Extension {
+  const mode = resolvedCompletionMode()
+  if (mode !== 'sql' && mode !== 'sql-template') {
+    return []
+  }
+
+  return hoverTooltip((view, pos) => {
+    if (analyzeHybridCursor(view.state, pos, { mode }).language !== 'sql') {
+      return null
+    }
+    const hover = tableHoverAt(view.state, pos, sqlRuntimeFor(view, mode))
+    if (!hover) {
+      return null
+    }
+    return {
+      pos: hover.from,
+      end: hover.to,
+      above: true,
+      create: () => ({
+        dom: renderTableHover(hover.info, async () => {
+          // 悬停卡片与右键菜单走同一个来源策略：原生 DDL 优先
+          const resolved = await resolveDdl(view, {
+            tableName: hover.info.tableName,
+            schema: hover.info.schemaName,
+            sql: hover.info.createTableSql,
+          })
+          await copyText(resolved.sql)
+        }),
+      }),
+    }
+  })
+}
+
+/** 悬停 / 重命名共用的运行期上下文（每次现读，切连接后立即生效） */
+function sqlRuntimeFor(view: EditorView, mode: CompletionMode): CompletionRuntime {
+  return {
+    mode,
+    sql: sqlContextOf(view) ?? undefined,
+    // 与补全同一份元数据提供者：重命名的列别名准入判断要按它查来源表的列
+    metadata: defaultMetadataProvider,
+  }
+}
+
+/** 重命名会话的选项（扩展与右键入口共用同一份反馈出口） */
+function renameOptions(): SqlRenameViewOptions {
+  return {
+    runtime: view => sqlRuntimeFor(view, resolvedCompletionMode()),
+    notify: (notice) => {
+      if (notice.type === 'success') {
+        ElMessage.success(notice.message)
+      }
+      else {
+        ElMessage.warning(notice.message)
+      }
+    },
+  }
+}
+
+/** 表别名重命名：Enter 提交、Esc 取消、光标移出自动取消 */
+function renameExtension(): Extension {
+  const mode = resolvedCompletionMode()
+  if (props.readonly || (mode !== 'sql' && mode !== 'sql-template')) {
+    return []
+  }
+  return sqlRenameExtension(renameOptions())
+}
+
+/**
+ * 供父组件调用：在指定位置开始重命名（右键菜单入口）；返回是否已进入。
+ *
+ * 表别名 / CTE 名称 / 列别名共用这一个入口 —— 具体是哪种由语义解析决定，
+ * 调用方不需要（也不应该）自己判断。
+ */
+function renameSymbolAt(pos: number): boolean {
+  const view = viewRef.value
+  return view ? startRenameAt(view, pos, renameOptions()) : false
+}
+
+/**
+ * 供父组件调用：该位置可重命名的对象类型（菜单标签用）；null 表示没有可用动作。
+ *
+ * 与 `renameSymbolAt` 共用同一套判定，菜单与实际行为不会不一致。
+ */
+function renameTargetAt(pos: number): RenameTargetKind | null {
+  const view = viewRef.value
+  return view ? renameTargetAtSql(view, pos, renameOptions()) : null
+}
+
+/**
+ * 供父组件调用：该位置是否有可复制建表语句的物理表。
+ *
+ * 按**名字**判断（有表名且不是派生表 / CTE）；列元数据是否已就绪交给动作本身
+ * 去处理 —— 否则刚打开标签页时菜单会少一项，看起来像功能不稳定。
+ */
+function canCopyCreateTableAt(pos: number): boolean {
+  const view = viewRef.value
+  if (!view) {
+    return false
+  }
+  const table = resolveTableAtPosition(view.state, pos, props.dbType ?? '')
+  return Boolean(table && !table.virtual)
+}
+
+/** 供父组件调用：该位置是否有可跳转的定义（右键菜单项用） */
+function canGoToDefinitionAt(pos: number): boolean {
+  const view = viewRef.value
+  return view ? definitionTargetAt(view.state, pos, props.dbType ?? '') !== null : false
+}
+
+/** 供父组件调用：跳到定义（光标在声明上则跳到第一处引用） */
+function goToDefinitionAt(pos: number): boolean {
+  const view = viewRef.value
+  if (!view) {
+    return false
+  }
+  return goToDefinition(view, pos, { runtime: v => sqlRuntimeFor(v, resolvedCompletionMode()) })
+}
+
+/** 跳转到定义（Ctrl/Cmd + 左键、F12） */
+function definitionNavExtension(): Extension {
+  const mode = resolvedCompletionMode()
+  if (props.readonly || (mode !== 'sql' && mode !== 'sql-template')) {
+    return []
+  }
+  return definitionNavigationExtension({ runtime: view => sqlRuntimeFor(view, mode) })
+}
+
+/** 光标处符号的引用高亮（只读编辑器同样有用，故不排除 readonly） */
+function symbolHighlight(): Extension {
+  const mode = resolvedCompletionMode()
+  if (mode !== 'sql' && mode !== 'sql-template') {
+    return []
+  }
+  return symbolHighlightExtension({ runtime: view => sqlRuntimeFor(view, mode) })
+}
+
+/** 供父组件调用：复制该位置对应表的 CREATE TABLE */
+async function copyCreateTableAt(pos: number): Promise<boolean> {
+  const view = viewRef.value
+  if (!view) {
+    return false
+  }
+  const result = createTableSqlAt(view.state, pos, sqlRuntimeFor(view, resolvedCompletionMode()))
+  if (!result) {
+    ElMessage.warning('未识别到可建表的物理表')
+    return false
+  }
+  try {
+    // 优先数据库自己的 DDL（带索引等完整定义），拿不到才用按元数据生成的那份
+    const resolved = await resolveDdl(view, result)
+    await copyText(resolved.sql)
+    ElMessage.success(
+      `已复制 ${result.tableName} 的建表语句（${resolved.source === 'database' ? '来自数据库' : '按元数据生成'}）`,
+    )
+    return true
+  }
+  catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+    return false
+  }
+}
+
+/**
+ * 建表语句的最终来源：数据库原生 DDL 优先，回退到本地生成。
+ *
+ * 连接上下文取当下的（切库 / 切连接后立即生效），拿不到连接时直接用本地那份。
+ */
+async function resolveDdl(
+  view: EditorView,
+  args: { tableName: string, schema: string, sql: string },
+): Promise<CreateTableSqlResult> {
+  const sql = sqlContextOf(view)
+  if (!sql?.connId) {
+    return { sql: args.sql, source: 'generated' }
+  }
+  return resolveCreateTableSql({
+    connId: sql.connId,
+    database: sql.database,
+    dbType: sql.dbType,
+    schema: args.schema,
+    table: args.tableName,
+    generated: args.sql,
+  })
+}
+
+/** 「复制」图标（两张纸） */
+const COPY_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="5.6" y="2.4" width="8" height="9.2" rx="1.4"/><path d="M10.4 13.6H3.8a1.4 1.4 0 0 1-1.4-1.4V5.6"/></svg>'
+
+/**
+ * 表结构卡片：标题行（表名 + 复制按钮）、列清单（名称 / 类型 / 注释）。
+ *
+ * 列顺序就是元数据的 ordinal 顺序，不做任何重排 —— 卡片要与库里的定义顺序一致。
+ * 复制失败只在按钮上给反馈，不关闭卡片（用户通常还要继续看结构）；
+ * 复制的内容由 `copyDdl` 决定（原生 DDL 优先，见 resolveDdl）。
+ */
+function renderTableHover(info: SqlTableHover, copyDdl: () => Promise<void>): HTMLElement {
+  const root = document.createElement('div')
+  root.className = 'table-hover'
+
+  const head = document.createElement('div')
+  head.className = 'table-hover__head'
+
+  const name = document.createElement('span')
+  name.className = 'table-hover__name'
+  name.textContent = info.tableName
+  head.appendChild(name)
+
+  const copy = document.createElement('button')
+  copy.className = 'table-hover__copy'
+  copy.type = 'button'
+  copy.title = '复制 CREATE TABLE'
+  copy.innerHTML = COPY_ICON
+  copy.addEventListener('mousedown', event => event.preventDefault())
+  copy.addEventListener('click', () => {
+    void (async () => {
+      try {
+        await copyDdl()
+        copy.textContent = '✓ 已复制'
+      }
+      catch {
+        copy.textContent = '复制失败'
+      }
+      setTimeout(() => {
+        copy.innerHTML = COPY_ICON
+      }, 1200)
+    })()
+  })
+  if (info.createTableSql) {
+    head.appendChild(copy)
+  }
+  else {
+    // 派生表 / CTE 没有建表语句：不给复制按钮（宁可不提供，也不给半截 DDL）
+    const hint = document.createElement('span')
+    hint.className = 'table-hover__hint'
+    hint.textContent = '派生列 · 无建表语句'
+    head.appendChild(hint)
+  }
+  root.appendChild(head)
+
+  const list = document.createElement('div')
+  list.className = 'table-hover__list'
+  for (const column of info.columns) {
+    const row = document.createElement('div')
+    row.className = 'table-hover__row'
+
+    const columnName = document.createElement('span')
+    columnName.className = 'table-hover__column'
+    columnName.textContent = column.name
+    row.appendChild(columnName)
+
+    const type = document.createElement('span')
+    type.className = 'table-hover__type'
+    type.textContent = column.dataType ?? ''
+    row.appendChild(type)
+
+    if (column.comment) {
+      const comment = document.createElement('span')
+      comment.className = 'table-hover__comment'
+      comment.textContent = column.comment
+      row.appendChild(comment)
+    }
+    list.appendChild(row)
+  }
+  root.appendChild(list)
+  return root
 }
 
 /** 「来源表」图标（表格轮廓，跟随文字颜色） */
@@ -704,7 +1005,15 @@ onMounted(() => {
       ...baseExtensions(),
       completionExtension(),
       triggerExtension(),
+      // 表悬停排在列悬停之前：表名 / 别名位置优先出「表结构」，列位置才落到列卡片
+      tableHoverExtension(),
       columnHoverExtension(),
+      // 重命名会话（状态 + 装饰 + Enter/Esc + 光标守护）
+      renameExtension(),
+      // 跳转到定义（Ctrl/Cmd + 左键、F12）
+      definitionNavExtension(),
+      // 光标处符号的引用高亮
+      symbolHighlight(),
       languageCompartment.of(languageExtension()),
       themeCompartment.of(editorThemeExtensions(themeName())),
       readOnlyCompartment.of(readOnlyExtension()),
@@ -822,8 +1131,23 @@ function setErrors(positions: ErrorPosition[], options: { reveal?: boolean } = {
   }
 }
 
-/** 供父组件调用：只暴露插入与错误标记，避免外部直接操作编辑器 */
-defineExpose({ insertText, setErrors })
+/**
+ * 供父组件调用：只暴露必要的编辑器能力，避免外部直接操作编辑器内部状态。
+ *
+ * 语义驱动的动作成对暴露：`renameTargetAt` / `canCopyCreateTableAt` 回答
+ * 「这里能做什么」，`renameSymbolAt` / `copyCreateTableAt` 真正去做 ——
+ * 调用方只需要给一个文档位置，解析、校验与反馈都在编辑器内部完成。
+ */
+defineExpose({
+  insertText,
+  setErrors,
+  renameSymbolAt,
+  renameTargetAt,
+  copyCreateTableAt,
+  canCopyCreateTableAt,
+  goToDefinitionAt,
+  canGoToDefinitionAt,
+})
 </script>
 
 <template>
@@ -912,5 +1236,111 @@ defineExpose({ insertText, setErrors })
 .code-editor :deep(.column-hover__value) {
   min-width: 0;
   word-break: break-word;
+}
+
+/*
+ * 重命名中的别名：底色高亮 + 下划线，明确「这一段正在被改名」。
+ * 与错误波浪线一样只在会话期间存在，不进入常规编辑观感。
+ */
+.code-editor :deep(.cm-rename-active) {
+  border-radius: 3px;
+  background: var(--primary-color-soft, rgba(64, 158, 255, 0.18));
+  box-shadow: inset 0 -1px 0 var(--primary-color, #409eff);
+}
+
+/*
+ * 表结构卡片（内容由 renderTableHover 拼装）。
+ * 列清单用两列网格：名称固定宽度对齐，类型与注释跟在后面，长注释自动折行。
+ */
+.code-editor :deep(.table-hover) {
+  min-width: 240px;
+  max-width: 460px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.code-editor :deep(.table-hover__head) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.code-editor :deep(.table-hover__name) {
+  color: var(--text-color);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.code-editor :deep(.table-hover__copy) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.code-editor :deep(.table-hover__copy:hover) {
+  color: var(--text-color);
+  border-color: var(--primary-color, #409eff);
+}
+
+.code-editor :deep(.table-hover__list) {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.code-editor :deep(.table-hover__row) {
+  display: grid;
+  grid-template-columns: minmax(90px, max-content) minmax(70px, max-content) 1fr;
+  align-items: baseline;
+  gap: 10px;
+  padding: 1px 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.code-editor :deep(.table-hover__column) {
+  color: var(--text-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.code-editor :deep(.table-hover__type) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.code-editor :deep(.table-hover__comment) {
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 派生来源的说明（没有 DDL 可复制时占复制按钮的位置） */
+.code-editor :deep(.table-hover__hint) {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/*
+ * 光标处符号的出现位置：声明给稍重的底色，引用轻一档 ——
+ * 既能一眼看出「用在哪」，也不至于把代码糊成一片。
+ */
+.code-editor :deep(.cm-symbol-declaration) {
+  border-radius: 3px;
+  background: var(--primary-color-soft, rgba(64, 158, 255, 0.22));
+}
+
+.code-editor :deep(.cm-symbol-reference) {
+  border-radius: 3px;
+  background: var(--primary-color-soft, rgba(64, 158, 255, 0.12));
 }
 </style>
