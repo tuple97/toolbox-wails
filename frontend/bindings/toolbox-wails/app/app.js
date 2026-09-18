@@ -227,12 +227,13 @@ export function ListConnections() {
 
 /**
  * ListDatabases 返回连接可见的所有数据库（库选择下拉）。
+ * 每项带「是否系统库」标记，由适配层按方言判定（前端只负责按设置过滤）。
  * @param {number} connID
- * @returns {$CancellablePromise<string[]>}
+ * @returns {$CancellablePromise<services$0.DatabaseInfo[]>}
  */
 export function ListDatabases(connID) {
     return $Call.ByID(1767885062, connID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType15($result);
     }));
 }
 
@@ -242,7 +243,7 @@ export function ListDatabases(connID) {
  */
 export function ListDictionaries() {
     return $Call.ByID(4063091332).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType17($result);
     }));
 }
 
@@ -253,7 +254,7 @@ export function ListDictionaries() {
  */
 export function ListDictionaryItems(dictionaryID) {
     return $Call.ByID(3553481380, dictionaryID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType19($result);
     }));
 }
 
@@ -266,7 +267,7 @@ export function ListDictionaryItems(dictionaryID) {
  */
 export function ListForeignKeys(connID, database, table) {
     return $Call.ByID(1478162384, connID, database, table).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType19($result);
+        return $$createType21($result);
     }));
 }
 
@@ -277,7 +278,7 @@ export function ListForeignKeys(connID, database, table) {
  */
 export function ListSqlTemplates() {
     return $Call.ByID(3723117187).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType21($result);
+        return $$createType23($result);
     }));
 }
 
@@ -303,7 +304,7 @@ export function ListSystemFonts() {
  */
 export function ListTableColumns(connID, database, table) {
     return $Call.ByID(832508427, connID, database, table).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType23($result);
+        return $$createType25($result);
     }));
 }
 
@@ -325,7 +326,7 @@ export function ListTables(connID, database) {
  */
 export function ListTabs() {
     return $Call.ByID(4125257976).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType25($result);
+        return $$createType27($result);
     }));
 }
 
@@ -336,7 +337,7 @@ export function ListTabs() {
  */
 export function ListTemplates() {
     return $Call.ByID(1375775183).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType26($result);
+        return $$createType28($result);
     }));
 }
 
@@ -347,7 +348,7 @@ export function ListTemplates() {
  */
 export function LoadDictionaryCache() {
     return $Call.ByID(212418086).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType27($result);
+        return $$createType29($result);
     }));
 }
 
@@ -381,7 +382,7 @@ export function PreviewTemplate(sqlText, variables) {
  */
 export function QueryVariableOptions(connID, query) {
     return $Call.ByID(454558478, connID, query).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType29($result);
+        return $$createType31($result);
     }));
 }
 
@@ -453,7 +454,7 @@ export function SaveSqlTemplate(tpl) {
  */
 export function SaveTabs(tabs) {
     return $Call.ByID(2851052225, tabs).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType25($result);
+        return $$createType27($result);
     }));
 }
 
@@ -495,7 +496,7 @@ export function ValidateScript(source) {
  */
 export function ValidateTemplate(sqlText) {
     return $Call.ByID(3453963828, sqlText).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType30($result);
+        return $$createType32($result);
     }));
 }
 
@@ -546,20 +547,22 @@ const $$createType10 = database$0.SQLTemplate.createFrom;
 const $$createType11 = $Create.Nullable($$createType10);
 const $$createType12 = services$0.SystemMetrics.createFrom;
 const $$createType13 = $Create.Array($$createType8);
-const $$createType14 = database$0.Dictionary.createFrom;
+const $$createType14 = services$0.DatabaseInfo.createFrom;
 const $$createType15 = $Create.Array($$createType14);
-const $$createType16 = database$0.DictionaryItem.createFrom;
+const $$createType16 = database$0.Dictionary.createFrom;
 const $$createType17 = $Create.Array($$createType16);
-const $$createType18 = services$0.ForeignKey.createFrom;
+const $$createType18 = database$0.DictionaryItem.createFrom;
 const $$createType19 = $Create.Array($$createType18);
-const $$createType20 = services$0.TemplateListItem.createFrom;
+const $$createType20 = services$0.ForeignKey.createFrom;
 const $$createType21 = $Create.Array($$createType20);
-const $$createType22 = services$0.ExecutorColumn.createFrom;
+const $$createType22 = services$0.TemplateListItem.createFrom;
 const $$createType23 = $Create.Array($$createType22);
-const $$createType24 = database$0.Tab.createFrom;
+const $$createType24 = services$0.ExecutorColumn.createFrom;
 const $$createType25 = $Create.Array($$createType24);
-const $$createType26 = $Create.Array($$createType10);
-const $$createType27 = $Create.Map($Create.Any, $$createType17);
-const $$createType28 = $Create.Map($Create.Any, $Create.Any);
-const $$createType29 = $Create.Array($$createType28);
-const $$createType30 = utils$0.TemplateCheck.createFrom;
+const $$createType26 = database$0.Tab.createFrom;
+const $$createType27 = $Create.Array($$createType26);
+const $$createType28 = $Create.Array($$createType10);
+const $$createType29 = $Create.Map($Create.Any, $$createType19);
+const $$createType30 = $Create.Map($Create.Any, $Create.Any);
+const $$createType31 = $Create.Array($$createType30);
+const $$createType32 = utils$0.TemplateCheck.createFrom;

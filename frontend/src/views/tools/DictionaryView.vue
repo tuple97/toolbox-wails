@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   fetchDictionaries,
@@ -9,6 +9,9 @@ import {
   removeDictionary,
 } from '@/api/dictionaries'
 import { useDictStore } from '@/stores/dictStore'
+import { useConfigStore } from '@/stores/configStore'
+import { useTabStore } from '@/stores/tabStore'
+import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
 import type { Dictionary, DictionaryItem } from '@/types'
 
 /**
@@ -22,11 +25,22 @@ import type { Dictionary, DictionaryItem } from '@/types'
  */
 
 const dictStore = useDictStore()
+const configStore = useConfigStore()
+const tabStore = useTabStore()
 
 const emit = defineEmits<{
   /** 首次加载完成（父级据此关闭 loading 遮罩） */
   (e: 'ready'): void
 }>()
+
+function handleSaveShortcut(event: KeyboardEvent) {
+  // 单例视图仅在激活时接管快捷键；切走后不影响其他页面。
+  if (tabStore.activeSingleton !== 'dictionary') return
+  if (event.defaultPrevented) return
+  if (!matchesShortcut(event, shortcutOf('save-dictionary', configStore.values.shortcut_config))) return
+  event.preventDefault()
+  void handleSaveItems()
+}
 
 /** 词典列表 */
 const dictionaries = ref<Dictionary[]>([])
@@ -207,6 +221,7 @@ async function refreshCache() {
 }
 
 onMounted(async () => {
+  window.addEventListener('keydown', handleSaveShortcut)
   try {
     await loadDictionaries()
     await loadItems()
@@ -216,6 +231,8 @@ onMounted(async () => {
     emit('ready')
   }
 })
+
+onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 </script>
 
 <template>

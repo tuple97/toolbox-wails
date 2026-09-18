@@ -391,7 +391,17 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         fontStyle: 'normal',
         padding: '4px',
       },
-      '.cm-tooltip-autocomplete > ul': {
+      /*
+       * 弹层宽度与高度。
+       *
+       * 宽度必须显式放宽：CM6 基础主题把 `> ul` 限制在 `min(700px, 95vw)`，
+       * 而「列名 + 类型 + 表名 + 长备注」很容易超过它 —— 列表默认
+       * `overflow-x: hidden` + `text-overflow: ellipsis`，超出的部分会被截成
+       * `...`（图标也一起切掉），选中该行时 CM 的 scrollIntoView 还会让行
+       * 横向滚动，中段内容整体移出视野。放宽后长内容能完整放下。
+       */
+      '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+        maxWidth: 'min(1100px, 95vw)',
         maxHeight: '300px',
       },
       '.cm-tooltip-autocomplete > ul > li': {
@@ -433,7 +443,9 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         justifyContent: 'center',
         width: '0.85em',
         height: '0.85em',
-        marginRight: '0.55em',
+        // 边框走 border-box：不加盒子尺寸，方框始终是正方形
+        boxSizing: 'border-box',
+        flex: 'none',
         border: `1px solid ${h(palette.lineNumber)}`,
         borderRadius: '3px',
         color: '#fff',
@@ -456,24 +468,61 @@ export function editorThemeExtensions(themeName: string): Extension[] {
       },
       /*
        * 列候选的描述区（DOM 由 CodeEditor.vue 的 renderColumnDetail 提供）：
-       * 「类型 · 来源 · 注释」三段，靠间距分隔；来源与注释各带一个小图标，
-       * 与悬停卡片同一套视觉语言（不再拼成一串 `·`）。
+       * 「类型 · 来源 · 注释」三段，靠间距分隔 —— 纯文本 detail 只能串成一串 `·`，
+       * 所以不用它。来源与注释各带一个小图标，**图标带颜色做标识**（见下）。
+       *
+       * 刻意**不做列对齐**（固定列宽的表格样式）：对齐要靠截断列名与注释换来，
+       * 还会让纯关键字列表无谓变宽 —— 三段顺次跟在列名后面更省空间，
+       * 「哪一段是什么」靠图标颜色区分就够了。
        */
       '.cm-tooltip-autocomplete ul li .cm-column-detail': {
         display: 'inline-flex',
         alignItems: 'center',
+        // 空间不够时**换行**而不是被截断：CM 会按光标右侧的可用空间给弹层设一个
+        // 上限（窄窗口 / 光标靠右时更小），行放不下就会被 li 的 ellipsis 切掉尾巴
+        // ——「图标不见了」就是这么来的。允许折行后，最坏情况只是这一行变高。
+        flexWrap: 'wrap',
         gap: '0.7em',
         marginLeft: '1.1em',
         fontSize: '0.92em',
-        opacity: '0.6',
       },
-      '.cm-tooltip-autocomplete ul li[aria-selected] .cm-column-detail': {
-        opacity: '0.9',
+      /*
+       * 变淡的只有**文字**（类型 / 值），图标保持原色。
+       *
+       * 不能把 opacity 加在容器或 __part 上：透明度会连着图标一起压灰，
+       * 而且子元素无法「提亮」回来 —— 那样图标颜色就白给了。
+       */
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__type, .cm-tooltip-autocomplete ul li .cm-column-detail__value': {
+        opacity: '0.75',
+      },
+      /*
+       * 备注允许换行（最宽约 46 个字符）：治理标签那种长注释是常态，
+       * 与其被 ellipsis 截掉半句，不如让这一行高一点、把话说完。
+       * 宽度上限是必需的 —— 列表的 `white-space: nowrap` 在这里被改成 normal，
+       * 不给上限的话一行会无限长（整行跟着变宽）。
+       */
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__part--comment .cm-column-detail__value': {
+        minWidth: '0',
+        maxWidth: '46ch',
+        whiteSpace: 'normal',
+        overflowWrap: 'anywhere',
+      },
+      // 表名一般很短；超长时才省略（否则会把整行推宽）
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__part--source .cm-column-detail__value': {
+        minWidth: '0',
+        maxWidth: '24ch',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      },
+      '.cm-tooltip-autocomplete ul li[aria-selected] .cm-column-detail__type, .cm-tooltip-autocomplete ul li[aria-selected] .cm-column-detail__value': {
+        opacity: '1',
       },
       '.cm-tooltip-autocomplete ul li .cm-column-detail__part': {
         display: 'inline-flex',
         alignItems: 'center',
         gap: '0.28em',
+        // 同上：放不下时折行，别让内容消失
+        flexWrap: 'wrap',
       },
       '.cm-tooltip-autocomplete ul li .cm-column-detail__type': {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -481,11 +530,72 @@ export function editorThemeExtensions(themeName: string): Extension[] {
       '.cm-tooltip-autocomplete ul li .cm-column-detail__icon': {
         display: 'inline-flex',
         alignItems: 'center',
-        opacity: '0.75',
       },
       '.cm-tooltip-autocomplete ul li .cm-column-detail__icon svg': {
         width: '0.95em',
         height: '0.95em',
+      },
+      /*
+       * 两个图标的颜色标识：
+       *  - 来源（血缘源头表名）用品牌色 —— 「这列来自哪张表」是最需要一眼扫到的信息；
+       *  - 注释用琥珀色 —— 与来源区分开，沿用日志 token 里的同一个暖色，配色统一。
+       */
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__part--source .cm-column-detail__icon': {
+        color: h(palette.accent),
+      },
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__part--comment .cm-column-detail__icon': {
+        color: palette.dark ? '#fbbf24' : '#b45309',
+      },
+      /*
+       * 候选类型图标（DOM 由 CodeEditor.vue 的 renderTypeIcon 提供）：
+       * **每个类型一种颜色** —— 列 / 表 / 别名 / 库 / 关键字 / 函数 / 属性 / 片段，
+       * 一眼分出「这是什么候选」，不必去读后面的类型文字。
+       * 色板沿用日志 token 那一套（同一个应用里的颜色语言保持一致），
+       * 深浅主题各取一档保证对比度；表名用主题的品牌色。
+       */
+      '.cm-tooltip-autocomplete ul li .cm-type-icon': {
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '1.1em',
+        marginRight: '0.45em',
+        verticalAlign: '-0.18em',
+      },
+      '.cm-tooltip-autocomplete ul li .cm-type-icon svg': {
+        width: '1em',
+        height: '1em',
+      },
+      // 列
+      '.cm-tooltip-autocomplete ul li .cm-type-icon--field': {
+        color: palette.dark ? '#2dd4bf' : '#0d9488',
+      },
+      // 表（跟随主题品牌色）
+      '.cm-tooltip-autocomplete ul li .cm-type-icon--class': {
+        color: h(palette.accent),
+      },
+      // 别名 / 变量
+      '.cm-tooltip-autocomplete ul li .cm-type-icon--variable': {
+        color: palette.dark ? '#c084fc' : '#7c3aed',
+      },
+      // 库
+      '.cm-tooltip-autocomplete ul li .cm-type-icon--namespace': {
+        color: palette.dark ? '#34d399' : '#15803d',
+      },
+      // 关键字
+      '.cm-tooltip-autocomplete ul li .cm-type-icon--keyword': {
+        color: palette.dark ? '#fb923c' : '#c2410c',
+      },
+      // 函数
+      '.cm-tooltip-autocomplete ul li .cm-type-icon--function': {
+        color: palette.dark ? '#f472b6' : '#db2777',
+      },
+      // 模板属性
+      '.cm-tooltip-autocomplete ul li .cm-type-icon--property': {
+        color: palette.dark ? '#94a3b8' : '#475569',
+      },
+      // 片段 / 智能项
+      '.cm-tooltip-autocomplete ul li .cm-type-icon--text': {
+        color: palette.dark ? '#fbbf24' : '#b45309',
       },
       /*
        * 错误标记（模板语法校验等，装饰由 utils/editorErrors.ts 提供）：
@@ -500,6 +610,71 @@ export function editorThemeExtensions(themeName: string): Extension[] {
       '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': {
         backgroundColor: h(palette.selection),
         outline: `1px solid ${h(palette.border)}`,
+      },
+      /*
+       * 查找 / 替换面板与命中高亮（见 utils/editorSearch.ts）。
+       *
+       * 官方样式是浅色硬编码（白底、系统灰按钮、浅绿命中），深色主题下会整块糊在
+       * 编辑器上；这里按当前配色重写，与补全浮层同一套观感（widget 底 / border 边 /
+       * accent 强调）。
+       */
+      '.cm-panel.cm-search': {
+        backgroundColor: h(palette.widget),
+        borderTop: `1px solid ${h(palette.border)}`,
+        color: h(palette.foreground),
+        padding: '6px 8px',
+        fontFamily: 'inherit',
+        fontSize: 'inherit',
+      },
+      '.cm-panel.cm-search .cm-textfield': {
+        padding: '2px 6px',
+        border: `1px solid ${h(palette.border)}`,
+        borderRadius: '4px',
+        backgroundColor: 'transparent',
+        color: h(palette.foreground),
+        fontFamily: 'inherit',
+        fontSize: 'inherit',
+      },
+      '.cm-panel.cm-search .cm-textfield:focus': {
+        outline: 'none',
+        borderColor: h(palette.accent),
+      },
+      '.cm-panel.cm-search .cm-button': {
+        padding: '2px 8px',
+        border: `1px solid ${h(palette.border)}`,
+        borderRadius: '4px',
+        // 官方给按钮铺了一张渐变底图，不清掉就会盖住上面的透明底
+        backgroundImage: 'none',
+        backgroundColor: 'transparent',
+        color: h(palette.foreground),
+        fontFamily: 'inherit',
+        fontSize: 'inherit',
+        cursor: 'pointer',
+      },
+      '.cm-panel.cm-search .cm-button:hover': {
+        borderColor: h(palette.accent),
+        color: h(palette.accent),
+      },
+      '.cm-panel.cm-search label': {
+        color: h(palette.foreground),
+        fontSize: '0.92em',
+        opacity: '0.75',
+      },
+      '.cm-panel.cm-search [name=close]': {
+        color: h(palette.lineNumberActive),
+        fontFamily: 'inherit',
+      },
+      // 命中：品牌色半透明底 + 描边；当前命中再实一层，与其它命中区分开
+      '.cm-searchMatch': {
+        backgroundColor: `${h(palette.accent)}33`,
+        outline: `1px solid ${h(palette.accent)}55`,
+      },
+      '.cm-searchMatch.cm-searchMatch-selected': {
+        backgroundColor: `${h(palette.accent)}66`,
+      },
+      // 「选中词在文中的其它出现」：比查找命中更淡，不与查找结果抢注意力
+      '.cm-selectionMatch': {
+        backgroundColor: h(palette.selection),
       },
     },
     { dark: palette.dark },

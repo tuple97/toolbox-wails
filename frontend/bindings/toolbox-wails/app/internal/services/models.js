@@ -55,6 +55,48 @@ export class ColumnMeta {
 }
 
 /**
+ * DatabaseInfo 库列表项：名字 + 是否系统库。
+ * 
+ * 「什么算系统库」是**驱动 / 服务端的事实**而不是界面偏好，所以在后端算：
+ * 前端只按标记过滤（见 frontend/src/utils/sql/sqlVisibility.ts），
+ * 那边保留的方言表退化为兜底（旧绑定 / 标记缺失时使用）。
+ */
+export class DatabaseInfo {
+    /**
+     * Creates a new DatabaseInfo instance.
+     * @param {Partial<DatabaseInfo>} [$$source = {}] - The source object to create the DatabaseInfo.
+     */
+    constructor($$source = {}) {
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("isSystem" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["isSystem"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DatabaseInfo instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DatabaseInfo}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new DatabaseInfo(/** @type {Partial<DatabaseInfo>} */($$parsedSource));
+    }
+}
+
+/**
  * ExecuteRequest 描述一次查询请求。
  */
 export class ExecuteRequest {

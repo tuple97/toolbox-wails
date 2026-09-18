@@ -2,6 +2,9 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useMetadataStore } from '@/stores/metadataStore'
+import { useConfigStore } from '@/stores/configStore'
+import { dialectOf } from '@/utils/sql/rowSql'
+import { filterDatabaseInfos, parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
 import type { DBConnection } from '@/types'
 
 /**
@@ -24,6 +27,14 @@ const emit = defineEmits<{
 }>()
 
 const meta = useMetadataStore()
+const configStore = useConfigStore()
+
+/** 该连接的方言（系统库判定按它走） */
+const dialect = computed(() => dialectOf(props.connection?.dbType ?? ''))
+
+/** 设置项：是否展示系统库（默认展示，与补全候选同一策略） */
+const showSystemDatabases = computed(() =>
+  parseShowSystemDatabases(configStore.values.sql_show_system_databases))
 
 /** 双向绑定可见性 */
 const dialogVisible = computed({
@@ -40,8 +51,17 @@ const keyword = ref('')
 /** 当前选中的表 */
 const selectedTable = ref('')
 
-/** 该连接的库列表 */
-const databases = computed(() => (connId.value ? meta.databases[connId.value] ?? [] : []))
+/**
+ * 下拉框展示的库列表（系统库按设置过滤）。
+ *
+ * 只过滤**展示**：store 里的库一个不少，所以「之前选中的系统库」不会被清掉，
+ * 关掉设置也不需要重新拉元数据。
+ */
+const databases = computed(() => filterDatabaseInfos(
+  connId.value ? meta.databaseInfos[connId.value] ?? [] : [],
+  dialect.value,
+  showSystemDatabases.value,
+))
 
 /** 当前库的表 / 视图（按搜索词过滤） */
 const tables = computed(() => {
@@ -87,7 +107,16 @@ async function prepare() {
      */
     const preferred = [database.value, props.connection?.database ?? '']
       .find(name => Boolean(name) && list.includes(name))
-    database.value = preferred ?? list[0] ?? ''
+    /*
+     * 兜底取「列表首项」时跳过被隐藏的系统库：隐藏之后还把 information_schema
+     * 选中当默认查看对象，会让人以为设置没生效。列表里只有系统库时照旧取首项。
+     */
+    const visible = filterDatabaseInfos(
+      meta.ensureDatabaseInfos(connId.value),
+      dialect.value,
+      showSystemDatabases.value,
+    )
+    database.value = preferred ?? visible[0]?.name ?? list[0] ?? ''
     if (database.value) {
       await meta.loadTables(connId.value, database.value)
     }
@@ -139,7 +168,12 @@ async function selectTable(name: string) {
           placeholder="选择数据库"
           @change="handleDatabaseChange"
         >
-          <el-option v-for="name in databases" :key="name" :label="name" :value="name" />
+          <el-option
+            v-for="info in databases"
+            :key="info.name"
+            :label="info.name"
+            :value="info.name"
+          />
         </el-select>
 
         <el-input

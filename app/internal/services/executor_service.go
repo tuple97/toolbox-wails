@@ -351,7 +351,10 @@ func readOnlyForbiddenReason(sqlText string) string {
 }
 
 // ListDatabases 返回连接可见的所有数据库（库选择下拉）。
-func (s *DBService) ListDatabases(ctx context.Context, connID int64) ([]string, error) {
+//
+// 每一项带「是否系统库」标记：这个判断由**后端按方言**给出（MySQL 与 PostgreSQL
+// 的自带对象完全不同），前端只按设置过滤，不再自己维护一份方言表。
+func (s *DBService) ListDatabases(ctx context.Context, connID int64) ([]DatabaseInfo, error) {
 	conn, err := s.repo.GetConnection(connID)
 	if err != nil {
 		return nil, err
@@ -370,7 +373,16 @@ func (s *DBService) ListDatabases(ctx context.Context, connID int64) ([]string, 
 	if err != nil {
 		return nil, fmt.Errorf("读取数据库列表失败: %w", err)
 	}
-	return scanStringRows(rows)
+	names, err := scanStringRows(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	infos := make([]DatabaseInfo, 0, len(names))
+	for _, name := range names {
+		infos = append(infos, DatabaseInfo{Name: name, IsSystem: isSystemDatabase(conn.DBType, name)})
+	}
+	return infos, nil
 }
 
 // ListTables 返回指定库（PostgreSQL 下为 schema）下的表与视图名。
@@ -637,6 +649,56 @@ func scanStringRows(rows *sql.Rows) ([]string, error) {
 		return nil, fmt.Errorf("遍历结果失败: %w", err)
 	}
 	return names, nil
+}
+
+// DatabaseInfo 库列表项：名字 + 是否系统库。
+//
+// 「什么算系统库」是**驱动 / 服务端的事实**而不是界面偏好，所以在后端算：
+// 前端只按标记过滤（见 frontend/src/utils/sql/sqlVisibility.ts），
+// 那边保留的方言表退化为兜底（旧绑定 / 标记缺失时使用）。
+type DatabaseInfo struct {
+	Name     string `json:"name"`
+	IsSystem bool   `json:"isSystem"`
+}
+
+// 各方言自带的系统库 / 系统 schema（小写）
+var systemDatabaseNames = map[string]map[string]struct{}{
+	"mysql": {
+		"information_schema": {},
+		"mysql":              {},
+		"performance_schema": {},
+		"sys":                {},
+	},
+	"postgres": {
+		"pg_catalog":         {},
+		"information_schema": {},
+		"pg_toast":           {},
+	},
+}
+
+var (
+	// PostgreSQL 的临时 schema（pg_temp_3）与 toast 分片（pg_toast_16385）
+	pgTempSchemaPattern = regexp.MustCompile(`^pg_temp_?\d*$`)
+	pgToastPattern      = regexp.MustCompile(`^pg_toast_\d+$`)
+)
+
+// isSystemDatabase 该库（PostgreSQL 下是 schema）是不是系统对象。
+//
+// 精确比对 + 两条前缀规则，**不做 startsWith("sys") 这类猜测**：
+// 用户的 sys_logs、mysql_backup 是业务库，藏掉就是 bug。
+func isSystemDatabase(dbType string, name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if lower == "" {
+		return false
+	}
+	if isPostgresType(dbType) {
+		if _, ok := systemDatabaseNames["postgres"][lower]; ok {
+			return true
+		}
+		return pgTempSchemaPattern.MatchString(lower) || pgToastPattern.MatchString(lower)
+	}
+	_, ok := systemDatabaseNames["mysql"][lower]
+	return ok
 }
 
 // isPostgresType 判断连接类型是否为 PostgreSQL 系。

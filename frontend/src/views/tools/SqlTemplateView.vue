@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Events } from '@wailsio/runtime'
+import { useConfigStore } from '@/stores/configStore'
+import { useTabStore } from '@/stores/tabStore'
+import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
 import type { EditorView } from '@codemirror/view'
 import CodeEditor from '@/components/CodeEditor.vue'
 import { registerScriptGlobals } from '@/utils/sql/sqlCompletion'
@@ -43,6 +46,17 @@ const emit = defineEmits<{
   /** 首次加载完成（父级据此关闭 loading 遮罩） */
   (e: 'ready'): void
 }>()
+const configStore = useConfigStore()
+const tabStore = useTabStore()
+
+function handleSaveShortcut(event: KeyboardEvent) {
+  // 本页面隐藏时实例仍保留，不能和连接/词典页共同响应 Ctrl+S。
+  if (tabStore.activeSingleton !== 'sql-template') return
+  if (event.defaultPrevented) return
+  if (!matchesShortcut(event, shortcutOf('save-template', configStore.values.shortcut_config))) return
+  event.preventDefault()
+  void handleSave()
+}
 
 /** 模板列表 */
 const templates = ref<TemplateListItem[]>([])
@@ -432,6 +446,7 @@ function insertSnippet(snippet: SqlSnippet) {
 
 // 标签页挂载即加载数据（标签关闭重开时会重新加载）
 onMounted(async () => {
+  window.addEventListener('keydown', handleSaveShortcut)
   try {
     await Promise.all([loadTemplates(), loadConnections()])
 
@@ -448,6 +463,8 @@ onMounted(async () => {
     emit('ready')
   }
 })
+
+onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 </script>
 
 <template>

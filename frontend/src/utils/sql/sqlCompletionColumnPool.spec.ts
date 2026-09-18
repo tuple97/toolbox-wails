@@ -34,7 +34,7 @@ describe('列候选池：缓存', () => {
     expect(second.map(item => item.label)).toEqual(['id', 'name'])
   })
 
-  it('来源 / 方言不同则各存一份（描述里的来源表不同）', () => {
+  it('来源 / 方言不同则各存一份', () => {
     const source = columns(['id'])
     const byTable = pooledColumnItems(source, sourceOf('users'), 'mysql', '', false)
     const byAlias = pooledColumnItems(source, sourceOf('users', 'u'), 'mysql', '', false)
@@ -42,8 +42,9 @@ describe('列候选池：缓存', () => {
 
     expect(byAlias).not.toBe(byTable)
     expect(postgres).not.toBe(byTable)
+    // 来源列给的是**血缘源头表名**（别名在展示名里，不带额外信息），别名不同不影响它
     expect(byTable[0]?.columnDetail?.from).toBe('users')
-    expect(byAlias[0]?.columnDetail?.from).toBe('u')
+    expect(byAlias[0]?.columnDetail?.from).toBe('users')
   })
 
   it('空元数据返回空数组', () => {
@@ -54,6 +55,43 @@ describe('列候选池：缓存', () => {
     const items = pooledColumnItems(columns(['order']), sourceOf('users'), 'mysql', '', false)
     expect(items[0]?.label).toBe('order')
     expect(typeof items[0]?.apply).toBe('function')
+  })
+})
+
+describe('列候选池：来源列是血缘源头表名', () => {
+  it('物理列给真实表名，不是别名', () => {
+    const items = pooledColumnItems(
+      columns(['agent_desc']),
+      { table: 'device', alias: 't2' },
+      'mysql', '', true,
+    )
+    expect(items[0]?.columnDetail?.from).toBe('device')
+    // 别名并不消失：它仍然在展示名里（`t2.agent_desc`），只是不占「来源」这一列
+    expect(items[0]?.displayLabel).toBe('t2.agent_desc')
+  })
+
+  it('限定到库 / 模式时给「库.表」', () => {
+    const items = pooledColumnItems(
+      columns(['id']),
+      { schema: 'testdb', table: 'device', alias: 't2' },
+      'mysql', '', true,
+    )
+    expect(items[0]?.columnDetail?.from).toBe('testdb.device')
+  })
+
+  it('派生列给它自己的血缘来源表（穿透子查询）', () => {
+    const derived: PoolColumn[] = [{ name: 'uid', dataType: 'int', from: 'users' }]
+    const items = pooledColumnItems(derived, { table: 't1', alias: 't1' }, 'mysql', '', true)
+    expect(items[0]?.columnDetail?.from).toBe('users')
+  })
+
+  it('同名别名指向不同表时不串缓存（表名参与缓存键）', () => {
+    const meta = columns(['id'])
+    const device = pooledColumnItems(meta, { table: 'device', alias: 't' }, 'mysql', '', true)
+    const orders = pooledColumnItems(meta, { table: 'orders', alias: 't' }, 'mysql', '', true)
+    expect(device).not.toBe(orders)
+    expect(device[0]?.columnDetail?.from).toBe('device')
+    expect(orders[0]?.columnDetail?.from).toBe('orders')
   })
 })
 

@@ -10,13 +10,20 @@ import { analyzeSqlCursorText } from '@/utils/sql/sqlCursor'
 import type { MetadataProvider } from '@/utils/sql/sqlCompletion'
 import type { TableRef } from '@/utils/sql/sqlSchema'
 import {
+  DEFAULT_SUGGESTION_PROVIDERS,
   columnsOfRef,
   generalSuggestions,
   joinConditionSuggestions,
   resolveAfterDot,
+  runSuggestionProviders,
   staticOptions,
+  suggestionContextOf,
 } from '@/utils/sql/sqlSuggestions'
-import type { SqlSuggestDeps } from '@/utils/sql/sqlSuggestions'
+import type {
+  SqlSuggestDeps,
+  SuggestionContext,
+  SuggestionProvider,
+} from '@/utils/sql/sqlSuggestions'
 
 const MARK = '§'
 
@@ -141,6 +148,83 @@ describe('columnsOfRef', () => {
   it('物理表查元数据', () => {
     const ref: TableRef = { schema: '', table: 'users', alias: 'u' }
     expect(columnsOfRef(ref, deps).map(column => column.name)).toEqual(['id', 'name'])
+  })
+})
+
+describe('候选族注册表', () => {
+  /** 手搭上下文：只测「哪个族在什么位置出现」，不掺进分析器与元数据 */
+  function ctxOf(overrides: Partial<SuggestionContext>): SuggestionContext {
+    return {
+      ...suggestionContextOf({
+        intent: intentOf('SELECT § FROM users u'),
+        scopes: usersScope,
+        deps,
+      }),
+      ...overrides,
+    }
+  }
+
+  /** 该上下文下会出候选的族（顺序 = 注册顺序 = 候选出现顺序） */
+  function providersAt(ctx: SuggestionContext): string[] {
+    return DEFAULT_SUGGESTION_PROVIDERS
+      .filter(provider => provider.supports(ctx))
+      .map(provider => provider.id)
+  }
+
+  it('别名位置没有任何族（`AS` 之后只能写别名）', () => {
+    expect(providersAt(ctxOf({ kind: 'alias' }))).toEqual([])
+  })
+
+  it('表名位置只有表与库 —— 关键字不许冒出来干扰', () => {
+    expect(providersAt(ctxOf({ kind: 'source', tight: 'none' }))).toEqual(['tables', 'namespaces'])
+    // 正在写那个关键字本身（`FROM|`）：表与库都不给
+    expect(providersAt(ctxOf({ kind: 'source', tight: 'keyword' }))).toEqual([])
+  })
+
+  it('表达式位置：列 → 关键字 → 函数（表与库让位）', () => {
+    expect(providersAt(ctxOf({ kind: 'column' }))).toEqual(['columns', 'keywords', 'functions'])
+  })
+
+  it('表写完之后：表 + 库 + 关键字，但没有列', () => {
+    expect(providersAt(ctxOf({ kind: 'afterSource', tight: 'none' })))
+      .toEqual(['tables', 'namespaces', 'keywords'])
+  })
+
+  it('紧贴正在输入的标识符时库名让位（还在写名字，轮不到库）', () => {
+    // `FROM or|`：表名照给（orders 正是用户要的），库名不给
+    expect(providersAt(ctxOf({ kind: 'source', tight: 'name' }))).toEqual(['tables'])
+  })
+
+  it('函数候选可由 featureFlags 关掉（轻量场景）', () => {
+    expect(providersAt(ctxOf({ kind: 'column', flags: { disableFunctions: true } })))
+      .toEqual(['columns', 'keywords'])
+  })
+
+  it('supports 只看位置，不看数据 —— 元数据为空时结论不变', () => {
+    const emptyDeps: SqlSuggestDeps = {
+      ...deps,
+      metadata: { databases: () => [], tables: () => [], columns: () => [] },
+    }
+    const ctx = { ...ctxOf({ kind: 'source', tight: 'none' }), deps: emptyDeps }
+    expect(providersAt(ctx)).toEqual(['tables', 'namespaces'])
+    // 族照样被问到，只是给不出东西（「位置判断」与「数据可用性」不纠缠）
+    expect(runSuggestionProviders(ctx)).toEqual([])
+  })
+
+  it('注册表可替换：插入自定义族就出现在指定位置', () => {
+    const custom: SuggestionProvider = {
+      id: 'custom',
+      supports: () => true,
+      provide: () => [{ label: '我的候选' }],
+    }
+    const ctx = ctxOf({ kind: 'source', tight: 'none' })
+    expect(runSuggestionProviders(ctx, [custom]).map(item => item.label))
+      .toEqual(['我的候选'])
+    // 排在最前时它就在结果最前（顺序由注册表决定）
+    expect(runSuggestionProviders(ctx, [custom, ...DEFAULT_SUGGESTION_PROVIDERS])[0]?.label)
+      .toBe('我的候选')
+    // 空注册表 = 什么都不给（不像「关不掉」的隐式行为）
+    expect(runSuggestionProviders(ctx, [])).toEqual([])
   })
 })
 

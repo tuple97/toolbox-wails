@@ -247,7 +247,15 @@ describe('SQL 补全：别名位置与关键字矩阵', () => {
     expect(labels).toContain('AND')
     expect(labels).toContain('LIKE')
     expect(labels).toContain('COUNT')
-    expect(labels).toContain('GROUP BY')
+    /*
+     * 条件刚开头（`WHERE |`）不给 GROUP BY / ORDER BY / FROM / JOIN ——
+     * 这是槽位（where-expression）决定的「资格」，不是排序能把它们压下去的事。
+     * 条件写完（`WHERE a = 1 |`）之后 GROUP BY 才该出现，见下一条断言。
+     */
+    expect(labels).not.toContain('GROUP BY')
+    expect(labels).not.toContain('FROM')
+    expect(labels).not.toContain('JOIN')
+    expect(labelsOf('SELECT * FROM users WHERE id = 1 |')).toContain('GROUP BY')
     expect(labels).not.toContain('ALTER TABLE')
     expect(labels).not.toContain('CREATE TABLE')
   })

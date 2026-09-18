@@ -60,9 +60,15 @@ const pools = new WeakMap<readonly PoolColumn[], Map<string, ColumnCompletion[]>
 /** 元数据数组 → 缓存键 → 前缀 → 截断后的候选 */
 const trimmedPools = new WeakMap<readonly PoolColumn[], Map<string, Map<string, ColumnCompletion[]>>>()
 
-/** 缓存键：来源 / 方言 / 是否带限定符任一不同就是另一组候选 */
+/**
+ * 缓存键：来源 / 方言 / 是否带限定符任一不同就是另一组候选。
+ *
+ * **表名必须参与键**：候选的「来源列」显示的是血缘源头表名（见下面的 detail），
+ * 同一个别名指向不同表时（不同作用域里的 `t`）若共用缓存，第二张表会拿到
+ * 第一张表的候选 —— 来源列会指着另一张表。
+ */
 function poolKey(source: PoolSource, dialect: SqlDialect, qualified: boolean): string {
-  return `${dialect}\u0000${source.schema ?? ''}\u0000${source.alias}\u0000${qualified ? 'q' : 'p'}`
+  return `${dialect}\u0000${source.schema ?? ''}\u0000${source.table}\u0000${source.alias}\u0000${qualified ? 'q' : 'p'}`
 }
 
 /** 取（或建立）某个来源的全量候选（引用稳定：同一份元数据只构造一次） */
@@ -98,8 +104,14 @@ function fullPool(
         },
         detail: {
           dataType: column.dataType,
-          // 派生列自带来源表时用它：`(SELECT * FROM users) t1` 的列来自 users
-          from: column.from ?? source.alias,
+          /*
+           * 「来源」列显示**血缘源头表名**，不是别名：
+           *  - 派生列自带来源表（`(SELECT id FROM users) t1` 的列来自 users）→ 用它，
+           *    这正是「这一列的值从哪张表来」的答案；
+           *  - 物理列 → 真实表名（带库 / 模式）。别名对「这列是什么」没有信息量，
+           *    何况列表左边的展示名本身就是 `t2.agent_desc`，别名已经写在那儿了。
+           */
+          from: column.from ?? (source.schema ? `${source.schema}.${source.table}` : source.table),
           comment: column.comment,
         },
         dialect,

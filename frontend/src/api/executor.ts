@@ -13,7 +13,13 @@ import {
   ListTableColumns,
   ListTables,
 } from './bindings'
-import type { ExecutorColumn, ExecutorRequest, ExecutorResult, TableForeignKey } from '@/types'
+import type {
+  DatabaseInfo,
+  ExecutorColumn,
+  ExecutorRequest,
+  ExecutorResult,
+  TableForeignKey,
+} from '@/types'
 
 /**
  * 执行用户输入的 SQL；cancel() 可终止正在执行的查询。
@@ -33,10 +39,18 @@ export function executeStatement(req: ExecutorRequest): CancellablePromise<Execu
   }) as unknown as CancellablePromise<ExecutorResult>
 }
 
-/** 库列表（连接可见的全部数据库） */
-export async function fetchDatabases(connId: number): Promise<string[]> {
+/**
+ * 库列表（连接可见的全部数据库）。
+ *
+ * `isSystem` 由后端按方言判定（MySQL 与 PostgreSQL 的自带对象不同）：
+ * 前端只按设置项过滤，不自己维护一份方言表 —— 见 utils/sql/sqlVisibility.ts。
+ */
+export async function fetchDatabases(connId: number): Promise<DatabaseInfo[]> {
   const rows = await ListDatabases(connId)
-  return (rows ?? []).map(row => String(row))
+  return (rows ?? []).map(row => ({
+    name: String(row?.name ?? ''),
+    isSystem: Boolean(row?.isSystem),
+  }))
 }
 
 /** 表与视图列表 */

@@ -11,6 +11,9 @@ import {
 import ConnectionMetadataDialog from '@/components/ConnectionMetadataDialog.vue'
 import { Events } from '@wailsio/runtime'
 import { useMetadataStore } from '@/stores/metadataStore'
+import { useConfigStore } from '@/stores/configStore'
+import { useTabStore } from '@/stores/tabStore'
+import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
 import type { ConnectionEnv, DBConnection } from '@/types'
 
 /**
@@ -27,6 +30,8 @@ const emit = defineEmits<{
   /** 首次加载完成（父级据此关闭 loading 遮罩） */
   (e: 'ready'): void
 }>()
+const configStore = useConfigStore()
+const tabStore = useTabStore()
 
 /** 支持的数据库类型 */
 const DB_TYPES = [
@@ -339,7 +344,14 @@ async function handleDelete(conn: DBConnection) {
  * 视图是切换即卸载的（非 keep-alive），所以不会在别的标签页误触发。
  */
 function handleSaveShortcut(event: KeyboardEvent) {
-  if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') {
+  // 单例页面会用 v-show 常驻；只有当前可见页面可以处理自己的快捷键。
+  if (tabStore.activeSingleton !== 'connections') {
+    return
+  }
+  if (event.defaultPrevented) {
+    return
+  }
+  if (!matchesShortcut(event, shortcutOf('save-connection', configStore.values.shortcut_config))) {
     return
   }
   event.preventDefault()

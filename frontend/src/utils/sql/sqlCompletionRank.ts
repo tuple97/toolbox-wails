@@ -116,13 +116,18 @@ function isSubsequence(prefix: string, label: string): boolean {
  * 这样各类型之间的相对顺序与改造前完全一致（列 → 别名 → 表 / 库 → 函数 → 关键字）。
  */
 export function computeMatchScore(input: RankInput): number {
+  const prefix = input.prefix.trim()
+  /*
+   * 空前缀时**不参与历史加权**（文档 §27 / §28）：没有输入就没有「用户在找哪个」的
+   * 信号，这时候必须严格按 schema 顺序 —— 否则被用过几次的 `created_at` 会跑到
+   * `id` 前面，列表顺序与建表顺序对不上。有前缀时才启用 fuzzy / pinyin / history。
+   */
+  const history = prefix ? (input.historyBoost ?? 0) : 0
   const typeBonus = TYPE_BONUS[input.type ?? ''] ?? 0
-  const history = input.historyBoost ?? 0
   const highFreq = input.isHighFrequencyKeyword ?? HIGH_FREQ_KEYWORDS.has(input.label)
   const keywordBonus = highFreq && input.type === 'keyword' ? HIGH_FREQ_KEYWORD_BONUS : 0
   const base = typeBonus + input.boost + history + keywordBonus
 
-  const prefix = input.prefix.trim()
   if (!prefix) {
     return base
   }
@@ -196,6 +201,9 @@ export function sortByRank<T extends Rankable>(options: T[], prefix: string): T[
     .map((option, index) => ({
       option,
       index,
+      // 匹配质量是第一排序键。以前把 boost 直接加进总分，字段的语义
+      // 权重会压过已经完整输入的关键字（如 dis → DISTINCT），不符合输入预期。
+      tier: tierOf(option.label, prefix.trim()),
       score: computeMatchScore({
         label: option.label,
         prefix,
@@ -204,7 +212,7 @@ export function sortByRank<T extends Rankable>(options: T[], prefix: string): T[
         historyBoost: historyBoostOf(option.label),
       }),
     }))
-    .sort((a, b) => (b.score - a.score) || (a.index - b.index))
+    .sort((a, b) => (b.tier - a.tier) || (b.score - a.score) || (a.index - b.index))
     .map(item => item.option)
 }
 

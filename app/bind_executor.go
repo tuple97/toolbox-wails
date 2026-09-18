@@ -24,7 +24,8 @@ func (a *App) ExecuteStatement(ctx context.Context, req services.ExecutorRequest
 }
 
 // ListDatabases 返回连接可见的所有数据库（库选择下拉）。
-func (a *App) ListDatabases(ctx context.Context, connID int64) ([]string, error) {
+// 每项带「是否系统库」标记，由适配层按方言判定（前端只负责按设置过滤）。
+func (a *App) ListDatabases(ctx context.Context, connID int64) ([]services.DatabaseInfo, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
 	}

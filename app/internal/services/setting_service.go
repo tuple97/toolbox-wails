@@ -41,6 +41,13 @@ var defaultSettings = []database.Setting{
 	{Key: "sql_completion_trigger", Type: SettingTypeString, Value: "positional"},
 	// 表名补全后是否自动补别名（true / false，默认关闭）
 	{Key: "sql_completion_alias", Type: SettingTypeBoolean, Value: "false"},
+	// 库下拉框与 SQL 补全候选里是否展示系统库（true / false，默认展示：
+	// 与改造前行为一致；隐藏只影响「主动列出」，显式写 mysql.user 仍能解析）
+	{Key: "sql_show_system_databases", Type: SettingTypeBoolean, Value: "true"},
+	// 模板块片段插入后，Tab 是否在占位符之间依次跳转（true / false，默认开启）
+	{Key: "template_placeholder_tab", Type: SettingTypeBoolean, Value: "true"},
+	// 用户自定义快捷键（JSON：动作 ID → 组合键；空对象表示使用前端默认值）
+	{Key: "shortcut_config", Type: SettingTypeJSON, Value: "{}"},
 }
 
 // SettingService 负责全局配置的读写。

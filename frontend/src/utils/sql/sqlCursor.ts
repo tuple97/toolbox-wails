@@ -136,10 +136,12 @@ export function scanClause(prefix: string): ClauseScan {
   let depth = 0
   /** 反向扫描时是否跨过了一个左括号 */
   let enteredParen = false
-  /** 已读过的上一个词（用于区分 GROUP BY / ORDER BY 这类两词结构） */
-  let previousKeyword = ''
   /** 是否让过了一个紧贴光标的词（`FROM or|` 的 `or`）—— 位置结论来自它左边的关键字 */
   let skippedName = false
+  /** 那个被让过的词的起点：tail 要从这里截断，不能把它算成「已写好的内容」 */
+  let skippedNameStart = prefix.length
+  /** 已读过的上一个词（用于区分 GROUP BY / ORDER BY 这类两词结构） */
+  let previousKeyword = ''
 
   const result = (kind: ClauseKind, keyword = '', at = index, tight: TightKind = 'none'): ClauseScan => ({
     kind,
@@ -232,13 +234,24 @@ export function scanClause(prefix: string): ClauseScan {
            * `FROM |` → source（只给表/库）；`FROM t |` → afterSource（再给 JOIN/WHERE 等关键字）；
            * `FROM t, |` → 逗号后面又该接表名，回到 source。
            */
-          const tail = prefix.slice(index).trim()
+          /*
+           * tail 要排除「正在输入的那个词」：`FROM or|` 里 `or` 是没写完的表名，
+           * 它不是「已写好的来源」。不排除的话这里会判成 afterSource，
+           * 于是表名候选整批消失（资格过滤后一条不剩）。
+           */
+          const tail = prefix.slice(index, skippedName ? skippedNameStart : prefix.length).trim()
           /*
            * `FROM|`（紧贴，还没敲空格）与 `FROM |` 位置不同：
            * 前者还在写这个词，表 / 库都不该给；后者才是「该写表名」的空位。
            */
           const tight: TightKind = index === prefix.length ? 'keyword' : 'none'
-          if (!tail || tail.endsWith(',')) {
+          /*
+           * 还在写来源的三种情形：什么都没写、刚敲了逗号（接着写下一个来源）、
+           * 以及**限定名写到一半**（`FROM mysql.` —— 库名写了，表名还没写）。
+           * 最后一种不能算「来源已完成」，否则槽位会按 afterSource 只给关键字，
+           * 表名候选整批消失。
+           */
+          if (!tail || tail.endsWith(',') || tail.endsWith('.')) {
             return result('source', lower, index, tight)
           }
           if (tail.includes('(') || tail.includes(')')) {
@@ -248,15 +261,18 @@ export function scanClause(prefix: string): ClauseScan {
         }
         if (COLUMN_CLAUSE_KEYWORDS.has(lower)) {
           /*
-           * 贴住光标的词更像「正在输入的名字」：`SELECT * FROM or|` 里的 `or`
-           * 其实要写成 `orders`，不能让它当关键字抢走 context。
-           * 跳过它继续往左找真正的子句关键字（于是落到 `from` → afterSource，照样给表名）。
+           * 贴住光标的词，只有「左边明确是名字位置」时才当作**还没写完的名字**：
            *
-           * 只在词**紧贴光标**时让步：写完关键字再敲空格（`FROM or |`）不受影响，
-           * `AS` / `BY` 两个两词结构在上面单独处理，也不受影响。
+           *   SELECT * FROM or|   → 左边是 `from`（表位置）⇒ `or` 其实是 orders
+           *   SELECT * FROM users WHERE|  → 左边是表名 ⇒ 这就是 WHERE 关键字本身
+           *   SELECT CASE|        → 左边是 SELECT（表达式位置）⇒ 关键字本身
+           *
+           * 只有前一种情况让步（跳过它继续往左找真正的子句关键字）。
+           * 反例曾经踩过：一刀切「紧贴光标就不算关键字」会把 `WHERE|` 判成表位置。
            */
-          if (index === prefix.length) {
+          if (index === prefix.length && previousIsTableClauseKeyword(prefix, word.start)) {
             skippedName = true
+            skippedNameStart = word.start
             previousKeyword = lower
             index = word.start
             continue
@@ -274,6 +290,20 @@ export function scanClause(prefix: string): ClauseScan {
 
   // 进了括号又判断不出关键字：按表达式位置处理（函数参数、子查询列清单等）
   return result(enteredParen ? 'column' : 'any')
+}
+
+/**
+ * 紧贴光标的关键字，左边是不是「表位置关键字」（from / join / into / update…）。
+ *
+ * 用来区分 `FROM or|`（`or` 是还没写完的表名）与 `WHERE|`（`where` 就是关键字）。
+ */
+function previousIsTableClauseKeyword(prefix: string, before: number): boolean {
+  let head = before
+  while (head > 0 && /\s/.test(prefix[head - 1] ?? '')) {
+    head--
+  }
+  const previous = readWordBackward(prefix, head)
+  return Boolean(previous && TABLE_CLAUSE_KEYWORDS.has(previous.text.toLowerCase()))
 }
 
 /** 从 index 向左读一个词，返回词与起始下标 */
@@ -431,6 +461,10 @@ export interface SqlColumnIntent {
   previousItemKind: PreviousItemKind
   /** 上一个输出项用的限定符（多选时新列沿用它的 `t.`）；没有为空串 */
   previousQualifier: string
+  /** 当前输出项原文（保留空白；判定槽位要区分「新的一项」与「已写了表达式」） */
+  itemText: string
+  /** 当前输出项还没写任何表达式：`SELECT |` / `SELECT t.` 为真，`SELECT id |` 为假 */
+  itemEmpty: boolean
   /** 列选择模式 */
   mode: ColumnCompletionMode
 }
@@ -445,8 +479,36 @@ function emptyColumnIntent(): SqlColumnIntent {
     commaFollowedBySpace: false,
     previousItemKind: 'unknown',
     previousQualifier: '',
+    itemText: '',
+    itemEmpty: false,
     mode: 'single',
   }
+}
+
+/** 单独写一个关键字也算「还没开始写表达式」（`SELECT DISTINCT |`） */
+const ITEM_ONLY_KEYWORDS = new Set(['distinct', 'all'])
+
+/**
+ * 该输出项是否还没写表达式内容。
+ *
+ * `SELECT |`、`SELECT t.`、`SELECT DISTINCT |` 都是「新的一项刚开头」，
+ * 而 `SELECT id |`、`SELECT a + ` 已经在表达式里了 —— 两者允许的关键字不同
+ * （前者不该出现 FROM / WHERE / GROUP BY）。
+ */
+function isEmptyItem(itemText: string, qualifier: string, prefix: string): boolean {
+  // `SELECT DISTINCT |` 里的 DISTINCT 只是列表开头的修饰，不影响「这一项还没开始写」
+  if (prefix && !ITEM_ONLY_KEYWORDS.has(prefix.toLowerCase())) {
+    return false
+  }
+  let head = itemText.trim()
+  if (qualifier && head.endsWith('.')) {
+    head = head.slice(0, -1)
+  }
+  if (qualifier) {
+    head = head.slice(0, Math.max(0, head.length - qualifier.length))
+  }
+  const trimmed = head.trim()
+  return trimmed === '' || ITEM_ONLY_KEYWORDS.has(trimmed.toLowerCase())
 }
 
 /** 忽略引号后的括号深度（> 0 表示在函数参数 / 子查询括号里） */
@@ -616,7 +678,14 @@ function itemKindOf(item: string): PreviousItemKind {
 export function readColumnIntent(prefix: string): SqlColumnIntent {
   const scan = scanClause(prefix)
   const intent = emptyColumnIntent()
-  if (scan.kind !== 'column' || scan.keyword !== 'select') {
+  /*
+   * INPUT：`SELECT` 列表（含 `SELECT DISTINCT` —— DISTINCT 是列表开头的修饰，
+   * 位置仍然是「新的一项」）。其它关键字（WHERE / ON / SET…）不是输出项，一律空意图。
+   */
+  const inSelectList = scan.keyword === 'select'
+    || scan.keyword === 'distinct'
+    || scan.keyword === 'all'
+  if (scan.kind !== 'column' || !inSelectList) {
     return intent
   }
 
@@ -636,13 +705,15 @@ export function readColumnIntent(prefix: string): SqlColumnIntent {
   const previousText = afterComma ? previousItemText(prefix) : ''
 
   const { qualifier, prefix: word } = qualifierAndPrefix(itemText)
+  // `DISTINCT` / `ALL` 只是列表开头的修饰，不算「已经在输入词」
+  const typedWord = ITEM_ONLY_KEYWORDS.has(word.toLowerCase()) ? '' : word
   const mode: ColumnCompletionMode = (() => {
     // 逗号紧跟光标：继续写下一列的单选状态
     if (afterComma && !commaFollowedBySpace) {
       return 'single'
     }
     // 逗号后落空白 / 限定符后空前缀 / 列表刚开：都是「新的一项还没开始输入」
-    if (!word) {
+    if (!typedWord) {
       return 'multi'
     }
     return 'single'
@@ -656,6 +727,8 @@ export function readColumnIntent(prefix: string): SqlColumnIntent {
     commaFollowedBySpace,
     previousItemKind: itemKindOf(previousText),
     previousQualifier: previousQualifierOf(previousText),
+    itemText: itemText.trim(),
+    itemEmpty: isEmptyItem(itemText, qualifier, word),
     mode,
   }
 }

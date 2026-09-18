@@ -13,6 +13,10 @@ import { copyRowSql, dialectOf, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/uti
 import { formatSql, minifySql as minifySqlText } from '@/utils/sql/sqlFormat'
 import { copyText } from '@/utils/clipboard'
 import { fetchConnections } from '@/api/db'
+import { useConfigStore } from '@/stores/configStore'
+import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
+import { filterDatabaseInfos, parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
+import type { DatabaseInfo } from '@/types'
 import { DEFAULT_PAGE_SIZE } from '@/api/templates'
 import {
   executeStatement,
@@ -66,9 +70,23 @@ const emit = defineEmits<{
 
 const logStore = useLogStore()
 
+/** 设置项（SQL 提示触发 / 系统库可见性等）由配置 store 统一持有 */
+const configStore = useConfigStore()
+
 const connections = ref<DBConnection[]>([])
 const connId = ref<number | null>(null)
-const databases = ref<string[]>([])
+/**
+ * 数据库**原始列表**：选择与校验逻辑用它（「选过的库还在不在列表里」不能被展示设置影响）。
+ */
+const allDatabases = ref<DatabaseInfo[]>([])
+/**
+ * 下拉框展示的库列表：系统库按设置项过滤。
+ *
+ * 做成 computed 而不是在请求时过滤：切换设置项立即生效，且**不需要重新拉元数据**
+ * （与「可见性只是展示策略」一致）。判定用后端给的 `isSystem` 标记。
+ */
+const databases = computed(() =>
+  filterDatabaseInfos(allDatabases.value, dialectOf(dbType.value), showSystemDatabases.value))
 const database = ref('')
 
 /** 编辑器内容与执行状态 */
@@ -139,6 +157,15 @@ const lastDatabaseByConn = new Map<number, string>()
 
 /** 当前方言：语句切分与补全都要按它走（MySQL 的 DELIMITER/反引号、PG 的 dollar 引用等） */
 const dbType = computed(() => currentConnection.value?.dbType ?? 'mysql')
+
+/**
+ * 设置项：下拉框里是否展示系统库（默认展示）。
+ *
+ * 与补全候选用的是同一个策略模块（utils/sql/sqlVisibility），
+ * 于是不会出现「下拉里有、补全里没有」这种自相矛盾的状态。
+ */
+const showSystemDatabases = computed(() =>
+  parseShowSystemDatabases(configStore.values.sql_show_system_databases))
 
 /** 最近一次执行是否为「分析」（EXPLAIN）：结果表格据此给出悬停优化建议 */
 const analysisResult = ref(false)
@@ -284,6 +311,12 @@ const editorMenuItems = computed<ContextMenuAction[]>(() => {
     { key: 'copy', label: '复制', shortcut: 'Ctrl+C', divided: true },
     // 与工具条同一个按钮：标签跟着当前范围的形态走（多行 → 压缩，单行 → 美化）
     { key: 'format', label: formatAction.value === 'minify' ? '压缩' : '美化', shortcut: 'Alt+Shift+F', disabled: running.value },
+    /*
+     * 查找 / 替换：与当前 SQL 内容无关的通用能力，放最后。
+     * 快捷键（Ctrl+F / Ctrl+D 选中同名单词）在编辑器内部始终可用，
+     * 这一项只是让能力可发现 —— 菜单让右手鼠标找到它，快捷键是日常路径。
+     */
+    { key: 'search', label: '查找替换', shortcut: 'Ctrl+F' },
   )
   return items
 })
@@ -375,6 +408,9 @@ function handleEditorMenuSelect(item: ContextMenuAction) {
       break
     case 'format':
       applyFormat()
+      break
+    case 'search':
+      editorRef.value?.openSearch()
       break
   }
 }
@@ -483,7 +519,7 @@ async function loadConnections() {
  */
 async function loadDatabases(preferred = ''): Promise<boolean> {
   if (!connId.value) {
-    databases.value = []
+    allDatabases.value = []
     database.value = ''
     return false
   }
@@ -493,7 +529,7 @@ async function loadDatabases(preferred = ''): Promise<boolean> {
     if (connId.value !== requestedConn) {
       return false
     }
-    databases.value = list
+    allDatabases.value = list
 
     if (!list.length) {
       // 列表为空多半是账号权限（看不到任何库）或服务端配置问题，说清楚别让用户猜
@@ -502,7 +538,7 @@ async function loadDatabases(preferred = ''): Promise<boolean> {
     }
 
     if (database.value) {
-      if (!list.includes(database.value)) {
+      if (!list.some(info => info.name === database.value)) {
         // 选过的库这次不在列表里（权限变化 / 已删除 / 列表不完整）：保留并说明，不静默改库
         ElMessage.warning(`所选库 ${database.value} 不在当前库列表中，仍按它执行；如需切换请重新选择`)
       }
@@ -510,7 +546,7 @@ async function loadDatabases(preferred = ''): Promise<boolean> {
     }
 
     const fallback = currentConnection.value?.database ?? ''
-    const candidate = [preferred, fallback].find(name => name && list.includes(name))
+    const candidate = [preferred, fallback].find(name => name && list.some(info => info.name === name))
     database.value = candidate ?? fallback
     return true
   }
@@ -519,7 +555,7 @@ async function loadDatabases(preferred = ''): Promise<boolean> {
       return false
     }
     // 只清空候选列表，保留 database：否则执行时会静默落到连接默认库上
-    databases.value = []
+    allDatabases.value = []
     ElMessage.error(`读取库列表失败：${e instanceof Error ? e.message : String(e)}`)
     return false
   }
@@ -581,27 +617,46 @@ function handleEditorMount(view: EditorView) {
  *  - Alt + Shift + F：格式化（美化 / 压缩二合一，方向按当前范围形态决定）
  */
 function handleKeydown(event: KeyboardEvent) {
-  if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && isFormatKey(event)) {
+  if (event.defaultPrevented) {
+    return
+  }
+  if (matchesShortcut(event, shortcutOf('format-sql', configStore.values.shortcut_config))) {
     event.preventDefault()
     event.stopPropagation()
     applyFormat()
     return
   }
 
-  if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') {
+  if (matchesShortcut(event, shortcutOf('run-sql', configStore.values.shortcut_config))) {
+    event.preventDefault()
+    event.stopPropagation()
+    void runCurrent()
     return
   }
-  event.preventDefault()
-  event.stopPropagation()
-  void runCurrent()
-}
-
-/**
- * 是否按下了 F。
- * 优先用 `code`：Alt/Shift 组合下不同键盘布局给出的 `key` 可能是 'f'、'F' 甚至别的字符。
- */
-function isFormatKey(event: KeyboardEvent): boolean {
-  return event.code === 'KeyF' || event.key.toLowerCase() === 'f'
+  if (matchesShortcut(event, shortcutOf('refresh-metadata', configStore.values.shortcut_config))) {
+    event.preventDefault()
+    event.stopPropagation()
+    void refreshMeta()
+    return
+  }
+  const cursor = editorView?.state.selection.main.head
+  if (cursor != null && matchesShortcut(event, shortcutOf('rename-sql-symbol', configStore.values.shortcut_config))) {
+    event.preventDefault()
+    event.stopPropagation()
+    editorRef.value?.renameSymbolAt(cursor)
+    return
+  }
+  if (cursor != null && matchesShortcut(event, shortcutOf('goto-sql-definition', configStore.values.shortcut_config))) {
+    event.preventDefault()
+    event.stopPropagation()
+    editorRef.value?.goToDefinitionAt(cursor)
+    return
+  }
+  if (cursor != null && matchesShortcut(event, shortcutOf('copy-create-table', configStore.values.shortcut_config))) {
+    event.preventDefault()
+    event.stopPropagation()
+    void editorRef.value?.copyCreateTableAt(cursor)
+  }
 }
 
 /**
@@ -1327,12 +1382,16 @@ watch([connId, database, sql, pageSize], notifyChange)
           filterable
           style="width: 190px"
         >
+          <!-- 系统库带一个「系统」标记：解释「为什么关掉设置后它就不见了」 -->
           <el-option
-            v-for="name in databases"
-            :key="name"
-            :label="name"
-            :value="name"
-          />
+            v-for="info in databases"
+            :key="info.name"
+            :label="info.name"
+            :value="info.name"
+          >
+            <span>{{ info.name }}</span>
+            <small v-if="info.isSystem" class="executor__db-system">系统</small>
+          </el-option>
         </el-select>
 
         <el-button title="刷新元数据（表 / 字段缓存）" @click="refreshMeta">
@@ -1484,6 +1543,17 @@ watch([connId, database, sql, pageSize], notifyChange)
   gap: 12px;
   /* 下边框移到操作行上：两行合起来算一个头部区块 */
   padding: 10px 16px 8px;
+}
+
+/*
+ * 库下拉里的「系统」标记（判定见 utils/sql/sqlVisibility.ts）：
+ * 说明这一项是数据库自带对象，关掉「展示系统库」后它就消失。弱化右对齐，不抢名字。
+ */
+.executor__db-system {
+  float: right;
+  margin-left: 12px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
 }
 
 .executor__toolbar-left {

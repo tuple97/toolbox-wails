@@ -50,7 +50,7 @@ import { insertCompletionText, startCompletion } from '@codemirror/autocomplete'
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete'
 import type { EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
-import { matchedByPinyinOnly, matchesPrefix, recordCompletionSelection, sortByRank } from './sqlCompletionRank'
+import { matchesPrefix, recordCompletionSelection, sortByRank } from './sqlCompletionRank'
 import { joinConditionItems } from './sqlCompletionJoin'
 import type { ForeignKeyInfo, JoinSide } from './sqlCompletionJoin'
 import {
@@ -65,7 +65,10 @@ import { typedValueItems } from './sqlValueSuggestions'
 import type { SmartColumn, SmartCompareValue } from './sqlSmartItems'
 import { analyzeSqlCursorText } from './sqlCursor'
 import type { ClauseKind, ClauseScan, CompletionContextKind } from './sqlCursor'
+import type { DatabaseInfo } from '@/types'
 import { useDictStore } from '@/stores/dictStore'
+import { isCandidateAllowed } from './completion/sqlCompletionEligibility'
+import { resolveCompletionSlot } from './completion/sqlCompletionSlot'
 import { useMetadataStore } from '@/stores/metadataStore'
 import { scopeRanges } from '@/utils/sql/sqlSyntax'
 import type { TextRange } from '@/utils/sql/sqlSyntax'
@@ -159,6 +162,14 @@ export interface TemplateVariable {
 /** 元数据提供者：默认走 metadataStore，测试可注入静态数据 */
 export interface MetadataProvider {
   databases(connId: number): string[]
+  /**
+   * 库列表（含「是否系统库」标记，可选）。
+   *
+   * 有它时，库名候选的系统库过滤按**后端标记**判断（适配层知道自己的方言有
+   * 哪些自带对象）；没有就退回「名字 + 方言表」（见 utils/sql/sqlVisibility.ts）。
+   * 之所以做成可选：轻量场景（模板变量的输入框）只需要名字。
+   */
+  databaseInfos?: (connId: number) => DatabaseInfo[]
   tables(connId: number, database: string): string[]
   columns(connId: number, database: string, table: string): ExecutorColumn[]
   /**
@@ -206,6 +217,13 @@ export interface CompletionFeatureFlags {
    * 因此设置改完**下一次补全**就生效，不用重建编辑器。
    */
   autoTableAlias?: boolean
+  /**
+   * 是否在候选里展示系统库（设置项 `sql_show_system_databases`，默认展示）。
+   *
+   * 只影响**候选生成**：显式写下 `mysql.user` 时仍然照常解析 ——
+   * 隐藏不等于非法（见 utils/sql/sqlVisibility.ts）。
+   */
+  showSystemDatabases?: boolean
 }
 
 /**
@@ -319,10 +337,11 @@ function finalizeBundle(
   const prefix = state.sliceDoc(Math.min(bundle.from, pos), pos)
 
   /*
-   * 中文表名 / 列名靠拼音首字母命中时，编辑器自带的字面量匹配认不出来，
-   * 这种情况下改为本模块过滤（只留真正命中的）并交出排序权。
+   * 有输入时必须由本模块同时过滤和排序。若仍交给 CodeMirror 的 filter，
+   * 它会按自身的模糊匹配分数再次重排，覆盖「完整/前缀命中优先」的规则。
+   * 这也顺便覆盖拼音命中；匹配口径统一为 matchesPrefix。
    */
-  const customFilter = Boolean(prefix) && bundle.options.some(option => matchedByPinyinOnly(option.label, prefix))
+  const customFilter = Boolean(prefix)
   const matched = customFilter
     ? bundle.options.filter(option => matchesPrefix(option.label, prefix))
     : bundle.options
@@ -706,49 +725,63 @@ function sqlBundle(
   const multiColumn = columnIntent.mode === 'multi'
   const preferredQualifier = multiColumn ? columnIntent.previousQualifier : ''
 
+  /*
+   * 槽位：光标处「允许出现什么」的语义结论（见 completion/sqlCompletionSlot.ts）。
+   * 资格过滤（下一段）与关键字集合都按它算 —— `SELECT |` 是 select-item-start，
+   * 于是 FROM / WHERE / GROUP BY / ORDER BY 根本不会生成。
+   */
+  const slot = resolveCompletionSlot({
+    kind: contextKind,
+    keyword: scan.keyword,
+    previousKeyword: scan.previousKeyword,
+    tail: scan.tail,
+    tight: scan.tight,
+    column: columnIntent,
+  })
+  const eligibility = { slot, keyword: scan.keyword, hasTail: Boolean(scan.tail) }
+
   const qualifier = readQualifierBeforeCursor(lineBefore)
-  // 点号路径的候选直接来自候选池（数组是共享缓存）：先复制再追加，别写坏缓存
-  const options = qualifier
-    ? [...resolveAfterDot(qualifier, scopes, deps, word)]
-    : generalSuggestions({
-        intent,
-        scopes,
-        deps,
-        flags: runtime.featureFlags,
-        skipColumns: promoted.skip,
-        prefix: word,
-        autoAlias,
-        preferredQualifier,
-      })
 
   /*
-   * ON 后面追加整条关联条件（外键 + 命名启发式）。
-   * 与普通列候选并存：想自己写条件的人照样能挑列名。
+   * 候选族注册表（见 completion/sqlBundleProviders.ts）：
+   * 点号路径 / 通用 / 关联条件 / GROUP BY 推荐 / 智能项各自声明「什么时候轮到我」，
+   * 顺序由注册表决定 —— 与改造前这里的书写顺序逐条对应。
    */
-  if (contextKind === 'join-on' && runtime.featureFlags.joinSuggestions !== false) {
-    options.push(...joinConditionSuggestions(scopes, deps, intent.joinTarget))
-  }
+  const options = runBundleProviders({
+    state,
+    pos,
+    doc,
+    lineBefore,
+    word,
+    qualifier,
+    intent,
+    scopes,
+    deps,
+    flags: runtime.featureFlags,
+    slot,
+    contextKind,
+    smart,
+    fragments,
+    autoAlias,
+    preferredQualifier,
+    promoted,
+    columnsOf,
+  })
 
-  options.push(...promoted.items)
-  if (smart) {
-    options.push(...smartSuggestions({
-      intent,
-      pos,
-      scopes,
-      deps,
-      columnsOf,
-      fragments,
-    }))
-  }
+  /*
+   * 资格过滤先于排序（文档 §26）：不该出现在这个槽位的候选**直接删掉**，
+   * 而不是靠 boost 把它们压到后面（`WHERE.boost -= 1000` 那套）。
+   */
+  const eligible = options.filter(option => isCandidateAllowed(option, eligibility))
 
   /*
    * 给列候选打上本次的列模式：复选框渲染与空格键都只认这个标记。
    * 这里复制成新对象，候选池里共享的那份保持干净。
    */
   const stamped = multiColumn
-    ? options.map(option =>
+    ? eligible.map(option =>
         (option.type === 'field' ? { ...option, columnMode: 'multi' as const } : option))
-    : options
+    : eligible
 
   return { from: range.from, to: range.to, options: stamped, contextKind }
 }
@@ -957,6 +990,8 @@ function isDerivedTableBody(doc: string, range: TextRange): boolean {
  */
 export const defaultMetadataProvider: MetadataProvider = {
   databases: connId => metadata().ensureDatabases(connId),
+  // 带系统库标记的库列表：库名候选按后端标记过滤，前端不再自己认方言
+  databaseInfos: connId => metadata().ensureDatabaseInfos(connId),
   tables: (connId, database) => metadata().ensureTables(connId, database),
   columns: (connId, database, table) => metadata().ensureColumns(connId, database, table),
   values: (_connId, _database, _table, column) => dictionaryValues(column),
@@ -1019,12 +1054,9 @@ export type { TableRef, VirtualColumn } from './sqlSchema'
 // 每个入口都只吃「语义对象 + 依赖」，本文件只做入口、装配与再导出。
 import {
   columnsOfRef,
-  generalSuggestions,
   groupByPromotion,
-  joinConditionSuggestions,
   readQualifierBeforeCursor,
-  resolveAfterDot,
-  smartSuggestions,
   staticOptions,
 } from './sqlSuggestions'
+import { runBundleProviders } from './completion/sqlBundleProviders'
 import type { SqlSuggestDeps } from './sqlSuggestions'

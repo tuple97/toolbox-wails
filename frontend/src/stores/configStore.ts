@@ -28,6 +28,11 @@ const DEFAULTS: Record<SettingKey, string> = {
   sidebar_view: '{}',
   sql_completion_trigger: 'positional',
   sql_completion_alias: 'false',
+  // 默认显示系统库：与改造前的行为一致（见 utils/sql/sqlVisibility.ts）
+  sql_show_system_databases: 'true',
+  // 模板块片段插入后，Tab 在占位符之间跳转（默认开启）
+  template_placeholder_tab: 'true',
+  shortcut_config: '{}',
 }
 
 export const useConfigStore = defineStore('config', () => {
@@ -138,6 +143,19 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  /**
+   * 全部配置恢复默认值（设置页「高级 → 恢复默认设置」）。
+   *
+   * 逐项走 `set` 的待遇（应用到界面 + 排一次落盘），而不是直接替换 `values`：
+   * 只改数据不改界面会留下「设置显示默认、实际还是旧值」的状态。
+   * 每一项都提交保存，于是中途失败也只丢不上的那几项，不会整体静默失效。
+   */
+  function resetAll() {
+    for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
+      set(key, DEFAULTS[key])
+    }
+  }
+
   /** 从后端加载配置 */
   async function load() {
     try {
@@ -228,6 +246,7 @@ export const useConfigStore = defineStore('config', () => {
     // actions
     get,
     set,
+    resetAll,
     load,
     applyTheme,
     applyFontSize,

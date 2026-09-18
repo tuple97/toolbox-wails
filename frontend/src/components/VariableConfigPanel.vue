@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
+import { ref, watch } from 'vue'
 import { fetchVariableOptions } from '@/api/db'
 import type { VariableComponent, VariableConfig, VariableDataType, VariableOption } from '@/types'
 
@@ -13,6 +14,17 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:modelValue', value: VariableConfig[]): void
 }>()
+
+/** 主从布局：始终选中第一条；列表变化时仅在当前项消失才回退。 */
+const selectedName = ref('')
+watch(() => props.modelValue, (items) => {
+  if (!items.some(item => item.name === selectedName.value)) {
+    selectedName.value = items[0]?.name ?? ''
+  }
+}, { immediate: true, deep: false })
+function selectConfig(name: string) {
+  selectedName.value = name
+}
 
 /** 可选组件类型 */
 const COMPONENTS: Array<{ value: VariableComponent, label: string }> = [
@@ -137,22 +149,28 @@ async function testDynamicOptions(config: VariableConfig) {
       :image-size="60"
     />
 
-    <el-collapse v-else class="tpl-panel-list__collapse">
-      <el-collapse-item
+    <div v-else class="tpl-master">
+      <aside class="tpl-master__list" aria-label="变量列表">
+        <button
+          v-for="config in modelValue"
+          :key="config.name"
+          type="button"
+          class="tpl-master__item"
+          :class="{ 'is-active': config.name === selectedName }"
+          @click="selectConfig(config.name)"
+        >
+          <code>{{ config.name }}</code>
+          <span>{{ config.label || '未设置展示名称' }}</span>
+          <small>{{ componentLabel(config.component) }}</small>
+        </button>
+      </aside>
+      <div class="tpl-master__detail">
+      <div
         v-for="(config, index) in modelValue"
         :key="config.name"
-        :name="config.name"
+        v-show="config.name === selectedName"
+        class="tpl-master__detail-item"
       >
-        <template #title>
-          <div class="tpl-panel__title">
-            <code class="tpl-panel__chip">{{ config.name }}</code>
-            <span class="tpl-panel__title-text">{{ config.label || '未设置展示名称' }}</span>
-            <el-tag size="small" type="info" effect="plain">
-              {{ componentLabel(config.component) }}
-            </el-tag>
-          </div>
-        </template>
-
         <el-form class="tpl-panel__form" label-position="left" label-width="76px" size="small">
           <!-- 展示设置 -->
           <section class="tpl-panel__group">
@@ -325,8 +343,9 @@ async function testDynamicOptions(config: VariableConfig) {
             </template>
           </section>
         </el-form>
-      </el-collapse-item>
-    </el-collapse>
+      </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -339,4 +358,15 @@ async function testDynamicOptions(config: VariableConfig) {
 .tpl-panel-list :deep(.el-collapse-item__header) {
   font-size: var(--app-font-size);
 }
+
+.tpl-master { display: grid; grid-template-columns: minmax(180px, 26%) minmax(0, 1fr); min-height: 300px; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: color-mix(in srgb, var(--bg-color) 88%, var(--brand-color)); }
+.tpl-master__list { display: flex; flex-direction: column; margin: 0; padding: 4px 0; border-right: 1px solid var(--border-color); background: var(--bg-color-soft); overflow: auto; }
+.tpl-master__item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; width: 100%; padding: 10px 12px; border: 0; border-radius: 0; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }
+.tpl-master__item:hover { background: var(--hover-bg); }
+.tpl-master__item.is-active { background: var(--active-bg); box-shadow: inset 3px 0 0 var(--brand-color); }
+.tpl-master__item code { color: var(--brand-color); font-family: var(--font-mono); font-size: var(--app-font-size-sm); }
+.tpl-master__item span { grid-column: 1 / -1; overflow: hidden; color: var(--text-muted); font-size: var(--app-font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
+.tpl-master__item small { color: var(--text-muted); font-size: var(--app-font-size-xs); }
+.tpl-master__detail { min-width: 0; padding: 16px 18px; overflow: auto; }
+@media (max-width: 720px) { .tpl-master { grid-template-columns: 1fr; } .tpl-master__list { max-height: 150px; border-right: 0; border-bottom: 1px solid var(--border-color); } }
 </style>

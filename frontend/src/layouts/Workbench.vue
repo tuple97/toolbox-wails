@@ -8,6 +8,7 @@ import { useDictStore } from '@/stores/dictStore'
 import { useConfigStore } from '@/stores/configStore'
 import { EventsOn } from '@/api/runtime'
 import { toolOf } from '@/utils/tools'
+import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
 import { parseSidebarView, serializeSidebarView } from '@/utils/sidebarView'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ToolPickerDialog from '@/components/ToolPickerDialog.vue'
@@ -183,11 +184,31 @@ onMounted(async () => {
   offQuit = EventsOn('app:before-quit', () => {
     void tabStore.saveNow()
   })
+  window.addEventListener('keydown', handleWorkbenchShortcut)
 })
 
 onBeforeUnmount(() => {
   offQuit?.()
+  window.removeEventListener('keydown', handleWorkbenchShortcut)
 })
+
+function handleWorkbenchShortcut(event: KeyboardEvent) {
+  if (event.defaultPrevented) {
+    return
+  }
+  if (matchesShortcut(event, shortcutOf('new-tab', configStore.values.shortcut_config))) {
+    event.preventDefault()
+    pickerVisible.value = true
+    return
+  }
+  if (matchesShortcut(event, shortcutOf('close-tab', configStore.values.shortcut_config))) {
+    const tab = tabStore.activeTab
+    if (tab && !tab.isLocked) {
+      event.preventDefault()
+      handleClose(tab)
+    }
+  }
+}
 
 // ------------------------------------------------------------ 激活与新建
 

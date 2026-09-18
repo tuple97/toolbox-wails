@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useConfigStore } from '@/stores/configStore'
 import { useLogStore } from '@/stores/logStore'
+import { useMetadataStore } from '@/stores/metadataStore'
 import { fetchSystemFonts } from '@/api/fonts'
 import { buildFontOptions } from '@/utils/fonts'
 import { SQL_TRIGGER_MODE_OPTIONS, parseSqlTriggerMode } from '@/utils/sql/sqlCompletionTrigger'
+import { parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
+import { parsePlaceholderTabJump } from '@/utils/sql/template/templatePlaceholder'
+import { normalizeShortcut, parseShortcutConfig, shortcutFromEvent, shortcutOf, SHORTCUTS } from '@/utils/shortcuts'
 import type { ControlSize, ThemeMode } from '@/types'
 
 /**
@@ -16,6 +21,7 @@ import type { ControlSize, ThemeMode } from '@/types'
 
 const configStore = useConfigStore()
 const logStore = useLogStore()
+const metadataStore = useMetadataStore()
 
 const emit = defineEmits<{
   /** 首次加载完成（父级据此关闭 loading 遮罩） */
@@ -99,6 +105,105 @@ const sqlAutoAlias = computed({
   set: (value: boolean) => configStore.set('sql_completion_alias', value ? 'true' : 'false'),
 })
 
+/**
+ * 是否在库下拉框与 SQL 补全候选里展示系统库（设置项 `sql_show_system_databases`）。
+ *
+ * 判定策略在 utils/sql/sqlVisibility.ts：下拉与候选共用同一份，
+ * 且只影响「主动展示」——显式写 `mysql.user` 仍然照常解析。
+ */
+const sqlShowSystemDatabases = computed({
+  get: () => parseShowSystemDatabases(configStore.values.sql_show_system_databases),
+  set: (value: boolean) => configStore.set('sql_show_system_databases', value ? 'true' : 'false'),
+})
+
+/** 模板：插入块片段后，Tab 是否在占位符之间跳转（设置项 `template_placeholder_tab`） */
+const templatePlaceholderTab = computed({
+  get: () => parsePlaceholderTabJump(configStore.values.template_placeholder_tab),
+  set: (value: boolean) => configStore.set('template_placeholder_tab', value ? 'true' : 'false'),
+})
+
+/** 快捷键配置单独存成 JSON，未设置的动作始终回退到目录里的默认值。 */
+const shortcutConfig = computed(() => parseShortcutConfig(configStore.values.shortcut_config))
+function updateShortcut(id: string, value: string) {
+  const next = { ...shortcutConfig.value }
+  const normalized = normalizeShortcut(value)
+  if (normalized) next[id] = normalized
+  else delete next[id]
+  const serialized = JSON.stringify(next)
+  const scopeOf = (itemId: string) => {
+    const group = SHORTCUTS.find(item => item.id === itemId)?.group
+    // 全局与工作台动作无论当前在哪个页面都会监听，因此共享一个作用域。
+    return group === '全局' || group === '工作台' ? 'global' : group
+  }
+  // 以“最终生效值”（包含未改过的默认键位）判断，避免自定义动作抢占全局快捷键。
+  const duplicate = normalized && SHORTCUTS.find(item =>
+    item.id !== id && scopeOf(item.id) === scopeOf(id) && shortcutOf(item.id, serialized) === normalized,
+  )
+  if (duplicate && normalized) {
+    ElMessage.warning(`“${normalized}” 已分配给此页面的其他动作`)
+    return
+  }
+  configStore.set('shortcut_config', JSON.stringify(next))
+}
+function resetShortcut(id: string) {
+  const next = { ...shortcutConfig.value }
+  delete next[id]
+  configStore.set('shortcut_config', JSON.stringify(next))
+}
+function recordShortcut(id: string, event: KeyboardEvent) {
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return
+  // 普通字母仍可手输，组合键与 F 键则直接录入，避免浏览器抢走 Ctrl+W / Ctrl+R。
+  if (!(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || /^F\d{1,2}$/i.test(event.key))) return
+  event.preventDefault()
+  event.stopPropagation()
+  updateShortcut(id, shortcutFromEvent(event))
+}
+
+/**
+ * 元数据缓存规模（高级页展示）。
+ *
+ * 缓存条数直接读 store 的响应式表：它既是「清空」这个动作的说明书
+ * （用户能看到确实攒了东西），也让「清空完还是不是旧的」一眼可验。
+ */
+const metadataCache = computed(() => ({
+  databases: Object.keys(metadataStore.databases).length,
+  tables: Object.keys(metadataStore.tables).length,
+  columns: Object.keys(metadataStore.columns).length,
+}))
+
+/** 清空元数据缓存：下次补全 / 悬停重新拉取（库表刚变更时用） */
+function clearMetadataCache() {
+  metadataStore.clear()
+  ElMessage.success('元数据缓存已清空，下次补全会重新读取')
+}
+
+/**
+ * 恢复默认设置。
+ *
+ * 只把配置项重置为默认值，**不动**元数据缓存与已保存的连接 / 模板 / Tab
+ * —— 「恢复默认设置」不该顺手删掉用户的数据。
+ */
+async function resetSettings() {
+  try {
+    await ElMessageBox.confirm(
+      '主题、字体、日志与 SQL 补全等全部设置将恢复为默认值（连接、模板与缓存不受影响），是否继续？',
+      '恢复默认设置',
+      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' },
+    )
+  }
+  catch {
+    // Element Plus 用 reject 表示取消：什么都不做
+    return
+  }
+  configStore.resetAll()
+  // 日志上限不在 configStore 的外观应用范围内，需要显式同步给 logStore
+  logStore.setMaxLines(configStore.logMaxLines)
+  ElMessage.success('已恢复默认设置')
+}
+
+/** 设置页签（外观 / 编辑器 / SQL / 模板 / 快捷键 / 高级）；内容是纯配置，不必记住上次选中的页 */
+const activeTab = ref('general')
+
 onMounted(async () => {
   try {
     systemFonts.value = await fetchSystemFonts()
@@ -119,9 +224,11 @@ onMounted(async () => {
     </header>
 
     <div class="settings-view__body">
-      <!-- 外观 -->
-      <section class="settings-view__section">
-        <h3 class="settings-view__section-title">外观</h3>
+      <el-tabs v-model="activeTab" class="settings-view__tabs">
+        <el-tab-pane label="外观" name="general">
+          <!-- 外观 -->
+          <section class="settings-view__section">
+            <h3 class="settings-view__section-title">外观</h3>
 
         <el-form label-width="110px" label-position="right">
           <el-form-item label="主题">
@@ -175,11 +282,13 @@ onMounted(async () => {
             </small>
           </el-form-item>
         </el-form>
-      </section>
+          </section>
+        </el-tab-pane>
 
-      <!-- 编辑器与日志 -->
-      <section class="settings-view__section">
-        <h3 class="settings-view__section-title">编辑器与日志</h3>
+        <el-tab-pane label="编辑器" name="editor">
+          <!-- 编辑器 -->
+          <section class="settings-view__section">
+            <h3 class="settings-view__section-title">编辑器</h3>
 
         <el-form label-width="110px" label-position="right">
           <el-form-item label="编辑器字号">
@@ -201,13 +310,16 @@ onMounted(async () => {
             </el-select>
           </el-form-item>
 
-          <el-form-item label="日志保留条数">
-            <div class="settings-view__slider">
-              <el-slider v-model="logMaxLines" :min="50" :max="1000" :step="50" />
-              <span class="settings-view__value">{{ logMaxLines }}</span>
-            </div>
-          </el-form-item>
+        </el-form>
+      </section>
+    </el-tab-pane>
 
+    <el-tab-pane label="SQL" name="sql">
+      <!-- SQL 补全与元数据展示 -->
+      <section class="settings-view__section">
+        <h3 class="settings-view__section-title">SQL 补全</h3>
+
+        <el-form label-width="110px" label-position="right">
           <el-form-item label="提示触发">
             <el-select v-model="sqlTriggerMode" style="width: 100%">
               <el-option
@@ -226,6 +338,10 @@ onMounted(async () => {
             <el-switch v-model="sqlAutoAlias" />
           </el-form-item>
 
+          <el-form-item label="展示系统库">
+            <el-switch v-model="sqlShowSystemDatabases" />
+          </el-form-item>
+
           <el-form-item label="">
             <small class="settings-view__tip">
               提示触发决定 SQL 编辑器何时自动弹出候选（Ctrl+Space 始终可用）；
@@ -234,10 +350,120 @@ onMounted(async () => {
               候选里同时保留「不加别名」的那条。
             </small>
           </el-form-item>
+
+          <el-form-item label="">
+            <small class="settings-view__tip">
+              展示系统库：开启后，库选择下拉框与 SQL 补全候选中会列出系统库
+              （<code>information_schema</code>、<code>mysql</code>、<code>sys</code> 等）；
+              关闭后这些库不再主动列出，但手动写下的 <code>mysql.user</code>
+              仍然照常解析（隐藏不等于非法）。
+            </small>
+          </el-form-item>
+        </el-form>
+      </section>
+    </el-tab-pane>
+
+    <el-tab-pane label="模板" name="template">
+      <!-- 模板 -->
+      <section class="settings-view__section">
+        <h3 class="settings-view__section-title">模板</h3>
+
+        <el-form label-width="110px" label-position="right">
+          <el-form-item label="占位符跳转">
+            <el-switch v-model="templatePlaceholderTab" />
+          </el-form-item>
+
+          <el-form-item label="">
+            <small class="settings-view__tip">
+              插入块片段（<code v-pre>{{if}}</code> / <code v-pre>{{end}}</code> 骨架）后，
+              主光标停在块头条件的占位处，Tab 依次跳到下一个占位、Shift+Tab 反向，
+              走完全部占位后按键恢复常规行为。关闭后 Tab 只做缩进。
+            </small>
+          </el-form-item>
+        </el-form>
+      </section>
+    </el-tab-pane>
+
+    <el-tab-pane label="快捷键" name="shortcuts">
+      <section class="settings-view__section settings-view__section--wide">
+        <div class="settings-view__section-heading">
+          <div>
+            <h3 class="settings-view__section-title">快捷键</h3>
+            <p>点击输入框后直接按组合键即可录入；留空会恢复初始值，没有初始快捷键的操作默认留空。</p>
+          </div>
+        </div>
+        <el-table :data="SHORTCUTS" class="settings-view__shortcut-table" size="small">
+          <el-table-column prop="group" label="页面" width="116" />
+          <el-table-column prop="label" label="操作" min-width="155" />
+          <el-table-column label="快捷键" min-width="210">
+            <template #default="{ row }">
+              <el-input :model-value="shortcutConfig[row.id] || row.defaultKey" placeholder="未设置" @keydown="recordShortcut(row.id, $event)" @change="updateShortcut(row.id, $event)" />
+            </template>
+          </el-table-column>
+          <el-table-column prop="defaultKey" label="初始值" width="126" />
+          <el-table-column label="" width="70">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="resetShortcut(row.id)">重置</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <small class="settings-view__tip">组合键支持 Ctrl、Alt、Shift 与一个主键；系统保留的快捷键可能由操作系统或浏览器优先处理。</small>
+      </section>
+    </el-tab-pane>
+
+    <el-tab-pane label="高级" name="advanced">
+      <!-- 日志 -->
+      <section class="settings-view__section">
+        <h3 class="settings-view__section-title">日志</h3>
+
+        <el-form label-width="110px" label-position="right">
+          <el-form-item label="保留条数">
+            <div class="settings-view__slider">
+              <el-slider v-model="logMaxLines" :min="50" :max="1000" :step="50" />
+              <span class="settings-view__value">{{ logMaxLines }}</span>
+            </div>
+          </el-form-item>
         </el-form>
       </section>
 
-      <!-- 窗口背景 -->
+      <!-- 元数据缓存 -->
+      <section class="settings-view__section settings-view__metadata-card">
+        <div class="settings-view__metadata-head">
+          <div>
+            <h3 class="settings-view__section-title">元数据缓存</h3>
+            <p>用于 SQL 补全和悬停说明；库表结构变更后可在此刷新。</p>
+          </div>
+          <el-button plain @click="clearMetadataCache">清空缓存</el-button>
+        </div>
+        <div class="settings-view__metadata-stats">
+          <div><strong>{{ metadataCache.databases }}</strong><span>数据库</span></div>
+          <div><strong>{{ metadataCache.tables }}</strong><span>库表清单</span></div>
+          <div><strong>{{ metadataCache.columns }}</strong><span>字段缓存</span></div>
+        </div>
+        <small class="settings-view__tip">清空只影响本地缓存，不会删除数据库中的对象；下一次补全或悬停时会自动重新读取。</small>
+      </section>
+
+      <!-- 重置 -->
+      <section class="settings-view__section">
+        <h3 class="settings-view__section-title">重置</h3>
+
+        <el-form label-width="110px" label-position="right">
+          <el-form-item label="">
+            <el-button type="danger" plain @click="resetSettings">
+              恢复默认设置
+            </el-button>
+          </el-form-item>
+
+          <el-form-item label="">
+            <small class="settings-view__tip">
+              只重置全部配置项（主题、字体、日志、SQL 补全等）；
+              数据库连接、SQL 模板、词典与 Tab 工作台都不受影响。
+            </small>
+          </el-form-item>
+        </el-form>
+      </section>
+    </el-tab-pane>
+      </el-tabs>
     </div>
   </div>
 </template>
@@ -246,14 +472,16 @@ onMounted(async () => {
 .settings-view {
   height: 100%;
   overflow: auto;
-  padding: 16px 20px;
+  padding: 24px clamp(24px, 4vw, 64px) 36px;
+  background: radial-gradient(circle at 90% 0%, color-mix(in srgb, var(--brand-color) 10%, transparent), transparent 34%);
 }
 
 .settings-view__head {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 16px;
+  max-width: 1180px;
+  margin: 0 auto 22px;
   font-size: var(--app-font-size-lg);
   font-weight: 600;
 }
@@ -272,14 +500,44 @@ onMounted(async () => {
 }
 
 .settings-view__body {
-  max-width: 640px;
+  width: min(100%, 1180px);
+  margin: 0 auto;
+  min-height: 520px;
+  padding: 18px 22px 26px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-color) 92%, var(--brand-color));
+  box-shadow: 0 12px 34px rgb(0 0 0 / 8%);
 }
+
+.settings-view__tabs :deep(.el-tabs__nav-wrap::after) { height: 1px; }
+.settings-view__tabs :deep(.el-tabs__item) { height: 42px; padding: 0 18px; font-weight: 600; }
+.settings-view__tabs :deep(.el-tabs__active-bar) { height: 3px; border-radius: 3px 3px 0 0; }
+.settings-view__tabs :deep(.el-tabs__content) { padding: 18px 4px 4px; }
 
 .settings-view__section + .settings-view__section {
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px dashed var(--border-color);
 }
+
+.settings-view__section { max-width: 840px; padding: 4px 8px; }
+.settings-view__section--wide { max-width: none; }
+.settings-view__section-heading { display: flex; align-items: flex-start; justify-content: space-between; }
+.settings-view__section-heading p { margin: -6px 0 16px; color: var(--text-muted); font-size: var(--app-font-size-sm); }
+
+.settings-view__metadata-card {
+  padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--brand-color) 24%, var(--border-color));
+  border-radius: 12px;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--brand-color) 8%, transparent), transparent 55%);
+}
+.settings-view__metadata-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.settings-view__metadata-head p { margin: -6px 0 18px; color: var(--text-muted); font-size: var(--app-font-size-sm); }
+.settings-view__metadata-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.settings-view__metadata-stats > div { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 9px; background: color-mix(in srgb, var(--bg-color) 72%, var(--brand-color)); }
+.settings-view__metadata-stats strong { color: var(--brand-color); font-size: calc(var(--app-font-size-lg) + 4px); line-height: 1; }
+.settings-view__metadata-stats span { color: var(--text-muted); font-size: var(--app-font-size-xs); }
 
 .settings-view__section-title {
   margin: 0 0 14px;
@@ -318,5 +576,21 @@ onMounted(async () => {
   margin-left: 8px;
   color: var(--text-muted);
   font-size: var(--app-font-size-xs);
+}
+
+.settings-view__shortcut-table {
+  margin: 8px 0 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.settings-view__shortcut-table :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--border-color) inset; }
+
+@media (max-width: 760px) {
+  .settings-view { padding: 16px; }
+  .settings-view__body { padding: 12px; border-radius: 10px; }
+  .settings-view__tabs :deep(.el-tabs__item) { padding: 0 10px; }
+  .settings-view__metadata-head { align-items: stretch; flex-direction: column; }
+  .settings-view__metadata-stats { grid-template-columns: 1fr; }
 }
 </style>

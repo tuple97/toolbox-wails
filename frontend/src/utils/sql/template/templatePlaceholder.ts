@@ -12,6 +12,16 @@ import { StateEffect, StateField } from '@codemirror/state'
 import type { EditorState, Extension } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 
+/**
+ * 解析设置项 `template_placeholder_tab`（插入块片段后 Tab 是否跳占位符）。
+ *
+ * 默认**开启**（与改造前行为一致），只有明确写成 `false` 才关；
+ * 关掉后 Tab 回到缩进行为。调用方在**按键时**读它，于是改完设置立即生效。
+ */
+export function parsePlaceholderTabJump(raw: string | undefined): boolean {
+  return raw !== 'false'
+}
+
 /** 设置（或清空，传 null）占位链 */
 export const setTemplatePlaceholders = StateEffect.define<number[] | null>()
 

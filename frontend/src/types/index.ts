@@ -130,6 +130,17 @@ export interface SQLTemplate {
 }
 
 /**
+ * 库列表项，与后端 services.DatabaseInfo 对应。
+ *
+ * `isSystem` 由后端按方言判定（MySQL 与 PostgreSQL 的自带对象完全不同）：
+ * 前端只按设置项过滤，不自己维护一份方言表（见 utils/sql/sqlVisibility.ts）。
+ */
+export interface DatabaseInfo {
+  name: string
+  isSystem: boolean
+}
+
+/**
  * 表的外键约束，与后端 services.ForeignKey 对应。
  *
  * 智能补全的关联条件优先用它生成 `ON a.x = b.y`；
@@ -363,6 +374,9 @@ export type SettingKey =
   | 'sidebar_view'
   | 'sql_completion_trigger'
   | 'sql_completion_alias'
+  | 'sql_show_system_databases'
+  | 'template_placeholder_tab'
+  | 'shortcut_config'
 
 /**
  * 主题标识。

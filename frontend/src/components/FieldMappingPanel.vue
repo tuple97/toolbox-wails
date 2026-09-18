@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useDictStore } from '@/stores/dictStore'
 import type { FieldMapping } from '@/types'
 
@@ -14,8 +14,16 @@ const emit = defineEmits<{
 
 const dictStore = useDictStore()
 
-/** 当前展开的列（收起时不渲染行内细节，字段多时保持轻量） */
-const expandedNames = ref<string[]>([])
+/** 主从布局：默认选择第一列，列表刷新后保留仍然存在的选中项。 */
+const selectedName = ref('')
+watch(() => props.modelValue, (items) => {
+  if (!items.some(item => item.column === selectedName.value)) {
+    selectedName.value = items[0]?.column ?? ''
+  }
+}, { immediate: true, deep: false })
+function selectMapping(column: string) {
+  selectedName.value = column
+}
 
 /** el-select-v2 的选项数据（纯数据传入，避免每行渲染完整选项节点树） */
 const dictOptions = computed(() =>
@@ -46,29 +54,30 @@ onMounted(() => {
       :image-size="60"
     />
 
-    <!--
-      与变量配置面板一致的手风琴交互：收起时只显示列名一行。
-      v-memo：mapping 对象引用与词典数据都没变时整行跳过 patch
-      （父组件赋值时会复用未变化的 mapping 对象，引用相等才能命中缓存）。
-    -->
-    <el-collapse v-else v-model="expandedNames" class="tpl-panel-list__collapse">
-      <el-collapse-item
+    <div v-else class="tpl-master">
+      <aside class="tpl-master__list" aria-label="字段列表">
+        <button
+          v-for="mapping in modelValue"
+          :key="mapping.column"
+          type="button"
+          class="tpl-master__item"
+          :class="{ 'is-active': mapping.column === selectedName }"
+          @click="selectMapping(mapping.column)"
+        >
+          <code>{{ mapping.column }}</code>
+          <el-tag v-if="mapping.dictionaryId" size="small" type="info" effect="plain">词典</el-tag>
+          <span>{{ mapping.label || '未设置别名' }}</span>
+        </button>
+      </aside>
+      <div class="tpl-master__detail">
+      <div
         v-for="(mapping, index) in modelValue"
         :key="mapping.column"
-        :name="mapping.column"
+        v-show="mapping.column === selectedName"
+        class="tpl-master__detail-item"
       >
-        <template #title>
-          <div class="tpl-panel__title">
-            <code class="tpl-panel__chip">{{ mapping.column }}</code>
-            <span class="tpl-panel__title-text">{{ mapping.label || '未设置别名' }}</span>
-            <el-tag v-if="mapping.dictionaryId" size="small" type="info" effect="plain">
-              词典
-            </el-tag>
-          </div>
-        </template>
-
         <div
-          v-if="expandedNames.includes(mapping.column)"
+          v-if="mapping.column === selectedName"
           v-memo="[mapping, dictOptions]"
         >
           <el-form class="tpl-panel__form" label-position="left" label-width="76px" size="small">
@@ -137,8 +146,9 @@ onMounted(() => {
             </section>
           </el-form>
         </div>
-      </el-collapse-item>
-    </el-collapse>
+      </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -151,4 +161,14 @@ onMounted(() => {
 .tpl-panel-list :deep(.el-collapse-item__header) {
   font-size: var(--app-font-size);
 }
+
+.tpl-master { display: grid; grid-template-columns: minmax(180px, 26%) minmax(0, 1fr); min-height: 300px; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: color-mix(in srgb, var(--bg-color) 88%, var(--brand-color)); }
+.tpl-master__list { display: flex; flex-direction: column; margin: 0; padding: 4px 0; border-right: 1px solid var(--border-color); background: var(--bg-color-soft); overflow: auto; }
+.tpl-master__item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 8px; width: 100%; padding: 10px 12px; border: 0; border-radius: 0; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }
+.tpl-master__item:hover { background: var(--hover-bg); }
+.tpl-master__item.is-active { background: var(--active-bg); box-shadow: inset 3px 0 0 var(--brand-color); }
+.tpl-master__item code { color: var(--brand-color); font-family: var(--font-mono); font-size: var(--app-font-size-sm); }
+.tpl-master__item span { grid-column: 1 / -1; overflow: hidden; color: var(--text-muted); font-size: var(--app-font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
+.tpl-master__detail { min-width: 0; padding: 16px 18px; overflow: auto; }
+@media (max-width: 720px) { .tpl-master { grid-template-columns: 1fr; } .tpl-master__list { max-height: 150px; border-right: 0; border-bottom: 1px solid var(--border-color); } }
 </style>

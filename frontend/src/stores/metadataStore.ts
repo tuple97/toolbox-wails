@@ -14,18 +14,30 @@
  *  - 刷新 = 丢掉该连接的缓存后重新拉取。
  */
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { fetchDatabases, fetchForeignKeys, fetchTableColumns, fetchTables } from '@/api/executor'
-import type { ExecutorColumn, TableForeignKey } from '@/types'
+import type { DatabaseInfo, ExecutorColumn, TableForeignKey } from '@/types'
 
 /** 元数据缓存有效期 */
 export const META_TTL = 5 * 60 * 1000
 
 export const useMetadataStore = defineStore('metadata', () => {
-  /** 连接 ID → 库名列表 */
-  const databases = ref<Record<number, string[]>>({})
+  /**
+   * 连接 ID → 库列表（含「是否系统库」标记，由后端按方言给出）。
+   *
+   * 只存这一份：库名视图由它派生（`databases`），不另存一份名字清单 ——
+   * 两份数据迟早会不一致。
+   */
+  const databaseInfos = ref<Record<number, DatabaseInfo[]>>({})
   const databasesFetchedAt = ref<Record<number, number>>({})
   const databasesLoading = ref<Record<number, boolean>>({})
+
+  /** 连接 ID → 库名列表（从上面派生：补全候选与「这个库存在吗」判断用） */
+  const databases = computed<Record<number, string[]>>(() =>
+    Object.fromEntries(Object.entries(databaseInfos.value).map(([connId, list]) => [
+      connId,
+      list.map(info => info.name),
+    ])))
 
   /** `${connId}::${database}` → 表名列表 */
   const tables = ref<Record<string, string[]>>({})
@@ -69,13 +81,18 @@ export const useMetadataStore = defineStore('metadata', () => {
 
   /** 读取库列表缓存并在需要时后台刷新；同步返回当前可见数据 */
   function ensureDatabases(connId: number): string[] {
+    return ensureDatabaseInfos(connId).map(info => info.name)
+  }
+
+  /** 读取库列表（含系统库标记）并在需要时后台刷新 */
+  function ensureDatabaseInfos(connId: number): DatabaseInfo[] {
     if (!connId) {
       return []
     }
     if (!isFresh(databasesFetchedAt.value[connId]) && !databasesLoading.value[connId]) {
       void loadDatabases(connId)
     }
-    return databases.value[connId] ?? []
+    return databaseInfos.value[connId] ?? []
   }
 
   /** 拉取库列表；force 为真时忽略缓存 */
@@ -84,19 +101,19 @@ export const useMetadataStore = defineStore('metadata', () => {
       return []
     }
     if (!force && isFresh(databasesFetchedAt.value[connId])) {
-      return databases.value[connId] ?? []
+      return ensureDatabases(connId)
     }
     // 同一目标正在加载时复用同一次请求，避免重复打数据库
     if (databasesLoading.value[connId]) {
-      return databases.value[connId] ?? []
+      return ensureDatabases(connId)
     }
 
     databasesLoading.value[connId] = true
     try {
-      const names = await fetchDatabases(connId)
-      databases.value[connId] = names
+      const infos = await fetchDatabases(connId)
+      databaseInfos.value[connId] = infos
       databasesFetchedAt.value[connId] = Date.now()
-      return names
+      return infos.map(info => info.name)
     }
     catch (e) {
       lastError.value = e instanceof Error ? e.message : String(e)
@@ -277,7 +294,7 @@ export const useMetadataStore = defineStore('metadata', () => {
 
   /** 丢掉某个连接的全部元数据缓存（库 + 该连接下所有库的表 / 字段 / 外键） */
   function invalidateConnection(connId: number) {
-    delete databases.value[connId]
+    delete databaseInfos.value[connId]
     delete databasesFetchedAt.value[connId]
 
     const schemaPrefix = `${connId}::`
@@ -341,7 +358,7 @@ export const useMetadataStore = defineStore('metadata', () => {
 
   /** 清空全部缓存 */
   function clear() {
-    databases.value = {}
+    databaseInfos.value = {}
     databasesFetchedAt.value = {}
     tables.value = {}
     tablesFetchedAt.value = {}
@@ -354,11 +371,13 @@ export const useMetadataStore = defineStore('metadata', () => {
 
   return {
     databases,
+    databaseInfos,
     tables,
     columns,
     foreignKeys,
     lastError,
     ensureDatabases,
+    ensureDatabaseInfos,
     ensureTables,
     ensureColumns,
     ensureForeignKeys,

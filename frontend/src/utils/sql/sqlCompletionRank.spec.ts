@@ -150,6 +150,17 @@ describe('候选排序：排序结果', () => {
     expect(sortByRank(options, 'name').map(item => item.label)).toEqual(['name', 'user_name'])
   })
 
+  it('前缀命中优先于字段类型：dis 时 DISTINCT 不被 device_status 压后', () => {
+    const options = [
+      { label: 'device_status', boost: 90, type: 'field' },
+      { label: 'device_time_zone_offset', boost: 90, type: 'field' },
+      { label: 'DISTINCT', boost: 30, type: 'keyword' },
+    ]
+    expect(sortByRank(options, 'dis').map(item => item.label)).toEqual([
+      'DISTINCT', 'device_status', 'device_time_zone_offset',
+    ])
+  })
+
   it('不修改入参数组', () => {
     const options = [{ label: 'b', boost: 0 }, { label: 'a', boost: 0 }]
     const sorted = sortByRank(options, '')
@@ -177,35 +188,44 @@ describe('候选排序：历史加权', () => {
     expect(fourth).toBeGreaterThan(second)
   })
 
-  it('历史加权会体现在打分里', () => {
-    const before = computeMatchScore({
-      label: 'name',
-      prefix: '',
-      boost: 90,
-      type: 'field',
-      historyBoost: historyBoostOf('name'),
-    })
+  it('历史加权只在前缀非空时生效（空前缀严格按 schema 顺序）', () => {
     recordCompletionSelection('name')
-    const after = computeMatchScore({
+
+    const withHistory = computeMatchScore({
+      label: 'name',
+      prefix: 'na',
+      boost: 90,
+      type: 'field',
+      historyBoost: historyBoostOf('name'),
+    })
+    const plain = computeMatchScore({ label: 'name', prefix: 'na', boost: 90, type: 'field' })
+    expect(withHistory).toBeGreaterThan(plain)
+
+    /*
+     * 空前缀时没有任何「用户在找哪个」的信号，历史不参与 ——
+     * 否则被用过几次的列会跑到 id 前面，列表顺序与建表顺序对不上（文档 §27）。
+     */
+    expect(computeMatchScore({
       label: 'name',
       prefix: '',
       boost: 90,
       type: 'field',
       historyBoost: historyBoostOf('name'),
-    })
-    expect(after).toBeGreaterThan(before)
+    })).toBe(computeMatchScore({ label: 'name', prefix: '', boost: 90, type: 'field' }))
   })
 
-  it('最近使用排在前面（同一档位内）', () => {
-    recordCompletionSelection('name')
-    recordCompletionSelection('name')
+  it('最近使用排在前面（同一档位内，且需要前缀）', () => {
+    recordCompletionSelection('id')
     recordCompletionSelection('id')
 
     const options = [
+      { label: 'item', boost: 90, type: 'field' },
       { label: 'id', boost: 90, type: 'field' },
-      { label: 'name', boost: 90, type: 'field' },
     ]
-    expect(sortByRank(options, '').map(item => item.label)).toEqual(['name', 'id'])
+    // 空前缀：保持传入顺序（= schema 顺序），历史不影响
+    expect(sortByRank(options, '').map(item => item.label)).toEqual(['item', 'id'])
+    // 有前缀且两个候选同档位（都命中前缀）时，才由历史决定先后
+    expect(sortByRank(options, 'i').map(item => item.label)).toEqual(['id', 'item'])
     // 最近使用的记录在导出里排在最前
     expect(dumpCompletionHistory()[0]).toBe('id')
   })

@@ -62,9 +62,11 @@ import type {
   SqlColumnInfo,
 } from '@/utils/sql/sqlCompletion'
 import { parseSqlTriggerMode, sqlCompletionTrigger } from '@/utils/sql/sqlCompletionTrigger'
+import { parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
 import { inTemplateFragment } from '@/utils/sql/sqlTemplateCompletion'
 import {
   jumpToNextPlaceholder,
+  parsePlaceholderTabJump,
   templatePlaceholderExtension,
 } from '@/utils/sql/template/templatePlaceholder'
 import { analyzeHybridCursor } from '@/utils/sql/hybridCursor'
@@ -78,6 +80,7 @@ import {
 } from '@/utils/logLanguage'
 import { editorErrorField, errorRangeOf, setEditorErrors } from '@/utils/editorErrors'
 import type { EditorError, ErrorPosition } from '@/utils/editorErrors'
+import { editorSearchExtensions, openEditorSearch } from '@/utils/editorSearch'
 import { ElMessage } from 'element-plus'
 import { copyText } from '@/utils/clipboard'
 import {
@@ -312,6 +315,8 @@ function pageContext(): Partial<CompletionRuntime> {
       ...props.featureFlags,
       // 设置项：表名补全后自动补别名（每次查询重新读，改完设置下一次补全即生效）
       autoTableAlias: configStore.values.sql_completion_alias === 'true',
+      // 设置项：候选里是否展示系统库（默认展示；关掉后显式写 mysql.user 仍能解析）
+      showSystemDatabases: parseShowSystemDatabases(configStore.values.sql_show_system_databases),
       ...page.featureFlags,
     },
   }
@@ -392,9 +397,13 @@ function completionExtension(): Extension {
      * 类型信息由每项后面的 detail 文本承担。
      */
     icons: false,
-    // 候选项左侧：勾选框（10，仅列名）；描述区（80）由 renderColumnDetail 组装
+    /*
+     * 候选项左侧：勾选框（10，仅多选列）→ 类型图标（20）→ 列名（50）→ 描述区（80）。
+     * 类型图标与勾选框都只对特定候选产出（不适用时返回 null，不留空位）。
+     */
     addToOptions: [
       { render: renderColumnCheckbox, position: 10 },
+      { render: renderTypeIcon, position: 20 },
       { render: renderColumnDetail, position: 80 },
     ],
   })
@@ -526,6 +535,17 @@ function renameSymbolAt(pos: number): boolean {
 function renameTargetAt(pos: number): RenameTargetKind | null {
   const view = viewRef.value
   return view ? renameTargetAtSql(view, pos, renameOptions()) : null
+}
+
+/**
+ * 供父组件调用：打开查找 / 替换面板（右键菜单入口）。
+ *
+ * 面板与快捷键都由 `@codemirror/search` 提供（见 utils/editorSearch.ts），
+ * 这里只是把它暴露给外部的菜单 —— 菜单让能力可发现，Ctrl+F 才是常用路径。
+ */
+function openSearch(): boolean {
+  const view = viewRef.value
+  return view ? openEditorSearch(view) : false
 }
 
 /**
@@ -777,7 +797,11 @@ function hoverRow(icon: string, value: string): HTMLElement {
  * 列候选的描述区（补全列表右侧）：按「类型 · 来源 · 注释」分段渲染。
  *
  * 与悬停卡片同一套视觉语言：来源配表格图标、注释配气泡图标，
- * 段与段之间用间距区分——纯文本 detail 只能串成一串 `·`，所以不用它。
+ * 两个图标各带一种颜色做标识（颜色在 utils/logLanguage.ts 的主题里），
+ * 段与段之间用间距区分 —— 纯文本 detail 只能串成一串 `·`，所以不用它。
+ *
+ * 刻意**不做列对齐**（固定列宽的表格样式）：对齐要靠截断列名与注释换来，
+ * 还会让纯关键字列表无谓变宽 —— 三段顺次跟在列名后面更省空间。
  */
 function renderColumnDetail(
   completion: Completion,
@@ -786,6 +810,7 @@ function renderColumnDetail(
 ): Node | null {
   const detail = (completion as ColumnCompletion).columnDetail
   if (!detail) {
+    // 非列候选（函数 / 关键字 / 表名…）：它们的说明走字符串 detail
     return null
   }
 
@@ -800,30 +825,100 @@ function renderColumnDetail(
     root.appendChild(type)
   }
   if (detail.from) {
-    root.appendChild(detailPart(doc, TABLE_ICON, detail.from))
+    root.appendChild(detailPart(doc, 'source', TABLE_ICON, detail.from))
   }
   if (detail.comment) {
-    root.appendChild(detailPart(doc, COMMENT_ICON, detail.comment))
+    root.appendChild(detailPart(doc, 'comment', COMMENT_ICON, detail.comment))
   }
 
   return root.childNodes.length ? root : null
 }
 
-/** 描述区里带图标的一段 */
-function detailPart(doc: Document, icon: string, text: string): HTMLElement {
+/**
+ * 描述区里带图标的一段。
+ *
+ * `kind` 只用来给**图标**上色（来源一个颜色、注释一个颜色，见主题）：
+ * 一眼扫过就知道哪段是表名、哪段是注释。
+ */
+function detailPart(
+  doc: Document,
+  kind: 'source' | 'comment',
+  icon: string,
+  text: string,
+): HTMLElement {
   const part = doc.createElement('span')
-  part.className = 'cm-column-detail__part'
+  part.className = `cm-column-detail__part cm-column-detail__part--${kind}`
 
   const glyph = doc.createElement('span')
   glyph.className = 'cm-column-detail__icon'
+  // 图标是固定字符串（见常量定义），不含用户输入
   glyph.innerHTML = icon
   part.appendChild(glyph)
 
   const value = doc.createElement('span')
+  // 文字这一层单独给类名：变淡只作用在文字上，图标才能保住颜色（见主题）
+  value.className = 'cm-column-detail__value'
   value.textContent = text
   part.appendChild(value)
 
   return part
+}
+
+// ---------------------------------------------------------------- 类型图标
+
+/**
+ * 候选类型图标：每个类型一个图标，颜色由 CSS 按类型给（见 utils/logLanguage.ts）。
+ *
+ * 为什么不用 CM6 自带的类型图标：那些是 `c` / `f` / `λ` 之类的字母
+ * （我们本来就 `icons: false` 关掉了），信息量为零，颜色也无从谈起。
+ *
+ * 类型取值来自各候选族：列 `field`、表 `class`、别名与变量 `variable`、
+ * 库 `namespace`、关键字 `keyword`、函数 `function`、模板属性 `property`、
+ * 片段与智能项 `text`。**没登记的类型不给图标**（宁缺勿错）。
+ */
+const TYPE_ICONS: Record<string, string> = {
+  // 列（几行文本的轮廓）
+  field: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M3.2 4.4h9.6M3.2 8h6.4M3.2 11.6h8"/></svg>',
+  // 表（复用悬停卡片那张表格轮廓）
+  class: TABLE_ICON,
+  // 别名 / 变量（标签）
+  variable: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8.8 2.8h4.4v4.4l-5.8 5.8-4.4-4.4z"/><circle cx="11" cy="5" r="0.9"/></svg>',
+  // 库（圆柱）
+  namespace: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><ellipse cx="8" cy="4.2" rx="4.6" ry="1.9"/><path d="M3.4 4.2v7.6c0 1.05 2.05 1.9 4.6 1.9s4.6-.85 4.6-1.9V4.2"/><path d="M3.4 8c0 1.05 2.05 1.9 4.6 1.9S12.6 9.05 12.6 8"/></svg>',
+  // 关键字（钥匙）
+  keyword: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><circle cx="5.6" cy="10.4" r="2.6"/><path d="M7.6 8.4 13.2 2.8M10.6 5.4l1.5 1.5"/></svg>',
+  // 函数（括号 + 实心点）
+  function: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M6.2 2.8C4.7 5.2 4.7 10.8 6.2 13.2M9.8 2.8c1.5 2.4 1.5 8 0 10.4"/><circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none"/></svg>',
+  // 模板属性（方括号 + 点）
+  property: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M5.6 3.2H3.6v9.6h2M10.4 3.2h2v9.6h-2"/><circle cx="8" cy="8" r="1.3"/></svg>',
+  // 片段 / 智能项（四角星）
+  text: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 2.4 9.2 6.8 13.6 8 9.2 9.2 8 13.6 6.8 9.2 2.4 8 6.8 6.8z"/></svg>',
+}
+
+/**
+ * 候选左侧的类型图标（position 20：排在勾选框之后、列名之前）。
+ *
+ * 每个类型一种颜色（CSS 按 `cm-type-icon--<type>` 上色），
+ * 于是「这是列还是表还是关键字」一眼可辨，不用去读「类型」那段文字。
+ */
+function renderTypeIcon(
+  completion: Completion,
+  _state: EditorState,
+  view: EditorView,
+): Node | null {
+  // CM6 的 type 允许是多个类名（空格分隔），取第一个当类型
+  const kind = (completion.type ?? '').split(/\s+/)[0]
+  const icon = TYPE_ICONS[kind]
+  if (!icon) {
+    return null
+  }
+
+  const span = view.dom.ownerDocument.createElement('span')
+  span.className = `cm-type-icon cm-type-icon--${kind}`
+  span.setAttribute('aria-hidden', 'true')
+  // 图标是固定字符串（见 TYPE_ICONS），不含用户输入
+  span.innerHTML = icon
+  return span
 }
 
 // ---------------------------------------------------------------- 列名勾选
@@ -928,6 +1023,8 @@ function baseExtensions(): Extension[] {
     highlightActiveLine(),
     // 超长行自动折行，长 SQL 不横向滚动
     EditorView.lineWrapping,
+    // 查找 / 替换 + 选中词同名高亮 + 官方快捷键（见 utils/editorSearch.ts）
+    ...editorSearchExtensions(),
     /*
      * tabindex 必须显式给：CM6 在只读（editable=false）时会把 .cm-content 设成
      * contentEditable="false"，浏览器就不会因为点击而聚焦它 —— 于是按键（Ctrl+A 全选、
@@ -945,8 +1042,16 @@ function baseExtensions(): Extension[] {
       /*
        * Tab 先走「模板占位跳转」：块片段插入后条件位与块体是链上的两个占位，
        * 走完（或没有占位）时返回 false，自然落回下面的缩进行为。
+       *
+       * 开关（设置项 `template_placeholder_tab`）在**按键时**读：改完设置立即生效，
+       * 不需要重建编辑器；关掉后 Tab 只剩缩进。
        */
-      { key: 'Tab', run: jumpToNextPlaceholder },
+      {
+        key: 'Tab',
+        run: view => (parsePlaceholderTabJump(configStore.values.template_placeholder_tab)
+          ? jumpToNextPlaceholder(view)
+          : false),
+      },
       indentWithTab,
     ]),
     EditorView.updateListener.of(handleUpdate),
@@ -1156,6 +1261,7 @@ defineExpose({
   canCopyCreateTableAt,
   goToDefinitionAt,
   canGoToDefinitionAt,
+  openSearch,
 })
 </script>
 

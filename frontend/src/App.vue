@@ -11,6 +11,7 @@ import { useConfigStore } from '@/stores/configStore'
 import { useLogStore } from '@/stores/logStore'
 import { useTabStore } from '@/stores/tabStore'
 import type { ContextMenuAction } from '@/types'
+import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
 
 const configStore = useConfigStore()
 const logStore = useLogStore()
@@ -66,6 +67,15 @@ onMounted(async () => {
   // 启动时加载全局配置并应用主题/字号
   await configStore.load()
   logStore.setMaxLines(configStore.logMaxLines)
+  window.addEventListener('keydown', (event) => {
+    if (event.defaultPrevented) {
+      return
+    }
+    if (matchesShortcut(event, shortcutOf('open-settings', configStore.values.shortcut_config))) {
+      event.preventDefault()
+      openSettings()
+    }
+  })
 })
 </script>
 

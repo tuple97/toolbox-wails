@@ -4,6 +4,7 @@
 
 export {
     ColumnMeta,
+    DatabaseInfo,
     ExecuteRequest,
     ExecutorColumn,
     ExecutorRequest,
