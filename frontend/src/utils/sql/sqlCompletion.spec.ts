@@ -368,6 +368,37 @@ describe('补全位置与次序（回归）', () => {
     expect(labelsOf('SELECT * FROM users u WHERE|')).not.toContain('testdb')
   })
 
+  it('语句末尾的普通换行仍属于上一条语句', () => {
+    const labels = labelsOf('SELECT * FROM users\n|')
+    expect(labels).toContain('WHERE')
+    expect(labels).not.toContain('SELECT')
+  })
+
+  it('空行之后输入 S：给语句关键字，而不是上一条的子句关键字', () => {
+    expect(labelsOf('SELECT * FROM users\n\nS|')).toContain('SELECT')
+  })
+
+  it('空行之后不再给出上一条语句的列', () => {
+    const items = itemsOf('SELECT * FROM users AS t1\n\nS|')
+    expect(items.some(item => item.type === 'field')).toBe(false)
+  })
+
+  it('多空行 / 分号后空行 / 空行后有注释，都算新语句', () => {
+    expect(labelsOf('SELECT * FROM users\n\n\nS|')).toContain('SELECT')
+    expect(labelsOf('SELECT * FROM users;\n\nS|')).toContain('SELECT')
+    expect(labelsOf('SELECT * FROM users\n\n-- 下一条\nS|')).toContain('SELECT')
+  })
+
+  it('空行后写完整语句再点号：不继承上一条的别名', () => {
+    const labels = labelsOf('SELECT * FROM users AS t1\n\nSELECT t1.|')
+    expect(labels).not.toContain('name')
+  })
+
+  it('语句内部的空行不切断作用域', () => {
+    const labels = labelsOf('SELECT\n\nname| FROM users')
+    expect(labels).toContain('name')
+  })
+
   it('点号紧贴光标：替换范围只有词，限定符由候选自带', () => {
     const doc = 'SELECT u.| FROM users u'
     const pos = doc.indexOf('|')

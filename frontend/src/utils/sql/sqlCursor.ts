@@ -339,41 +339,258 @@ function skipQuotedBackward(text: string, index: number): number {
 /**
  * 光标所在（可能还没写完）语句中，光标之前的文本。
  *
- * 用补全口径的语句范围（`completionStatementRange`）：
+ * 起点由语句范围给出（`completionStatementContext`）：
  * 光标停在语句末尾空白或新起一行时也算这条语句，否则会从头把
  * **上一条语句**的子句当成上下文（在 FROM 后面之后接着弹列名）。
+ *
+ * 拿不到范围时返回空串 —— 不能退回「按最后一个分号切」：没写分号的脚本
+ * 会因此把整篇文档当成当前语句的上下文。
  */
-export function currentClausePrefix(doc: string, pos: number, statement: TextRange | null): string {
-  const start = statement ? statement.from : doc.lastIndexOf(';', pos - 1) + 1
-  return doc.slice(Math.max(0, start), pos)
+export function currentClausePrefix(doc: string, pos: number, range: TextRange | null): string {
+  if (!range) {
+    return ''
+  }
+  return doc.slice(Math.max(0, range.from), pos)
 }
 
 /**
- * 补全口径的语句范围：光标所在的**那一条**语句，取不到返回 null。
+ * 补全口径的语句边界类别。
+ *
+ * 「光标属于哪条语句」有两个容易混淆的答案，这里显式区分：
+ *  - 语句**之后**的普通空白（换行、缩进）仍属于那条语句（`… WHERE |` 接着写）；
+ *  - 空行才是分界：用户用空行起一条新 SQL 时，即使没写分号也不该继承上一条。
+ */
+export type SqlStatementBoundary =
+  /** 光标落在语句文本里 */
+  | 'inside-statement'
+  /** 光标在语句之后的普通空白里（换行 / 缩进）—— 仍属于这条语句 */
+  | 'trailing-whitespace'
+  /** 光标在一个**完整空行**之后 —— 新语句（不必写分号） */
+  | 'blank-line'
+  /** 没有语句覆盖光标（文件开头、分号之后）—— 本身就是新语句 */
+  | 'new-statement'
+
+/** 补全口径的语句上下文：解析范围 + 边界类别 */
+export interface CompletionStatementContext {
+  /** 当前语句的解析范围（`clause` / 作用域都基于它） */
+  range: TextRange
+  boundary: SqlStatementBoundary
+}
+
+/**
+ * 补全口径的语句上下文。
  *
  * 与 `statementAtCursor`（执行 / 画边框用）的区别：那边要求光标确实"落在"语句里，
  * 空行与语句末尾之后的换行都算不归属；而补全几乎总在"正在写"的位置——
  * 光标停在 `… WHERE ` 之后、或新起一行准备继续写时，必须仍能看到这张表的列，
  * 所以这里把「语句末尾之后、下一条语句之前的空白」也算作该语句。
+ *
+ * 另外比旧实现多一层：**空行是语句边界**。
+ * `SELECT * FROM users\n\nS|` 里的 `S` 要按新语句解析（否则会继续给上一条
+ * FROM 之后的 SET / AS / OFFSET 之类候选）。语句内部的空行不会误判 ——
+ * 见 `blankLineStart` 的结构性判据（括号闭合 / 结尾不是延续符 / 前后不是延续词）。
  */
-export function completionStatementRange(doc: string, pos: number, dbType = ''): TextRange | null {
+export function completionStatementContext(
+  doc: string,
+  pos: number,
+  dbType = '',
+): CompletionStatementContext | null {
   const statements = splitSqlStatements(doc, dbType)
 
   for (let index = 0; index < statements.length; index += 1) {
     const statement = statements[index]
+
     if (pos >= statement.from && pos <= statement.to) {
-      return { from: statement.from, to: statement.to }
+      /*
+       * 光标在语句文本里，但这段文本内部可能夹着空行。
+       * 没写分号时（行首软分隔只认完整关键字）`… users\n\nS` 仍是一条语句，
+       * 补全要把它当「空行之后的新语句」—— 新的范围从空行之后算起，
+       * 上一条 SQL 的表 / 别名就不会进作用域。
+       */
+      const start = blankLineStart(doc, statement.from, pos)
+      if (start !== null) {
+        return { range: { from: start, to: statement.to }, boundary: 'blank-line' }
+      }
+      return {
+        range: { from: statement.from, to: statement.to },
+        boundary: 'inside-statement',
+      }
     }
 
     const next = statements[index + 1]
-    const beforeNext = !next || pos < next.from
-    if (pos > statement.to && beforeNext && doc.slice(statement.to, pos).trim() === '') {
-      return { from: statement.from, to: statement.to }
+    if (pos <= statement.to || (next && pos >= next.from)) {
+      continue
+    }
+
+    const gap = doc.slice(statement.to, pos)
+    if (gap.trim() !== '') {
+      continue
+    }
+
+    // 语句之后的空白：普通换行仍是这条语句，完整空行才起新语句
+    if (hasBlankLineBoundary(gap)) {
+      return { range: { from: lineStartOf(doc, pos), to: pos }, boundary: 'blank-line' }
+    }
+    return {
+      range: { from: statement.from, to: statement.to },
+      boundary: 'trailing-whitespace',
     }
   }
 
-  return null
+  return { range: { from: lineStartOf(doc, pos), to: pos }, boundary: 'new-statement' }
 }
+
+/**
+ * 只取解析范围的老入口。
+ *
+ * 悬停 / 符号解析这类只关心「解析哪一段」的调用方用它；
+ * 需要区分「仍在语句里 / 空行之后的新语句」时用 `completionStatementContext`。
+ */
+export function completionStatementRange(doc: string, pos: number, dbType = ''): TextRange | null {
+  return completionStatementContext(doc, pos, dbType)?.range ?? null
+}
+
+/** 文本里是否出现**完整空行**（一整行只有空白）——单个换行不算 */
+export function hasBlankLineBoundary(text: string): boolean {
+  return /\r?\n[ \t]*\r?\n/.test(text)
+}
+
+/** 光标所在行的行首 */
+function lineStartOf(doc: string, pos: number): number {
+  return doc.lastIndexOf('\n', pos - 1) + 1
+}
+
+/**
+ * 语句文本内部的空行边界：返回空行之后的行首（新语句起点），没有则返回 null。
+ *
+ * 判据只有两条结构性信号，不猜语义：
+ *  - 括号闭合（`WHERE id IN (\n\n…` 的空行在括号里，显然还没写完）；
+ *  - 空行前最后一个非空白字符不像「还要接着写」的符号（`, . ( = + - * / …`），
+ *    例如 `SELECT a,\n\nb` 的空行只是排版。
+ *
+ * 字符串与注释里的空行不算数（整段跳过）；引号没闭合就直接判否。
+ */
+function blankLineStart(doc: string, from: number, to: number): number | null {
+  let i = from
+  let depth = 0
+  let boundary = -1
+  /** 最近一个「有内容的字符」（注释与引号内的内容不算） */
+  let contentEnd = -1
+  /** 最近一个词（小写）：判断它是不是「后面必然还要接内容」的关键字 */
+  let lastWord = ''
+
+  while (i < to) {
+    const ch = doc[i]
+
+    // 标识符：整块读掉，顺便记下最后一个词
+    if (/[A-Za-z_$]/.test(ch)) {
+      let j = i
+      while (j < to && /[\w$]/.test(doc[j] ?? '')) {
+        j += 1
+      }
+      lastWord = doc.slice(i, j).toLowerCase()
+      contentEnd = j - 1
+      i = j
+      continue
+    }
+
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      const next = skipQuoted(doc, i)
+      if (next > to) {
+        return null
+      }
+      contentEnd = next - 1
+      i = next
+      continue
+    }
+
+    if ((ch === '-' && doc[i + 1] === '-') || ch === '#') {
+      const newline = doc.indexOf('\n', i)
+      i = newline === -1 || newline > to ? to : newline
+      continue
+    }
+
+    if (ch === '/' && doc[i + 1] === '*') {
+      const close = doc.indexOf('*/', i + 2)
+      if (close === -1 || close + 2 > to) {
+        return null
+      }
+      i = close + 2
+      continue
+    }
+
+    if (ch === '(') {
+      depth += 1
+    }
+    else if (ch === ')') {
+      depth = Math.max(0, depth - 1)
+    }
+    else if (ch === '\n') {
+      // 空行 = 换行之后只有空白，紧跟又一个换行
+      let j = i + 1
+      while (j < to && (doc[j] === ' ' || doc[j] === '\t' || doc[j] === '\r')) {
+        j += 1
+      }
+      if (
+        j < to
+        && doc[j] === '\n'
+        && depth === 0
+        && !endsWithContinuation(doc, contentEnd)
+        && !CONTINUATION_WORDS.has(lastWord)
+      ) {
+        // 空行之后的行首即是新语句起点（后面若还有注释行，一并算进去）
+        const start = lineStartOf(doc, j + 1)
+        // `WHERE id = 1\n\nAND x = 2`：续写的一行不是新语句
+        if (!CONTINUATION_WORDS.has(firstWordAt(doc, start, to))) {
+          boundary = start
+        }
+      }
+      i = j > i + 1 ? j : i + 1
+      continue
+    }
+    else if (!/\s/.test(ch)) {
+      contentEnd = i
+      lastWord = ''
+    }
+    i += 1
+  }
+
+  return boundary >= 0 ? boundary : null
+}
+
+/** 某一行（从 lineStart 起）的第一个词（小写）；没有词返回空串 */
+function firstWordAt(doc: string, lineStart: number, to: number): string {
+  let i = lineStart
+  while (i < to && (doc[i] === ' ' || doc[i] === '\t')) {
+    i += 1
+  }
+  let end = i
+  while (end < to && /[\w$]/.test(doc[end] ?? '')) {
+    end += 1
+  }
+  return doc.slice(i, end).toLowerCase()
+}
+
+/** 结尾字符是否表示「还要接着写」（逗号 / 点号 / 运算符 / 开括号） */
+function endsWithContinuation(doc: string, contentEnd: number): boolean {
+  if (contentEnd < 0) {
+    return true
+  }
+  return /[,.(\[=+\-*/%<>|&:!?]/.test(doc[contentEnd] ?? '')
+}
+
+/**
+ * 后面必然还要接内容的词：空行紧跟在它们之后，说明语句还没写完。
+ * 只收「语法上必须继续」的（子句引导词、连接词、修饰词），不收可以独立收尾的。
+ */
+const CONTINUATION_WORDS = new Set([
+  'select', 'distinct', 'all', 'from', 'join', 'left', 'right', 'inner', 'outer',
+  'full', 'cross', 'on', 'using', 'where', 'and', 'or', 'not', 'having', 'group',
+  'order', 'by', 'set', 'values', 'into', 'as', 'when', 'then', 'else', 'case',
+  'union', 'intersect', 'except', 'limit', 'offset', 'in', 'between', 'like',
+  'is', 'with', 'insert', 'update', 'delete', 'create', 'alter', 'drop',
+  'truncate', 'add', 'returning', 'asc', 'desc', 'over', 'partition', 'window',
+])
 
 /** 由子句扫描结论细化为位置类别 */
 export function sqlContextKindOf(scan: ClauseScan, statementText: string): CompletionContextKind {
@@ -769,6 +986,13 @@ function previousQualifierOf(itemText: string): string {
 export interface SqlCursorText {
   /** 光标所在语句 */
   statement: TextRange | null
+  /**
+   * 语句边界：光标是「仍在语句里 / 语句后的空白」还是「已进入新语句」。
+   *
+   * 新语句（空行之后、分号之后、文件开头）的 `statement` 只覆盖新语句本身，
+   * 因此作用域解析不会看到上一条 SQL 的表与别名。
+   */
+  statementBoundary: SqlStatementBoundary
   /** 语句内光标之前的文本（子句扫描的输入） */
   clausePrefix: string
   /** 上面这段文本在文档中的起点 */
@@ -797,12 +1021,13 @@ export function analyzeSqlCursorText(
   dbType = '',
 ): SqlCursorText {
   const doc = state.doc.toString()
-  const statement = completionStatementRange(doc, pos, dbType)
-  const clausePrefix = currentClausePrefix(doc, pos, statement)
+  const context = completionStatementContext(doc, pos, dbType)
+  const clausePrefix = currentClausePrefix(doc, pos, context?.range ?? null)
   const clause = scanClause(clausePrefix)
 
   return {
-    statement,
+    statement: context?.range ?? null,
+    statementBoundary: context?.boundary ?? 'new-statement',
     clausePrefix,
     prefixStart: pos - clausePrefix.length,
     clause,

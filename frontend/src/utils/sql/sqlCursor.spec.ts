@@ -6,7 +6,7 @@
 import { EditorState } from '@codemirror/state'
 import { MySQL, sql } from '@codemirror/lang-sql'
 import { describe, expect, it } from 'vitest'
-import { analyzeSqlCursorText, completionStatementRange } from '@/utils/sql/sqlCursor'
+import { analyzeSqlCursorText } from '@/utils/sql/sqlCursor'
 
 const MARK = '§'
 
@@ -14,6 +14,11 @@ const MARK = '§'
 function intentOf(docWithCursor: string) {
   const pos = docWithCursor.indexOf(MARK)
   const doc = docWithCursor.replace(MARK, '')
+  return intentAt(doc, pos)
+}
+
+/** 分析指定文档的指定位置 */
+function intentAt(doc: string, pos: number) {
   const state = EditorState.create({ doc, extensions: [sql({ dialect: MySQL })] })
   return analyzeSqlCursorText(state, pos, 'mysql')
 }
@@ -69,20 +74,47 @@ describe('位置类别矩阵', () => {
   })
 })
 
-describe('语句范围', () => {
-  it('光标停在语句末尾空白时仍算这条语句', () => {
+describe('语句范围与边界', () => {
+  it('光标停在语句末尾的普通空白里仍算这条语句', () => {
+    const doc = 'SELECT * FROM users WHERE id = 1\n'
+    const intent = intentAt(doc, doc.length)
+    expect(intent.statement?.from).toBe(0)
+    expect(intent.statementBoundary).toBe('trailing-whitespace')
+  })
+
+  it('空行之后是新语句（没写分号也算）', () => {
     const doc = 'SELECT * FROM users WHERE id = 1\n\n'
-    const range = completionStatementRange(doc, doc.length, 'mysql')
-    expect(range?.from).toBe(0)
+    const intent = intentAt(doc, doc.length)
+    expect(intent.statementBoundary).toBe('blank-line')
+    expect(intent.kind).toBe('statement-start')
+  })
+
+  it('空行后写前缀：子句扫描直接跑在新语句上', () => {
+    const intent = intentOf('SELECT * FROM users AS t1\n\nS§')
+    expect(intent.statementBoundary).toBe('blank-line')
+    expect(intent.clausePrefix).toBe('S')
+    expect(intent.kind).toBe('statement-start')
+  })
+
+  it('语句内部的空行不是边界（逗号结尾只是排版）', () => {
+    const intent = intentOf('SELECT a,\n\nb§ FROM users')
+    expect(intent.statementBoundary).toBe('inside-statement')
+    expect(intent.kind).toBe('column')
+  })
+
+  it('括号里的空行不是边界', () => {
+    const intent = intentOf('SELECT * FROM users WHERE id IN (\n\n1§)')
+    expect(intent.statementBoundary).toBe('inside-statement')
+  })
+
+  it('空行后是续写（AND）也不算边界', () => {
+    const intent = intentOf("SELECT * FROM users WHERE id = 1\n\nAND name = 'a'§")
+    expect(intent.statementBoundary).toBe('inside-statement')
   })
 
   it('多语句：只认光标所在的那一条', () => {
     const doc = 'SELECT 1;\nSELECT * FROM users'
-    const intent = analyzeSqlCursorText(
-      EditorState.create({ doc, extensions: [sql({ dialect: MySQL })] }),
-      doc.length,
-      'mysql',
-    )
+    const intent = intentAt(doc, doc.length)
     expect(intent.statement?.from).toBe(doc.indexOf('SELECT * FROM users'))
     // 子句前缀也只从这条语句开始，不会把上一条的 SELECT 当上下文
     expect(intent.clausePrefix.startsWith('SELECT * FROM users')).toBe(true)
