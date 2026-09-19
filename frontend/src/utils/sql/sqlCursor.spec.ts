@@ -17,10 +17,10 @@ function intentOf(docWithCursor: string) {
   return intentAt(doc, pos)
 }
 
-/** 分析指定文档的指定位置 */
-function intentAt(doc: string, pos: number) {
+/** 分析指定文档的指定位置（方言默认 MySQL） */
+function intentAt(doc: string, pos: number, dbType = 'mysql') {
   const state = EditorState.create({ doc, extensions: [sql({ dialect: MySQL })] })
-  return analyzeSqlCursorText(state, pos, 'mysql')
+  return analyzeSqlCursorText(state, pos, dbType)
 }
 
 describe('位置类别矩阵', () => {
@@ -109,6 +109,39 @@ describe('语句范围与边界', () => {
 
   it('空行后是续写（AND）也不算边界', () => {
     const intent = intentOf("SELECT * FROM users WHERE id = 1\n\nAND name = 'a'§")
+    expect(intent.statementBoundary).toBe('inside-statement')
+  })
+
+  it('光标刚落到空行之后也进入新语句', () => {
+    const intent = intentOf('SELECT * FROM users\n\n§')
+    expect(intent.statementBoundary).toBe('blank-line')
+    expect(intent.kind).toBe('statement-start')
+  })
+
+  it('结尾是 `*` 不影响空行边界（它是完整表达式，不是续写符）', () => {
+    const intent = intentOf('SELECT *\n\nS§')
+    expect(intent.statementBoundary).toBe('blank-line')
+  })
+
+  it('SELECT * 结束后的空行同样能开始下一条 SQL', () => {
+    const intent = intentOf('SELECT *\nFROM users\n\nS§')
+    expect(intent.statementBoundary).toBe('blank-line')
+    expect(intent.kind).toBe('statement-start')
+  })
+
+  it('空行后的注释不能遮蔽续写 AND', () => {
+    const intent = intentOf("SELECT * FROM users WHERE id = 1\n\n-- continue condition\nAND name = 'a'§")
+    expect(intent.statementBoundary).toBe('inside-statement')
+  })
+
+  it('MySQL `#` 注释之后同样识别新语句', () => {
+    const intent = intentOf('SELECT * FROM users\n\n# next\nS§')
+    expect(intent.statementBoundary).toBe('blank-line')
+  })
+
+  it('PostgreSQL dollar quote 内部的空行不是边界', () => {
+    const sql = 'DO $$\n\nBEGIN\n  RAISE NOTICE \'x\';\nEND\n\n$$;'
+    const intent = intentAt(sql, sql.indexOf('BEGIN'), 'postgres')
     expect(intent.statementBoundary).toBe('inside-statement')
   })
 

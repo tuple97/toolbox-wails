@@ -50,6 +50,31 @@ function referenceTextsOf(docWithCursor: string, symbolName: string) {
     .map(range => doc.slice(range.from, range.to))
 }
 
+describe('语义符号：边界用真实语句（不吃补全的空行边界）', () => {
+  it('空行后写前缀时，语义仍归属真实语句', () => {
+    /*
+     * 补全会把 `\n\nS` 当成新语句（编辑器意图）；语义层不行 ——
+     * `statementAtCursor` 认为 `… users u\n\nS` 还是同一条语句，
+     * 所以别名 u 仍然可见。这条是用例区分两个口径的关键。
+     */
+    const { state, pos } = stateOf('SELECT * FROM users u\n\nS|')
+    const aliases = scopesAt(state, pos, 'mysql')
+      .flatMap(scope => scope.refs)
+      .map(ref => ref.alias)
+    expect(aliases).toContain('u')
+  })
+
+  it('分号分隔的第二条 SQL 有自己的作用域', () => {
+    const { state, pos } = stateOf('SELECT * FROM users u;\n\nSELECT * FROM orders o WHERE o.|')
+    const aliases = scopesAt(state, pos, 'mysql')
+      .flatMap(scope => scope.refs)
+      .map(ref => ref.alias)
+    expect(aliases).toContain('o')
+    // 上一条 SQL 的 u 不泄漏
+    expect(aliases).not.toContain('u')
+  })
+})
+
 describe('语义符号：作用域与来源', () => {
   it('每个作用域都能拿到自己的表引用与位置', () => {
     const { state, pos } = stateOf('SELECT u.id FROM users u WHERE u.id = 1|')

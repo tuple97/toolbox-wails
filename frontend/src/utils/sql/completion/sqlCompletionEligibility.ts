@@ -19,6 +19,7 @@ import {
   EXPRESSION_KEYWORDS,
   JOIN_KEYWORDS,
   SQL_KEYWORDS,
+  STATEMENT_KEYWORDS,
 } from '../sqlCompletionKeywords'
 import type { SqlCompletionSlot } from './sqlCompletionSlot'
 
@@ -85,6 +86,15 @@ const NAME_ONLY_SLOTS: SqlCompletionSlot[] = [
 ]
 
 /**
+ * 语句开头允许的关键字：语句级起始关键字（SELECT / WITH / INSERT / SHOW / DDL…）。
+ *
+ * 额外补 `SET` —— 它既是 `UPDATE … SET` 的子句关键字，本身也是一条完整语句
+ * （`SET @x = 1`）。子句 / 表达式关键字（`AS` / `OFFSET` / `VALUES` / `AND`…）
+ * 在语句开头没有意义：它们出现了，就说明位置类别又退回「上一条 SQL 的 clause」了。
+ */
+const STATEMENT_START_KEYWORDS = [...STATEMENT_KEYWORDS, 'SET']
+
+/**
  * 该槽位允许出现的关键字（顺序即候选顺序）。
  *
  * 这是 `keywordsFor(kind)` 的替代：粒度从「位置大类」细化到槽位，
@@ -117,8 +127,10 @@ export function keywordsForSlot(ctx: EligibilityContext): string[] {
     case 'join-predicate-start':
     case 'join-expression':
       return [...EXPRESSION_KEYWORDS]
+    case 'statement-start':
+      return STATEMENT_START_KEYWORDS
     default:
-      // statement-start / unknown：位置判不出来就宽松给全量
+      // unknown：位置真的判不出来（空文档、纯注释…）→ 宽松给全量
       return SQL_KEYWORDS
   }
 }

@@ -89,11 +89,17 @@ const SET_OPERATOR_MODIFIERS = new Set(['ALL', 'DISTINCT'])
 const PREFIX_KEYWORDS = new Set(['EXPLAIN', 'DESC', 'DESCRIBE'])
 const PREFIX_TARGETS = new Set(['SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE', 'MERGE'])
 
-type Dialect = 'mysql' | 'postgres' | 'other'
+/** 扫描方言：本项目只区分 MySQL / PostgreSQL 家族的词法差异 */
+export type SqlScanDialect = 'mysql' | 'postgres' | 'other'
 
-/** 把数据库类型收敛成三种扫描方言 */
-function dialectOf(dbType?: string): Dialect {
-  const value = (dbType ?? '').toLowerCase()
+/**
+ * 把数据库类型收敛成扫描方言。
+ *
+ * 补全层的空行边界检测也用它 —— 字符串 / 注释 / dollar quote 这些词法规则
+ * 真实语句扫描器已经有一份，不能再各写一套。
+ */
+export function normalizeSqlScanDialect(dbType = ''): SqlScanDialect {
+  const value = dbType.toLowerCase()
   if (value.includes('mysql') || value.includes('maria')) return 'mysql'
   if (value.includes('postgres') || value.includes('gauss')) return 'postgres'
   return 'other'
@@ -141,7 +147,7 @@ function lineStartAt(text: string, pos: number): number {
 // --------------------------------------------------------------- 切分
 
 /** 切分结果缓存：`Text` 是不可变对象，引用相同就说明文档没变 */
-let lastSplit: { source: SqlSource; dialect: Dialect; statements: SqlStatement[] } | null = null
+let lastSplit: { source: SqlSource; dialect: SqlScanDialect; statements: SqlStatement[] } | null = null
 
 /**
  * 把整段脚本切成顶层语句。
@@ -150,7 +156,7 @@ let lastSplit: { source: SqlSource; dialect: Dialect; statements: SqlStatement[]
  * @param dbType 数据库类型，决定方言细节（反引号、`DELIMITER`、dollar 引用）
  */
 export function splitSqlStatements(source: SqlSource, dbType?: string): SqlStatement[] {
-  const dialect = dialectOf(dbType)
+  const dialect = normalizeSqlScanDialect(dbType)
   if (lastSplit && lastSplit.source === source && lastSplit.dialect === dialect) {
     return lastSplit.statements
   }
@@ -162,7 +168,7 @@ export function splitSqlStatements(source: SqlSource, dbType?: string): SqlState
 }
 
 /** 逐字符扫描出的语句列表 */
-function scanStatements(text: string, dialect: Dialect): SqlStatement[] {
+function scanStatements(text: string, dialect: SqlScanDialect): SqlStatement[] {
   const isMysql = dialect === 'mysql'
   const isPostgres = dialect === 'postgres'
   const starters = new Set([...COMMON_STARTERS, ...DIALECT_STARTERS[dialect]])

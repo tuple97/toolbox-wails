@@ -394,6 +394,18 @@ describe('补全位置与次序（回归）', () => {
     expect(labels).not.toContain('name')
   })
 
+  it('真实场景：上一条 SQL 后空一行输入 S 应开始新 SQL', () => {
+    const labels = labelsOf(
+      'SELECT t1.email, t1.id, t1.is_active, t1.password_hash, t1.updated_at '
+      + 'FROM `users` AS t1\n\nS|',
+    )
+    expect(labels).toContain('SELECT')
+    // 上一条 SQL 的 clause context（表来源之后的关键字）不该再出现
+    expect(labels).not.toContain('AS')
+    expect(labels).not.toContain('OFFSET')
+    expect(labels).not.toContain('VALUES')
+  })
+
   it('语句内部的空行不切断作用域', () => {
     const labels = labelsOf('SELECT\n\nname| FROM users')
     expect(labels).toContain('name')

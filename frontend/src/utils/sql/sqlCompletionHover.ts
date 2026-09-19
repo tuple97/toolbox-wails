@@ -23,7 +23,7 @@ import {
 import type { CompletionRuntime, MetadataProvider, SqlContext } from './sqlCompletion'
 import { unquoteIdent } from './sqlSchema'
 import type { TableRef } from './sqlSchema'
-import { completionStatementRange } from './sqlCursor'
+import { statementAtCursor } from './sqlStatementRanges'
 
 /** 悬停提示里展示的列信息 */
 export interface SqlColumnInfo {
@@ -70,7 +70,8 @@ export function columnHoverAt(
 
   const metadata = runtime.metadata ?? defaultMetadataProvider
   const doc = state.doc.toString()
-  const statement = completionStatementRange(doc, pos, sql.dbType)
+  // 悬停是「看已写下的 SQL」：用真实语句，不用补全的空行边界
+  const statement = statementAtCursor(doc, pos, sql.dbType)
   const scopes = buildScopes(
     state,
     word.from,

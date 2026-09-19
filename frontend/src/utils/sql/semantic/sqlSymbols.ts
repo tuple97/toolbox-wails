@@ -18,7 +18,8 @@ import { inLiteralOrComment, scopeRanges } from '@/utils/sql/sqlSyntax'
 import type { TextRange } from '@/utils/sql/sqlSyntax'
 import { collectCteDefs, collectOutputAliases, collectTableRefs, readIdentifier } from '../sqlSchema'
 import type { CteDef, OutputAlias, TableRef } from '../sqlSchema'
-import { completionStatementRange, scanClause } from '../sqlCursor'
+import { scanClause } from '../sqlCursor'
+import { statementAtCursor } from '../sqlStatementRanges'
 
 /** 一个作用域里的表引用（内 → 外排列，范围已换算成文档绝对坐标） */
 export interface SqlScopeSources {
@@ -119,7 +120,12 @@ function shiftRef(ref: TableRef, offset: number): TableRef {
  */
 export function scopesAt(state: EditorState, pos: number, dbType = ''): SqlScopeSources[] {
   const doc = state.doc.toString()
-  const statement = completionStatementRange(doc, pos, dbType)
+  /*
+   * 语义层用**真实语句**（`statementAtCursor`），不掺补全的编辑器意图：
+   * 补全为了「空行后接着写新 SQL」会把范围前移，那是 completion 的产品规则；
+   * 重命名 / 悬停 / 定位必须停在真实 SQL statement 上。
+   */
+  const statement = statementAtCursor(doc, pos, dbType)
   return scopeRanges(state, pos, doc, dbType, statement).map(range => ({
     range,
     refs: collectTableRefs(doc.slice(range.from, range.to)).map(ref => shiftRef(ref, range.from)),

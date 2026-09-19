@@ -22,7 +22,7 @@
  * 「最近的、同层级的子句关键字是哪个」。
  */
 import type { EditorState } from '@codemirror/state'
-import { splitSqlStatements } from '@/utils/sql/sqlStatementRanges'
+import { normalizeSqlScanDialect, splitSqlStatements } from '@/utils/sql/sqlStatementRanges'
 import type { TextRange } from '@/utils/sql/sqlSyntax'
 import { IDENT_BODY_SOURCE, IDENT_SOURCE } from './sqlLexemes'
 import { readAlias, readIdentifier, readQualifiedName, skipQuoted } from './sqlSchema'
@@ -385,10 +385,13 @@ export interface CompletionStatementContext {
  * 光标停在 `… WHERE ` 之后、或新起一行准备继续写时，必须仍能看到这张表的列，
  * 所以这里把「语句末尾之后、下一条语句之前的空白」也算作该语句。
  *
- * 另外比旧实现多一层：**空行是语句边界**。
+ * 另外比旧实现多一层：**空行是补全语义上的语句边界**。
  * `SELECT * FROM users\n\nS|` 里的 `S` 要按新语句解析（否则会继续给上一条
  * FROM 之后的 SET / AS / OFFSET 之类候选）。语句内部的空行不会误判 ——
- * 见 `blankLineStart` 的结构性判据（括号闭合 / 结尾不是延续符 / 前后不是延续词）。
+ * 见 `findCompletionBlankLineBoundary` 的结构性判据。
+ *
+ * 注意语义分工：这里是**补全视图**（编辑器意图）；真实语句要用
+ * `statementAtCursor`（执行 / 语义 / 重命名 / 悬停都走那条）。
  */
 export function completionStatementContext(
   doc: string,
@@ -407,7 +410,7 @@ export function completionStatementContext(
        * 补全要把它当「空行之后的新语句」—— 新的范围从空行之后算起，
        * 上一条 SQL 的表 / 别名就不会进作用域。
        */
-      const start = blankLineStart(doc, statement.from, pos)
+      const start = findCompletionBlankLineBoundary(doc, statement.from, pos, dbType)
       if (start !== null) {
         return { range: { from: start, to: statement.to }, boundary: 'blank-line' }
       }
@@ -441,10 +444,11 @@ export function completionStatementContext(
 }
 
 /**
- * 只取解析范围的老入口。
+ * 只取解析范围的兼容入口（**仅补全**）。
  *
- * 悬停 / 符号解析这类只关心「解析哪一段」的调用方用它；
- * 需要区分「仍在语句里 / 空行之后的新语句」时用 `completionStatementContext`。
+ * @deprecated 语义 / 重命名 / 悬停请用 `statementAtCursor`（真实 SQL statement）。
+ * 这个范围是**补全视图**：它会把空行之后的光标当成新语句，属于编辑器的产品规则，
+ * 不是 SQL 标准里的语句边界。
  */
 export function completionStatementRange(doc: string, pos: number, dbType = ''): TextRange | null {
   return completionStatementContext(doc, pos, dbType)?.range ?? null
@@ -461,29 +465,46 @@ function lineStartOf(doc: string, pos: number): number {
 }
 
 /**
- * 语句文本内部的空行边界：返回空行之后的行首（新语句起点），没有则返回 null。
+ * 当前补全语句里「空行边界」的候选起点（空行之后的行首），没有则返回 null。
  *
- * 判据只有两条结构性信号，不猜语义：
- *  - 括号闭合（`WHERE id IN (\n\n…` 的空行在括号里，显然还没写完）；
- *  - 空行前最后一个非空白字符不像「还要接着写」的符号（`, . ( = + - * / …`），
- *    例如 `SELECT a,\n\nb` 的空行只是排版。
+ * **它不是第二个 SQL 解析器**，职责刻意保持小：
+ *  - 只找空行、只判「是否在字符串 / 注释 / dollar quote / 括号里」、
+ *    只识别**明显的续写信号**；
+ *  - 不做语法分析、不判断语句起始关键字：`SELECT` / `INSERT` 这类完整关键字
+ *    已经由 `splitSqlStatements` 按行首软分隔切开（光标落在新的真实语句里）；
+ *    这里服务的是 `S` / `SE` / `UP` 这类**还没写全的关键字前缀**；
+ *  - 词法规则与真实语句扫描器共用方言归一（`normalizeSqlScanDialect`），
+ *    不另立一套标准。
  *
- * 字符串与注释里的空行不算数（整段跳过）；引号没闭合就直接判否。
+ * 判据（结构性信号，不猜语义）：
+ *  1. 括号必须闭合 —— `WHERE id IN (\n\n1` 的空行在括号里；
+ *  2. 空行前最后一个字符不是续写符 —— `SELECT a,\n\nb` 只是排版
+ *     （`SELECT *\nFROM users` 结尾的 `*` 不算续写符，那是完整表达式）；
+ *  3. 空行前最后一个词不是续写词 —— `SELECT\n\nname` 显然没写完；
+ *  4. 空行后第一个有意义的词（跳过注释）也不是续写词 ——
+ *     `WHERE id = 1\n\n-- 注释\nAND name = 'a'` 是同一条件的续写。
  */
-function blankLineStart(doc: string, from: number, to: number): number | null {
+function findCompletionBlankLineBoundary(
+  doc: string,
+  from: number,
+  to: number,
+  dbType = '',
+): number | null {
+  const dialect = normalizeSqlScanDialect(dbType)
   let i = from
   let depth = 0
   let boundary = -1
   /** 最近一个「有内容的字符」（注释与引号内的内容不算） */
   let contentEnd = -1
-  /** 最近一个词（小写）：判断它是不是「后面必然还要接内容」的关键字 */
+  /** 最近一个词（小写）：判断它是不是续写词 */
   let lastWord = ''
 
   while (i < to) {
     const ch = doc[i]
 
     // 标识符：整块读掉，顺便记下最后一个词
-    if (/[A-Za-z_$]/.test(ch)) {
+    // （词首不认 `$`：那是 PostgreSQL dollar quote 的起始，不能当标识符吃掉）
+    if (/[A-Za-z_]/.test(ch)) {
       let j = i
       while (j < to && /[\w$]/.test(doc[j] ?? '')) {
         j += 1
@@ -494,7 +515,8 @@ function blankLineStart(doc: string, from: number, to: number): number | null {
       continue
     }
 
-    if (ch === '\'' || ch === '"' || ch === '`') {
+    // 字符串 / 引号标识符：反引号只在 MySQL 家族里是引用符
+    if (ch === '\'' || ch === '"' || (ch === '`' && dialect === 'mysql')) {
       const next = skipQuoted(doc, i)
       if (next > to) {
         return null
@@ -504,7 +526,22 @@ function blankLineStart(doc: string, from: number, to: number): number | null {
       continue
     }
 
-    if ((ch === '-' && doc[i + 1] === '-') || ch === '#') {
+    // PostgreSQL dollar quote：`$$ … $$`（可跨行）里的空行不是语句边界
+    if (dialect === 'postgres' && ch === '$') {
+      const tag = /^\$[A-Za-z_0-9]*\$/.exec(doc.slice(i, i + 64))
+      if (tag) {
+        const close = doc.indexOf(tag[0], i + tag[0].length)
+        if (close < 0 || close + tag[0].length > to) {
+          return null
+        }
+        contentEnd = close + tag[0].length - 1
+        i = close + tag[0].length
+        continue
+      }
+    }
+
+    // 行注释：`--` 通用；`#` 只有 MySQL 家族（PostgreSQL / 标准 SQL 里 # 是普通字符）
+    if ((ch === '-' && doc[i + 1] === '-') || (dialect === 'mysql' && ch === '#')) {
       const newline = doc.indexOf('\n', i)
       i = newline === -1 || newline > to ? to : newline
       continue
@@ -536,12 +573,11 @@ function blankLineStart(doc: string, from: number, to: number): number | null {
         && doc[j] === '\n'
         && depth === 0
         && !endsWithContinuation(doc, contentEnd)
-        && !CONTINUATION_WORDS.has(lastWord)
+        && !isContinuationWord(lastWord)
       ) {
         // 空行之后的行首即是新语句起点（后面若还有注释行，一并算进去）
         const start = lineStartOf(doc, j + 1)
-        // `WHERE id = 1\n\nAND x = 2`：续写的一行不是新语句
-        if (!CONTINUATION_WORDS.has(firstWordAt(doc, start, to))) {
+        if (!isContinuationWord(firstMeaningfulWordAt(doc, start, to, dbType))) {
           boundary = start
         }
       }
@@ -558,39 +594,82 @@ function blankLineStart(doc: string, from: number, to: number): number | null {
   return boundary >= 0 ? boundary : null
 }
 
-/** 某一行（从 lineStart 起）的第一个词（小写）；没有词返回空串 */
-function firstWordAt(doc: string, lineStart: number, to: number): string {
+/**
+ * 从 lineStart 起第一个**有意义的**词（跳过空白、行注释、块注释）；没有则返回空串。
+ *
+ * 必须跳过注释：`\n-- 注释\nAND name = 'a'` 里的 `AND` 才是续写信号，
+ * 只看首个非空白字符会漏掉它，把续写误判成新语句。
+ */
+function firstMeaningfulWordAt(doc: string, lineStart: number, to: number, dbType = ''): string {
+  const dialect = normalizeSqlScanDialect(dbType)
   let i = lineStart
-  while (i < to && (doc[i] === ' ' || doc[i] === '\t')) {
-    i += 1
+
+  while (i < to) {
+    const ch = doc[i]
+    if (/\s/.test(ch)) {
+      i += 1
+      continue
+    }
+    if ((ch === '-' && doc[i + 1] === '-') || (dialect === 'mysql' && ch === '#')) {
+      const newline = doc.indexOf('\n', i)
+      if (newline < 0 || newline >= to) {
+        return ''
+      }
+      i = newline + 1
+      continue
+    }
+    if (ch === '/' && doc[i + 1] === '*') {
+      const close = doc.indexOf('*/', i + 2)
+      if (close < 0 || close + 2 >= to) {
+        return ''
+      }
+      i = close + 2
+      continue
+    }
+    break
   }
-  let end = i
-  while (end < to && /[\w$]/.test(doc[end] ?? '')) {
-    end += 1
-  }
-  return doc.slice(i, end).toLowerCase()
+
+  const match = /^[A-Za-z_][\w$]*/.exec(doc.slice(i, to))
+  return match ? match[0].toLowerCase() : ''
 }
 
-/** 结尾字符是否表示「还要接着写」（逗号 / 点号 / 运算符 / 开括号） */
+/**
+ * 结尾字符是否**必须**继续写（逗号 / 括号 / 赋值与比较运算符）。
+ *
+ * 刻意收窄：`*` `/` `%` `[` 都**不算**续写信号 —— 它们可能只是表达式的一部分
+ * （`SELECT *\nFROM users` 的 `*` 已经写完了），误判会让空行边界永远不成立。
+ */
 function endsWithContinuation(doc: string, contentEnd: number): boolean {
   if (contentEnd < 0) {
     return true
   }
-  return /[,.(\[=+\-*/%<>|&:!?]/.test(doc[contentEnd] ?? '')
+  return /[,.(=+\-<>:&|!?]/.test(doc[contentEnd] ?? '')
 }
 
 /**
- * 后面必然还要接内容的词：空行紧跟在它们之后，说明语句还没写完。
- * 只收「语法上必须继续」的（子句引导词、连接词、修饰词），不收可以独立收尾的。
+ * 续写提示词 —— **只用来消除「明显续写」的误切，不是 SQL grammar**。
+ *
+ * 缺了某个关键字，最多让极少数合法写法被判成新语句；这是「空行 = 编辑器里的
+ * 新 SQL 意图」这条产品规则的一部分，不是 SQL 标准解析。
+ * 不收可以独立收尾的词（如 `DESC`、`NULL`、`TRUE`）。
  */
-const CONTINUATION_WORDS = new Set([
+const CONTINUATION_CLAUSE_WORDS = new Set([
   'select', 'distinct', 'all', 'from', 'join', 'left', 'right', 'inner', 'outer',
-  'full', 'cross', 'on', 'using', 'where', 'and', 'or', 'not', 'having', 'group',
-  'order', 'by', 'set', 'values', 'into', 'as', 'when', 'then', 'else', 'case',
-  'union', 'intersect', 'except', 'limit', 'offset', 'in', 'between', 'like',
-  'is', 'with', 'insert', 'update', 'delete', 'create', 'alter', 'drop',
-  'truncate', 'add', 'returning', 'asc', 'desc', 'over', 'partition', 'window',
+  'full', 'cross', 'on', 'using', 'where', 'group', 'order', 'by', 'having',
+  'set', 'values', 'into', 'as', 'union', 'intersect', 'except', 'limit', 'offset',
+  'with', 'insert', 'update', 'delete', 'create', 'alter', 'drop', 'truncate',
+  'add', 'returning', 'over', 'partition', 'window',
 ])
+
+/** 表达式内部的连接词：出现在空行前后都说明还在写同一个表达式 */
+const CONTINUATION_OPERATOR_WORDS = new Set([
+  'and', 'or', 'not', 'between', 'like', 'is', 'in', 'when', 'then', 'else', 'case',
+])
+
+/** 这个词是否表示「还要接着写」 */
+function isContinuationWord(word: string): boolean {
+  return CONTINUATION_CLAUSE_WORDS.has(word) || CONTINUATION_OPERATOR_WORDS.has(word)
+}
 
 /** 由子句扫描结论细化为位置类别 */
 export function sqlContextKindOf(scan: ClauseScan, statementText: string): CompletionContextKind {
