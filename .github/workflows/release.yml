@@ -1,0 +1,117 @@
+name: Release
+
+# 在 main 上打 tag（v1.2.3）即构建并发布 exe。
+# 资产名必须是 toolbox-windows-amd64.exe：应用内更新（Wails updater 的 GitHub provider）
+# 按「文件名含平台 + 架构」挑选资产，checksums.txt 用于下载后的 SHA-256 校验。
+on:
+  push:
+    tags:
+      - 'v*'
+  # 手动触发：只跑到构建产物上传为止（不发版），方便验证流水线
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  WAILS_VERSION: v3.0.0-beta.20
+  GO_VERSION: '1.25'
+  NODE_VERSION: '20'
+  PNPM_VERSION: 11.17.0
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验（类型 + 单测）
+        working-directory: frontend
+        run: |
+          pnpm typecheck
+          pnpm test
+
+      - name: 同步版本号
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: pwsh scripts/set-version.ps1 -Version '${{ github.ref_name }}'
+
+      - name: 安装 Wails CLI
+        shell: pwsh
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@$env:WAILS_VERSION
+          "$env:USERPROFILE\go\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: 生成图标与清单资源
+        working-directory: frontend
+        run: pnpm gen:icon
+
+      - name: 构建前端
+        working-directory: frontend
+        run: pnpm build
+
+      - name: 后端校验
+        shell: pwsh
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: 构建可执行文件
+        shell: pwsh
+        run: |
+          # 版本号注入到 app.Version：应用内更新与标题栏版本都以它为准
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { "${{ github.ref_name }}".TrimStart('v') } else { '0.0.0' }
+          New-Item -ItemType Directory -Force build/bin | Out-Null
+          go build -tags production -trimpath `
+            -ldflags "-w -s -H=windowsgui -X toolbox-wails/app.Version=$version" `
+            -o build/bin/toolbox-windows-amd64.exe .
+          Write-Host "已构建 toolbox-windows-amd64.exe（版本 $version）"
+
+      - name: 生成校验和
+        shell: pwsh
+        run: |
+          # 写成无 BOM 的 UTF-8：更新器按文本解析这份清单，BOM 会干扰首行的哈希
+          $hash = (Get-FileHash build/bin/toolbox-windows-amd64.exe -Algorithm SHA256).Hash.ToLower()
+          $content = "$hash  toolbox-windows-amd64.exe"
+          [System.IO.File]::WriteAllText(
+            (Join-Path $PWD 'build/bin/checksums.txt'),
+            $content,
+            (New-Object System.Text.UTF8Encoding $false))
+          Get-Content build/bin/checksums.txt
+
+      - name: 上传构建产物（手动触发时）
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolbox-windows-amd64
+          path: |
+            build/bin/toolbox-windows-amd64.exe
+            build/bin/checksums.txt
+
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/bin/toolbox-windows-amd64.exe
+            build/bin/checksums.txt
+          generate_release_notes: true
+          draft: false

@@ -36,6 +36,10 @@ export const ValidateScript = App.ValidateScript
 export const ValidateTemplate = App.ValidateTemplate
 export const ExecuteTemplateQuery = App.ExecuteTemplateQuery
 export const RenderExportTemplate = App.RenderExportTemplate
+export const CheckUpdate = App.CheckUpdate
+export const DownloadUpdate = App.DownloadUpdate
+export const RestartToApplyUpdate = App.RestartToApplyUpdate
+export const UpdateState = App.UpdateState
 
 // ---- 词典 ----
 export const ListDictionaries = App.ListDictionaries

@@ -31,6 +31,8 @@ const DEFAULTS: Record<SettingKey, string> = {
   // 片段插入后 Tab 在占位符之间跳转
   template_placeholder_tab: 'true',
   shortcut_config: '{}',
+  // 启动后自动检查新版本
+  app_auto_update: 'true',
 }
 
 export const useConfigStore = defineStore('config', () => {

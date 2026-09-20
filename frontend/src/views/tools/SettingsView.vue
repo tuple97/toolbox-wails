@@ -8,14 +8,23 @@ import Slider from '@/components/ui/Slider.vue'
 import Switch from '@/components/ui/Switch.vue'
 import Tabs from '@/components/ui/Tabs.vue'
 import { fetchSystemFonts } from '@/api/fonts'
+import { fetchAppInfo } from '@/api/system'
+import {
+  checkUpdate,
+  downloadUpdate,
+  onUpdateError,
+  onUpdateProgress,
+  restartToApplyUpdate,
+} from '@/api/update'
 import { useConfigStore } from '@/stores/configStore'
 import { useLogStore } from '@/stores/logStore'
 import { useMetadataStore } from '@/stores/metadataStore'
 import { buildFontOptions } from '@/utils/fonts'
+import { notify } from '@/utils/notify'
 import { SQL_TRIGGER_MODE_OPTIONS, parseSqlTriggerMode } from '@/utils/sql/sqlCompletionTrigger'
 import { parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
 import { parsePlaceholderTabJump } from '@/utils/sql/template/templatePlaceholder'
-import type { ThemeMode } from '@/types'
+import type { ThemeMode, UpdateInfo } from '@/types'
 
 const configStore = useConfigStore()
 const logStore = useLogStore()
@@ -34,6 +43,7 @@ const TABS = [
   { value: 'sql', label: 'SQL' },
   { value: 'template', label: '模板' },
   { value: 'advanced', label: '高级' },
+  { value: 'update', label: '更新' },
 ]
 
 /** 当前页签 */
@@ -177,9 +187,74 @@ function resetSettings() {
   flash('已恢复默认设置')
 }
 
+// ---------------------------------------------------------------- 更新
+
+/** 当前版本号 */
+const appVersion = ref('')
+
+/** 自动检查更新（默认开启） */
+const autoUpdate = computed({
+  get: () => configStore.values.app_auto_update === 'true',
+  set: (value: boolean) => configStore.set('app_auto_update', value ? 'true' : 'false'),
+})
+
+/** 更新流程所处阶段 */
+const updateStage = ref<'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'ready' | 'error'>('idle')
+const updateInfo = ref<UpdateInfo | null>(null)
+const updateError = ref('')
+/** 下载进度（null 表示总长未知） */
+const downloadPercent = ref<number | null>(null)
+
+/** 检查更新 */
+async function handleCheckUpdate() {
+  updateStage.value = 'checking'
+  updateError.value = ''
+  updateInfo.value = null
+  try {
+    const info = await checkUpdate()
+    updateInfo.value = info
+    updateStage.value = info.available ? 'available' : 'latest'
+  }
+  catch (e) {
+    updateStage.value = 'error'
+    updateError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+/** 下载并安装更新（进度与错误来自 wails:updater:* 事件） */
+async function handleInstallUpdate() {
+  updateStage.value = 'downloading'
+  downloadPercent.value = 0
+  const stopProgress = onUpdateProgress(percent => { downloadPercent.value = percent })
+  const stopError = onUpdateError(message => { updateError.value = message })
+  try {
+    await downloadUpdate()
+    updateStage.value = 'ready'
+  }
+  catch (e) {
+    updateStage.value = 'error'
+    updateError.value = e instanceof Error ? e.message : String(e)
+  }
+  finally {
+    stopProgress()
+    stopError()
+  }
+}
+
+/** 重启应用以应用更新 */
+async function handleRestart() {
+  try {
+    await restartToApplyUpdate()
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
 onMounted(async () => {
   try {
     systemFonts.value = await fetchSystemFonts()
+    appVersion.value = String((await fetchAppInfo()).version ?? '')
   }
   finally {
     // 失败也要上报
@@ -292,6 +367,67 @@ onBeforeUnmount(() => {
           <Button v-if="resetArmed" variant="ghost" size="sm" @click="resetArmed = false">
             取消
           </Button>
+        </div>
+      </Field>
+    </section>
+
+    <!-- 更新 -->
+    <section v-show="activeTab === 'update'" class="max-w-3xl space-y-1">
+      <Field label="当前版本">
+        <span class="text-sm text-muted">{{ appVersion ? `v${appVersion}` : '—' }}</span>
+      </Field>
+
+      <Field label="自动检查更新">
+        <Switch v-model="autoUpdate" />
+      </Field>
+
+      <Field label="检查更新">
+        <div class="flex items-center gap-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            :loading="updateStage === 'checking'"
+            :disabled="updateStage === 'downloading'"
+            @click="handleCheckUpdate"
+          >
+            检查更新
+          </Button>
+          <span v-if="updateStage === 'latest'" class="text-sm text-muted">已是最新版本</span>
+          <span v-else-if="updateStage === 'error'" class="text-sm text-danger">
+            {{ updateError || '检查失败' }}
+          </span>
+        </div>
+      </Field>
+
+      <div
+        v-if="updateStage === 'available'"
+        class="space-y-2 rounded-md border border-brand/30 bg-brand/8 p-3"
+      >
+        <div class="text-sm font-semibold text-brand">发现新版本 v{{ updateInfo?.latest }}</div>
+        <p
+          v-if="updateInfo?.notes"
+          class="max-h-40 overflow-auto whitespace-pre-line text-xs text-muted"
+        >
+          {{ updateInfo.notes }}
+        </p>
+        <Button size="sm" @click="handleInstallUpdate">下载并安装</Button>
+      </div>
+
+      <Field v-if="updateStage === 'downloading'" label="下载进度">
+        <div class="flex items-center gap-3">
+          <div class="h-1.5 w-56 overflow-hidden rounded-full bg-muted/20">
+            <div class="h-full bg-brand" :style="{ width: `${downloadPercent ?? 0}%` }" />
+          </div>
+          <span class="text-sm text-muted">
+            {{ downloadPercent === null ? '下载中' : `${downloadPercent}%` }}
+          </span>
+        </div>
+      </Field>
+
+      <Field v-if="updateStage === 'ready'" label="更新已就绪">
+        <div class="flex items-center gap-3">
+          <span class="text-sm text-muted">重启应用后生效</span>
+          <Button size="sm" @click="handleRestart">立即重启</Button>
         </div>
       </Field>
     </section>

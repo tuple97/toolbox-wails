@@ -12,6 +12,7 @@ import { useLogStore } from '@/stores/logStore'
 import { useTabStore } from '@/stores/tabStore'
 import type { ContextMenuAction } from '@/types'
 import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
+import { autoCheckUpdateOnStartup } from '@/utils/appUpdate'
 
 const configStore = useConfigStore()
 const logStore = useLogStore()
@@ -67,6 +68,8 @@ onMounted(async () => {
   // 启动时加载全局配置并应用主题/字号
   await configStore.load()
   logStore.setMaxLines(configStore.logMaxLines)
+  // 按设置检查新版本（默认开启；检查失败静默）
+  void autoCheckUpdateOnStartup()
   window.addEventListener('keydown', (event) => {
     if (event.defaultPrevented) {
       return

@@ -1,110 +1,79 @@
-# Toolbox（toolbox-wails）
+# Toolbox · 开发工具箱
 
-基于 [Wails v3](https://v3.wails.io) + Vue 3 + TypeScript 的 Windows 桌面效率工具箱，当前围绕「SQL 查询工作台」：模板化 SQL、变量表单、结果字段映射与词典翻译、执行日志。连接、模板、词典、界面偏好等全部数据存储在本地 SQLite，离线可用。
+> 面向日常开发者的 Windows 桌面工具箱：以「SQL 查询工作台」为核心，模板化 SQL、变量表单、结果字段映射与词典翻译、执行记录，数据全部落在本地 SQLite，离线可用。
+
+[![Release](https://img.shields.io/github/v/release/tuple97/toolbox-wails?label=release&color=409eff)](https://github.com/tuple97/toolbox-wails/releases)
+[![Downloads](https://img.shields.io/github/downloads/tuple97/toolbox-wails/total?color=67c23a)](https://github.com/tuple97/toolbox-wails/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)](#下载与安装)
+[![License](https://img.shields.io/badge/license-%E5%BE%85%E8%A1%A5%E5%85%85-lightgrey)](#许可)
+
+基于 [Wails v3](https://v3.wails.io) + Go + Vue 3 + TypeScript，单文件免安装（约 20 MB，无需 Go / Node 环境）。
 
 ## 功能
 
-- **工作台布局**：左侧菜单 + 顶部多标签。标签支持拖拽排序、双击重命名、锁定、右键批量关闭，重启后完整恢复；多例工具（SQL 查询）可同时打开多个实例。
-- **SQL 查询**：选择模板与连接 → 变量表单（文本/下拉/多选/日期/滑块等，下拉支持用 SQL 动态取选项）→ 执行 → 结果表格（列宽/对齐/别名/字段映射）+ 分页 + 执行日志。
-- **SQL 模板**：`{{变量}}` 占位（Go `text/template` 渲染），支持关键字模板与函数片段插入、前置/后置脚本（goja 执行，带语法校验）、变量配置与字段映射配置；模板更新对引用它的查询标签即时生效。
-- **连接管理**：MySQL / PostgreSQL，连接测试，密码本地加密存储。
-- **执行防护**：只读连接在后端拒绝写操作（含 `SELECT ... INTO OUTFILE` / `FOR UPDATE` 这类"披着 SELECT 的写"）；标记为生产的连接写操作需确认，后端也会校验确认标记。
-- **词典**：维护「原始值 → 可读文本」映射，供字段映射把查询结果翻译成可读文本。
-- **设置**：四套主题、界面/编辑器字体与字号、控件大小、窗口背景透明度与磨砂、日志保留条数，修改即时生效并自动保存。
-- **界面自定义**：侧边菜单与工具选择面板均支持拖动排序、隐藏菜单项（各自独立的配置，互不影响）。
-- 无边框自定义标题栏、窗口背景透明/毛玻璃、启动防闪屏。
+| 工具 | 说明 |
+| --- | --- |
+| **SQL 查询**（多例） | 选模板 + 选连接 → 变量表单（文本 / 下拉 / 多选 / 日期 / 滑块，下拉支持用 SQL 动态取选项）→ 执行 → 结果表格（列宽 / 对齐 / 别名 / 字段映射 / 词典翻译）+ 分页 + 执行日志。结果行右键「复制为…」可生成 INSERT / UPDATE / DELETE，或按自定义导出模板逐行渲染复制 |
+| **SQL 执行**（多例） | 直接写 SQL 跑：语句识别与边框、逐条执行按钮、`EXPLAIN` 分析、格式化 / 压缩、结果导出；补全、悬停、重命名、跳转定义都在编辑器里 |
+| **SQL 模板**（单例） | `{{变量}}` 占位（Go `text/template` 渲染）、变量配置、字段映射、导出模板、前置 / 后置脚本（goja 执行 + 语法校验）；模板更新即时作用于引用它的查询标签 |
+| **连接管理**（单例） | MySQL / PostgreSQL，连接测试、只读连接、环境标记（本地 / 测试 / 生产）、元数据查看；密码加密后本地存储 |
+| **词典**（单例） | 维护「原始值 → 可读文本」映射，供字段映射把结果翻译成可读文本 |
+| **设置**（单例） | 四套主题、界面 / 编辑器字体与缩放、SQL 补全策略、模板块片段行为、日志条数、快捷键、自动检查更新 |
 
-## 技术栈
+工作台本身：左侧菜单 + 顶部多标签，标签可拖拽排序 / 重命名 / 锁定 / 批量关闭，重启后完整恢复；菜单与工具面板支持拖动排序与隐藏。
 
-- 后端：Go 1.25 + Wails v3（beta.20，WebView2 渲染）；SQLite（modernc.org/sqlite，纯 Go 无 CGO）；`text/template` 模板渲染；goja 执行脚本；数据库驱动 go-sql-driver/mysql、lib/pq。
-- 前端：Vue 3（SFC）+ TypeScript + Vite 7 + pnpm 11；Element Plus、CodeMirror 6（本地打包离线可用）、vue-draggable-plus。
+其它细节：
 
-## 密码存储与安全边界
+- **智能补全**：库 / 表 / 列 / 函数 / 关键字按子句上下文给候选，支持中文拼音首字母、列多选（勾选若干列一次插入）、表名自动别名；库限定名（`` `db`. ``）能正确解析到目标库。
+- **编辑器能力**：语法高亮、错误波浪线（模板脚本校验）、查找替换、列 / 表悬停卡片（类型 / 注释 / 主键 / 索引）、表别名与 CTE 重命名、跳转定义、符号引用高亮、`Ctrl+P` 函数参数提示。
+- **执行防护**：只读连接在后端拒绝写操作（含 `SELECT ... INTO OUTFILE`、`FOR UPDATE` 这类「披着 SELECT 的写」）；生产库写操作需显式确认，后端同样校验。
 
-数据库连接密码用 **AES-256-GCM** 加密后写入本地 SQLite（`connections` 表），主密钥存放在**系统凭证管理器**里：
+## 下载与安装
 
-| 平台 | 存放位置 |
-|---|---|
-| Windows | 凭据管理器（Credential Manager） |
-| macOS | 钥匙串（Keychain） |
-| Linux | Secret Service（gnome-keyring / kwallet 等） |
+到 [Releases](https://github.com/tuple97/toolbox-wails/releases) 下载 `toolbox-windows-amd64.exe`，放到任意目录双击运行即可，不写注册表、不装服务。
 
-这样密钥与数据库文件是**分开**的：只拿到用户配置目录下的 `db.db` 解不开密码。
-系统凭证不可用时（例如 Linux 无图形会话、没有可用的 Secret Service），会回退到
-`os.UserCacheDir()` 下的密钥文件——该目录同样与数据库目录分开，但保护强度弱于系统凭证。
-首次启动会自动把旧版本留在数据目录里的 `.secret.key` 迁移进系统凭证并删除。
+- 系统要求：Windows 10 / 11（WebView2 一般随系统自带；缺失时安装 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)）
+- 首次运行会在 `%AppData%\Toolbox\` 建库，卸载直接删目录
 
-**这份加密的实际边界（请不要高估）**：
+## 自动更新
 
-- 防的是「同机其他用户 / 备份同步目录 / 拷贝走数据库文件」这类场景；
-- **不防**能登录本机、以当前用户身份运行程序的攻击者（他一样能取到系统凭证）；
-- **不防**内存抓取与调试器；
-- 换机器或重装系统后，若系统凭证丢失，已存的密码将无法解密，需要重新填写。
+应用内置基于 **GitHub Releases** 的更新（Wails v3 自带 updater，含下载校验与可执行文件替换）：
 
-其它相关约定：
+- 默认启动后自动检查一次新版本；发现新版本会询问是否更新，下载完成后可选择立即重启应用生效
+- 设置 → 更新：可关闭自动检查、手动「检查更新」、查看当前版本与发版说明
+- 更新包校验：发布时随包上传 `checksums.txt`，下载后核对 SHA-256
+- 版本号显示在标题栏应用名右侧
 
-- 明文密码只在用户点「显示密码」时通过 `RevealPassword` 返回，不在列表接口中下发；
-- 写操作在后端按连接标记校验：只读连接拒绝写（含 `INTO OUTFILE`、`FOR UPDATE`），
-  生产库写操作需要确认标记（`allowProductionWrite`），前端提示无法绕过。
+## 快速开始
 
-## 目录结构
+环境要求：
 
-```
-toolbox-wails/
-├── main.go                     # 应用入口：服务注册、资源嵌入（go:embed all:frontend/dist）、主窗口配置
-├── wails.json                  # Wails 项目配置（应用名、输出文件名）
-├── go.mod
-├── app/                        # Go 后端
-│   ├── app.go                  # App 结构体：依赖装配、生命周期、退出通知
-│   ├── bind_*.go               # 绑定层：db / dict / font / settings / tabs / template（仅校验+转发）
-│   ├── window.go               # 窗口控制（最小化/最大化/关闭）
-│   ├── fonts_windows.go        # 读取本机已安装字体（注册表）
-│   └── internal/
-│       ├── database/           # SQLite 访问（repository、连接管理、建表）
-│       ├── services/           # 业务服务（连接/模板/词典/标签/设置）
-│       ├── script/             # goja 前置/后置脚本引擎
-│       └── utils/              # 模板渲染、加解密等
-├── build/                      # 打包资源（icon.ico、manifest、info.json）与产物（build/bin 不入库）
-└── frontend/                   # 前端工程
-    ├── bindings/               # wails3 generate bindings 自动生成（勿手动修改）
-    └── src/
-        ├── api/                # 后端接口封装（显式类型映射）+ bindings.ts
-        ├── components/         # 通用组件（标题栏、代码编辑器、结果表格、字段映射/变量配置面板等）
-        ├── layouts/            # 工作台布局（左侧菜单 + 多标签）
-        ├── stores/             # Pinia（标签/配置/词典/日志）
-        ├── utils/              # 工具注册表、字体、模板语言等
-        ├── views/tools/        # 各工具页面（SQL 查询/连接/模板/词典/设置）
-        ├── styles/             # 全局样式与主题变量
-        └── types/              # 公共类型
-```
-
-## 环境要求
-
-- Go >= 1.25；Wails CLI v3：`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`（生成绑定与图标用）
-- Node >= 20.19 + pnpm >= 11（`corepack enable pnpm` 或 `npm i -g pnpm`）
-- Windows 10/11，WebView2 Runtime（一般自带）
-
-## 开发
+- Go >= 1.25
+- Wails CLI v3：`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.20`（生成绑定与图标资源用）
+- Node >= 20.19 + pnpm 11（`corepack enable pnpm` 或 `npm i -g pnpm`）
 
 ```bash
-cd frontend
+git clone https://github.com/tuple97/toolbox-wails.git
+cd toolbox-wails/frontend
 pnpm install
 ```
 
-所有前端命令均在 `frontend` 目录下执行：
+前端命令都在 `frontend` 目录执行（根目录 `package.json` 只是转发入口）：
 
 | 命令 | 说明 |
 | --- | --- |
-| `pnpm dev` | 仅启动 Vite 开发服务器（浏览器访问 http://localhost:5173） |
-| `pnpm dev:app` | 启动桌面应用：Vite 开发服务器 + `go run .`（WebView 加载 dev server，改动热更新） |
-| `pnpm build` | 类型检查（vue-tsc）并构建前端产物到 `frontend/dist` |
-| `pnpm build:app` | `pnpm build` 后编译桌面应用到 `build/bin/toolbox.exe` |
-| `pnpm gen:bindings` | 重新生成后端绑定到 `frontend/bindings` |
-| `pnpm preview` / `pnpm typecheck` | 预览构建产物 / 仅类型检查 |
+| `pnpm dev:app` | 启动桌面应用（Vite 开发服务器 + `go run .`，支持热更新） |
+| `pnpm dev` | 只启动 Vite 开发服务器（浏览器打开 http://localhost:5173 看界面） |
+| `pnpm build` | 类型检查 + 构建前端产物到 `frontend/dist` |
+| `pnpm build:app` | 生成图标资源 → 构建前端 → 编译到 `build/bin/toolbox.exe` |
+| `pnpm gen:bindings` | 重新生成后端绑定到 `frontend/bindings`（改过 `app/bind_*.go` 后执行） |
+| `pnpm typecheck` / `pnpm test` | 类型检查 / 单元测试（vitest） |
 
-> 说明：页面资源在 Go 编译时通过 `go:embed all:frontend/dist` 嵌入，因此**打包必须先构建前端**（`build:app` 已包含）；开发模式加载的是 Vite 开发服务器，不受影响。
+> 前端产物通过 `go:embed all:frontend/dist` 嵌进 exe，因此**打包必须先构建前端**（`build:app` 已包含）；开发模式加载 Vite 开发服务器，不受影响。
 
-## 打包
+## 打包与发布
+
+### 本地打包
 
 ```bash
 cd frontend
@@ -112,22 +81,114 @@ pnpm build:app
 build\bin\toolbox.exe
 ```
 
-需要应用图标时，先在仓库根目录生成 `.syso` 再编译（不带 `-arch amd64` 会静默产出 0 字节文件，导致链接回退外部链接而报 gcc 错误）：
+需要带版本号时先同步清单，再把版本注入二进制：
+
+```powershell
+pwsh scripts/set-version.ps1 -Version 0.2.0
+cd frontend
+pnpm gen:icon
+pnpm build
+cd ..
+go build -tags production -trimpath `
+  -ldflags "-w -s -H=windowsgui -X toolbox-wails/app.Version=0.2.0" `
+  -o build/bin/toolbox-windows-amd64.exe .
+```
+
+### 发布（CI 自动发版）
+
+在 `main` 上打 tag 即触发 [.github/workflows/release.yml](.github/workflows/release.yml)：
 
 ```bash
-wails3 generate syso -arch amd64 -icon build\windows\icon.ico -manifest build\windows\wails.exe.manifest -info build\windows\info.json -out toolbox-wails.syso
+git tag v0.2.0
+git push origin v0.2.0
 ```
+
+流水线会依次：安装依赖 → 前端类型检查与单测 → 同步版本号到各清单 → 生成图标资源 → 构建前端 → `go vet` / `go test` → 编译 `toolbox-windows-amd64.exe`（注入 tag 版本号）→ 生成 `checksums.txt` → 创建 Release 并上传两个资产。
+
+> 资产名必须是 `toolbox-windows-amd64.exe`：应用内更新按「文件名含平台 + 架构」挑选资产；`checksums.txt` 是下载校验的来源。`workflow_dispatch` 手动触发时只上传构建产物、不发版，方便验证流水线。
 
 ## 数据存储
 
 全部数据（连接、模板、词典、标签布局、界面设置）保存在本地 SQLite：
 
 - 数据目录：`%AppData%\Toolbox\`（无法定位时回退到可执行文件同级目录）
-- `toolbox.db`：连接、模板、词典、标签、设置；连接密码经本地密钥加密
-- 同目录还存放连接密码的加密密钥文件
+- `toolbox.db`：连接、模板、词典、标签、设置
+- 同目录存放连接密码的加密密钥文件（系统凭证不可用时的回退位置）
 
-## 扩展
+## 密码与安全边界
 
-- **新增后端方法**：在 `app/bind_*.go` 添加方法（校验 + 转发到 `internal/services`），执行 `pnpm gen:bindings` 重新生成绑定，前端在 `src/api/*.ts` 封装后使用。
+连接密码用 **AES-256-GCM** 加密后写入 SQLite，主密钥存放在**系统凭证管理器**：
+
+| 平台 | 存放位置 |
+| --- | --- |
+| Windows | 凭据管理器（Credential Manager） |
+| macOS | 钥匙串（Keychain） |
+| Linux | Secret Service（gnome-keyring / kwallet 等） |
+
+密钥与数据库文件**分开存放**：只拿到 `toolbox.db` 解不开密码。
+
+**这份加密的实际边界（请不要高估）**：
+
+- 防的是「同机其他用户 / 备份同步目录 / 拷贝走数据库文件」这类场景；
+- **不防**能登录本机、以当前用户身份运行程序的攻击者（他一样能取到系统凭证）；
+- **不防**内存抓取与调试器；
+- 换机器或重装系统后若系统凭证丢失，已存密码需要重新填写。
+
+其它约定：明文密码只在用户点「显示密码」时通过 `RevealPassword` 返回，列表接口不下发。
+
+## 技术栈
+
+- **后端**：Go 1.25 + Wails v3（beta.20，WebView2 渲染）；SQLite（modernc.org/sqlite，纯 Go 无 CGO）；`text/template` 渲染模板；goja 执行前置 / 后置脚本；驱动 go-sql-driver/mysql、lib/pq；密码用 AES-256-GCM + 系统凭证。
+- **前端**：Vue 3（SFC，`<script setup>`）+ TypeScript + Vite 7 + pnpm；状态用 Pinia；UI 是项目内自绘组件（Tailwind v4 + reka-ui 无头组件），不依赖 Element Plus 等成品库；编辑器为 CodeMirror 6（SQL / JS / 模板补全、悬停、重命名、跳转均为自研）；另用 vue-draggable-plus（拖拽排序）、sql-formatter、pinyin-pro（拼音补全）。
+- **测试**：Go 标准库测试 + vitest（前端单测覆盖补全、光标分析、模板引擎、SQL 生成等纯逻辑）。
+
+## 目录结构
+
+```
+toolbox-wails/
+├── main.go                     # 入口：服务注册、资源嵌入（go:embed all:frontend/dist）、主窗口、更新器配置
+├── wails.json                  # Wails 项目配置（应用名、输出文件名、版本）
+├── scripts/set-version.ps1     # 一处改版本号，同步各处清单
+├── .github/workflows/          # CI：打 tag 构建并发版
+├── app/                        # Go 后端
+│   ├── app.go                  # App 结构体：依赖装配、生命周期
+│   ├── bind_*.go               # 绑定层：db / dict / font / settings / tabs / template / update（校验 + 转发）
+│   ├── system.go               # 版本号（构建时注入）与应用信息
+│   ├── window.go               # 窗口控制
+│   └── internal/
+│       ├── database/           # SQLite 访问（repository、建表与迁移）
+│       ├── services/           # 业务服务（连接 / 模板 / 词典 / 标签 / 设置 / 执行器）
+│       ├── script/             # goja 前置 / 后置脚本引擎
+│       └── utils/              # 模板渲染、加解密等
+├── build/                      # 打包资源（icon.ico、manifest、info.json）与产物（build/bin 不入库）
+└── frontend/
+    ├── bindings/               # wails3 generate bindings 生成（勿手改）
+    └── src/
+        ├── api/                # 后端接口封装（显式类型映射）
+        ├── components/         # 通用组件（标题栏、代码编辑器、结果表格、各配置面板、ui/ 基础组件）
+        ├── layouts/            # 工作台布局（左侧菜单 + 多标签）
+        ├── stores/             # Pinia（标签 / 配置 / 词典 / 日志 / 元数据）
+        ├── utils/              # 工具注册表、SQL 补全与模板语言、更新流程等
+        ├── views/              # 页面（首页 + views/tools/ 各工具）
+        ├── styles/             # 全局样式与主题变量
+        └── types/              # 公共类型
+```
+
+## 扩展指南
+
+- **新增后端方法**：在 `app/bind_*.go` 加方法（校验 + 转发到 `internal/services`）→ `pnpm gen:bindings` → 前端在 `src/api/*.ts` 封装后使用。
 - **新增配置项**：三处同步——Go `defaultSettings`、前端 `configStore.DEFAULTS`、`types` 的 `SettingKey`。
-- **新增工具**：`frontend/src/utils/tools.ts` 的 `TOOLS` 注册一项，`Workbench.vue` 加渲染分支，`views/tools/` 下新增视图；视图首次初始化结束时需 `emit('ready')`（父级据此关闭加载遮罩）。
+- **新增工具**：`frontend/src/utils/tools.ts` 注册一项 → `Workbench.vue` 加渲染分支 → `views/tools/` 新增视图（初始化结束时 `emit('ready')`，父级据此关闭加载遮罩）。
+- **新增更新来源**：`main.go` 的 `initUpdater` 里换 / 加 `updater.Provider`（框架自带 GitHub、Endpoint、Appcast、Keygen 四种）。
+
+## 常见问题
+
+- **启动白屏 / 报 WebView2 缺失**：安装 WebView2 Runtime（Win11 与大部分 Win10 已自带）。
+- **链接时报 `gcc` 相关错误**：根目录的 `toolbox-wails.syso` 缺失或为 0 字节，执行 `pnpm gen:icon` 重新生成（务必带 `-arch amd64`）。
+- **改了后端方法前端调不到**：忘了 `pnpm gen:bindings`。
+- **打包后界面是旧的**：先 `pnpm build` 再编译 Go（`build:app` 已包含这一步）。
+- **自动更新检查失败**：多为网络原因（GitHub API 访问受限）；不影响应用使用，也可手动下载新版 exe 覆盖。
+
+## 许可
+
+仓库目前还没有 `LICENSE` 文件，即默认保留所有权利。要按开源项目正式分发，建议补一个（MIT / Apache-2.0 是最常见的选择），补上后把这里与上方徽章一起改掉即可。

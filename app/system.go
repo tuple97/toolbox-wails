@@ -2,10 +2,17 @@ package app
 
 import (
 	"runtime"
+	"strings"
 )
 
-// Version 当前应用版本号
-const Version = "0.1.0"
+// Version 当前应用版本号；发布构建用
+// `-ldflags "-X toolbox-wails/app.Version=1.2.3"` 覆盖
+var Version = "0.1.0"
+
+// NormalizedVersion 去掉版本号可能带的 "v" 前缀（updater 按 semver 比较，标签习惯写 v1.2.3）
+func NormalizedVersion() string {
+	return strings.TrimPrefix(Version, "v")
+}
 
 // AppInfo 应用与运行环境信息
 type AppInfo struct {

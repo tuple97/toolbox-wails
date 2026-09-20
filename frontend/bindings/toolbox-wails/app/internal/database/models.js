@@ -7,16 +7,7 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
- * DBConnection 对应 db_connections 表，描述一个外部数据库连接。
- * Password 在数据库中为密文，对外返回时保持密文，由前端按需解密展示。
- * 
- * 字段按本项目只支持的 mysql/postgres 两种方言裁剪，分为以下几组：
- *   - 基本：Name / DBType / Host / Port / Database / Username / Password；
- *   - 展示：Note（备注）、Color（颜色标记）、IsLocal / IsTest / IsProduction（环境标记，界面提示用）；
- *   - 方言：Charset（MySQL 字符集）、DefaultSchema（PostgreSQL 默认 schema）；
- *   - 超时：ConnectTimeoutSecs / QueryTimeoutSecs / KeepaliveSecs（0 表示用默认值）；
- *   - 加密：SSLMode + 三个证书路径（MySQL 映射到 tls，PostgreSQL 映射到 sslmode 等）；
- *   - 其它：URLParams（追加到连接串的自定义参数）、ReadOnly（拒绝写操作）、Extra（预留 JSON）。
+ * DBConnection 对应 db_connections 表（Password 为密文）
  */
 export class DBConnection {
     /**
@@ -113,7 +104,7 @@ export class DBConnection {
         }
         if (!("defaultSchema" in $$source)) {
             /**
-             * DefaultSchema PostgreSQL 默认 schema（MySQL 留空，库由 Database 决定）
+             * DefaultSchema PostgreSQL 默认 schema
              * @member
              * @type {string}
              */
@@ -121,7 +112,7 @@ export class DBConnection {
         }
         if (!("connectTimeoutSecs" in $$source)) {
             /**
-             * ConnectTimeoutSecs 建立连接超时（秒），0 表示默认 10
+             * ConnectTimeoutSecs 连接超时（秒），0 表示默认 10
              * @member
              * @type {number}
              */
@@ -129,7 +120,7 @@ export class DBConnection {
         }
         if (!("queryTimeoutSecs" in $$source)) {
             /**
-             * QueryTimeoutSecs 单条语句超时（秒），0 表示默认 60
+             * QueryTimeoutSecs 语句超时（秒），0 表示默认 60
              * @member
              * @type {number}
              */
@@ -137,7 +128,7 @@ export class DBConnection {
         }
         if (!("keepaliveSecs" in $$source)) {
             /**
-             * KeepaliveSecs 空闲连接回收时间（秒），0 表示默认 30
+             * KeepaliveSecs 空闲连接回收（秒），0 表示默认 30
              * @member
              * @type {number}
              */
@@ -145,7 +136,7 @@ export class DBConnection {
         }
         if (!("sslMode" in $$source)) {
             /**
-             * SSLMode SSL 模式：disable / prefer / require / verify-ca / verify-full，空表示 disable
+             * SSLMode SSL 模式：disable / prefer / require / verify-ca / verify-full
              * @member
              * @type {string}
              */
@@ -161,7 +152,7 @@ export class DBConnection {
         }
         if (!("sslCertPath" in $$source)) {
             /**
-             * SSLCertPath 客户端证书路径（双向认证时填）
+             * SSLCertPath 客户端证书路径
              * @member
              * @type {string}
              */
@@ -169,7 +160,7 @@ export class DBConnection {
         }
         if (!("sslKeyPath" in $$source)) {
             /**
-             * SSLKeyPath 客户端私钥路径（双向认证时填）
+             * SSLKeyPath 客户端私钥路径
              * @member
              * @type {string}
              */
@@ -177,7 +168,7 @@ export class DBConnection {
         }
         if (!("urlParams" in $$source)) {
             /**
-             * URLParams 追加到连接串的自定义参数，形如 key=value&key2=value2（同名时覆盖上面的默认值）
+             * URLParams 追加到连接串的自定义参数，形如 key=value&key2=value2
              * @member
              * @type {string}
              */
@@ -193,7 +184,7 @@ export class DBConnection {
         }
         if (!("isLocal" in $$source)) {
             /**
-             * IsLocal 本地库标记（环境标识之一，与 IsTest / IsProduction 互斥）
+             * IsLocal 本地库标记
              * @member
              * @type {boolean}
              */
@@ -201,7 +192,7 @@ export class DBConnection {
         }
         if (!("isTest" in $$source)) {
             /**
-             * IsTest 测试库标记（环境标识之一，与 IsLocal / IsProduction 互斥）
+             * IsTest 测试库标记
              * @member
              * @type {boolean}
              */
@@ -209,8 +200,7 @@ export class DBConnection {
         }
         if (!("isProduction" in $$source)) {
             /**
-             * IsProduction 生产库标记：界面高亮提示，避免误操作
-             * （环境标识之一，与 IsLocal / IsTest 互斥）
+             * IsProduction 生产库标记，界面高亮提示
              * @member
              * @type {boolean}
              */
@@ -232,7 +222,7 @@ export class DBConnection {
 }
 
 /**
- * Dictionary 对应 dictionaries 表。
+ * Dictionary 对应 dictionaries 表
  */
 export class Dictionary {
     /**
@@ -277,7 +267,7 @@ export class Dictionary {
 }
 
 /**
- * DictionaryItem 对应 dictionary_items 表。
+ * DictionaryItem 对应 dictionary_items 表
  */
 export class DictionaryItem {
     /**
@@ -343,8 +333,7 @@ export class DictionaryItem {
 }
 
 /**
- * SQLTemplate 对应 sql_templates 表。
- * Variables、FieldMappings 与 ExportTemplates 均为 JSON 字符串。
+ * SQLTemplate 对应 sql_templates 表（Variables / FieldMappings / ExportTemplates 为 JSON 字符串）
  */
 export class SQLTemplate {
     /**
@@ -382,8 +371,7 @@ export class SQLTemplate {
         }
         if (!("database" in $$source)) {
             /**
-             * Database 模板自带的库 / 模式：空表示用连接配置里的默认库。
-             * 模板编辑器按它做补全，SQL 查询页选到模板后也用它作为默认选中项。
+             * Database 模板自带的库，空表示用连接配置里的默认库
              * @member
              * @type {string}
              */
@@ -405,8 +393,7 @@ export class SQLTemplate {
         }
         if (!("exportTemplates" in $$source)) {
             /**
-             * ExportTemplates 导出模板列表（JSON：[{id,name,content,enabled}]）。
-             * content 用结果行的列名作变量（{{ 列名 }}），在结果表格「复制为…」里逐行渲染。
+             * ExportTemplates 导出模板列表（JSON），content 用结果行列名作变量（{{ 列名 }}）
              * @member
              * @type {string}
              */
@@ -428,7 +415,7 @@ export class SQLTemplate {
         }
         if (!("enabled" in $$source)) {
             /**
-             * Enabled 是否启用（默认启用）：停用的模板仍保留配置，但不允许执行
+             * Enabled 是否启用（默认启用），停用的模板不允许执行
              * @member
              * @type {boolean}
              */
@@ -436,7 +423,7 @@ export class SQLTemplate {
         }
         if (!("pageSize" in $$source)) {
             /**
-             * PageSize 每页条数保留字段：实际页大小由各标签页的翻页控件决定
+             * PageSize 保留字段，实际页大小由各标签页的翻页控件决定
              * @member
              * @type {number}
              */
@@ -458,8 +445,7 @@ export class SQLTemplate {
 }
 
 /**
- * Setting 对应 app_settings 表。
- * Value 以字符串原样存储，由前端按 Type 解析（string/number/boolean/json/array）。
+ * Setting 对应 app_settings 表（Value 以字符串存储，由前端按 Type 解析）
  */
 export class Setting {
     /**
@@ -504,8 +490,7 @@ export class Setting {
 }
 
 /**
- * Tab 对应 tabs 表，描述一个工作台标签。
- * Payload 为各工具私有状态的 JSON 字符串，由前端序列化。
+ * Tab 对应 tabs 表（Payload 为前端序列化的 JSON 字符串）
  */
 export class Tab {
     /**

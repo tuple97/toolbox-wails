@@ -5,8 +5,13 @@ import {
   minimiseWindow,
   toggleMaximiseWindow,
 } from '@/api/window'
+import { openExternalUrl } from '@/api/runtime'
+import { fetchAppInfo } from '@/api/system'
 import Icon from '@/components/ui/Icon.vue'
 import logoUrl from '@/assets/images/logo.png'
+
+/** 项目仓库地址 */
+const REPOSITORY_URL = 'https://github.com/tuple97/toolbox-wails'
 
 withDefaults(defineProps<{
   /** 工具栏左侧的应用名称 */
@@ -29,6 +34,9 @@ const emit = defineEmits<{
 
 /** 当前窗口是否最大化 */
 const maximised = ref(false)
+
+/** 应用版本号（标题右侧小字） */
+const version = ref('')
 
 /** 双击空白区域切换最大化 */
 function handleDoubleClick(event: MouseEvent) {
@@ -72,9 +80,10 @@ function handleWindowResize() {
   void syncMaximised()
 }
 
-onMounted(() => {
+onMounted(async () => {
   void syncMaximised()
   window.addEventListener('resize', handleWindowResize)
+  version.value = String((await fetchAppInfo()).version ?? '')
 })
 
 onBeforeUnmount(() => {
@@ -93,6 +102,7 @@ onBeforeUnmount(() => {
     <div class="titlebar__brand">
       <img class="titlebar__logo" :src="logoUrl" alt="">
       <span class="titlebar__title">{{ title }}</span>
+      <small v-if="version" class="titlebar__version">v{{ version }}</small>
     </div>
 
     <!-- 中间插槽 -->
@@ -102,6 +112,16 @@ onBeforeUnmount(() => {
 
     <!-- 窗口控制按钮 -->
     <div class="titlebar__controls" data-no-drag>
+      <button
+        class="titlebar__btn"
+        type="button"
+        aria-label="GitHub 仓库"
+        title="GitHub 仓库"
+        @click="openExternalUrl(REPOSITORY_URL)"
+      >
+        <Icon name="github" />
+      </button>
+
       <button
         v-if="showSettings"
         class="titlebar__btn"
@@ -201,6 +221,13 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 版本号：小字浅色，跟在应用名后面 */
+.titlebar__version {
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+  font-weight: 400;
 }
 
 .titlebar__slot {

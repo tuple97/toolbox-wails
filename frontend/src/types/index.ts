@@ -346,6 +346,24 @@ export interface Setting {
   value: string
 }
 
+/** 一次版本检查的结果，与后端 app.UpdateInfo 对应 */
+export interface UpdateInfo {
+  /** 当前版本 */
+  current: string
+  /** 最新版本；没有更新时与 current 相同 */
+  latest: string
+  /** 是否有新版本 */
+  available: boolean
+  /** 发版说明 */
+  notes: string
+  /** 发布时间（RFC3339，未知时为空） */
+  publishedAt: string
+  /** 更新包文件名 */
+  assetName: string
+  /** 更新包字节数 */
+  assetSize: number
+}
+
 /** 全局配置的键名 */
 export type SettingKey =
   | 'theme'
@@ -367,6 +385,8 @@ export type SettingKey =
   | 'sql_show_system_databases'
   | 'template_placeholder_tab'
   | 'shortcut_config'
+  /** 启动后自动检查新版本 */
+  | 'app_auto_update'
 
 /** 主题标识：dark（默认）/ midnight / idea 为暗色，light 为亮色 */
 export type ThemeMode = 'dark' | 'midnight' | 'idea' | 'light'

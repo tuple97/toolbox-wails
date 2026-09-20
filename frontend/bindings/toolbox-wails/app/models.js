@@ -7,7 +7,7 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
- * AppInfo 描述应用及运行环境的基本信息。
+ * AppInfo 应用与运行环境信息
  */
 export class AppInfo {
     /**
@@ -62,5 +62,85 @@ export class AppInfo {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new AppInfo(/** @type {Partial<AppInfo>} */($$parsedSource));
+    }
+}
+
+/**
+ * UpdateInfo 一次版本检查的结果。
+ */
+export class UpdateInfo {
+    /**
+     * Creates a new UpdateInfo instance.
+     * @param {Partial<UpdateInfo>} [$$source = {}] - The source object to create the UpdateInfo.
+     */
+    constructor($$source = {}) {
+        if (!("current" in $$source)) {
+            /**
+             * Current 当前版本
+             * @member
+             * @type {string}
+             */
+            this["current"] = "";
+        }
+        if (!("latest" in $$source)) {
+            /**
+             * Latest 最新版本；没有新版本时与 Current 相同
+             * @member
+             * @type {string}
+             */
+            this["latest"] = "";
+        }
+        if (!("available" in $$source)) {
+            /**
+             * Available 是否有新版本可装
+             * @member
+             * @type {boolean}
+             */
+            this["available"] = false;
+        }
+        if (!("notes" in $$source)) {
+            /**
+             * Notes 发版说明（GitHub Release 正文）
+             * @member
+             * @type {string}
+             */
+            this["notes"] = "";
+        }
+        if (!("publishedAt" in $$source)) {
+            /**
+             * PublishedAt 发布时间（RFC3339，未知时为空）
+             * @member
+             * @type {string}
+             */
+            this["publishedAt"] = "";
+        }
+        if (!("assetName" in $$source)) {
+            /**
+             * AssetName 更新包文件名
+             * @member
+             * @type {string}
+             */
+            this["assetName"] = "";
+        }
+        if (!("assetSize" in $$source)) {
+            /**
+             * AssetSize 更新包字节数
+             * @member
+             * @type {number}
+             */
+            this["assetSize"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UpdateInfo instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {UpdateInfo}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new UpdateInfo(/** @type {Partial<UpdateInfo>} */($$parsedSource));
     }
 }

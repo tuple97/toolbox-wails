@@ -5,6 +5,8 @@ import (
 	"log"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/updater"
+	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 
 	"toolbox-wails/app"
 )
@@ -16,6 +18,8 @@ const (
 	appName   = "开发工具箱"
 	appWidth  = 1424
 	appHeight = 800
+	// repository 更新来源（GitHub Releases）
+	repository = "tuple97/toolbox-wails"
 )
 
 func main() {
@@ -42,6 +46,8 @@ func main() {
 	// 注入应用实例
 	service.Attach(wailsApp)
 
+	initUpdater(wailsApp)
+
 	// 创建主窗口
 	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     appName,
@@ -60,5 +66,27 @@ func main() {
 
 	if err := wailsApp.Run(); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// initUpdater 配置应用内更新。失败只记日志：没有更新能力不该影响启动。
+func initUpdater(wailsApp *application.App) {
+	provider, err := github.New(github.Config{
+		Repository: repository,
+		// 发版时随包发布校验和，下载后核对 SHA-256
+		ChecksumAsset: "checksums.txt",
+	})
+	if err != nil {
+		log.Printf("更新来源不可用: %v", err)
+		return
+	}
+
+	if err := wailsApp.Updater.Init(updater.Config{
+		CurrentVersion: app.NormalizedVersion(),
+		Providers:      []updater.Provider{provider},
+		// 更新界面由设置页承担，不用框架自带窗口
+		Window: updater.WindowNone,
+	}); err != nil {
+		log.Printf("更新功能初始化失败: %v", err)
 	}
 }

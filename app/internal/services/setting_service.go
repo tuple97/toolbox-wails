@@ -51,6 +51,8 @@ var defaultSettings = []database.Setting{
 	{Key: "template_placeholder_tab", Type: SettingTypeBoolean, Value: "true"},
 	// 用户自定义快捷键（JSON：动作 ID → 组合键；空对象表示使用前端默认值）
 	{Key: "shortcut_config", Type: SettingTypeJSON, Value: "{}"},
+	// 启动后自动检查新版本（true / false，默认开启）
+	{Key: "app_auto_update", Type: SettingTypeBoolean, Value: "true"},
 }
 
 // SettingService 负责全局配置的读写。
