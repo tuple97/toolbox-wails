@@ -11,7 +11,6 @@ export {
     ExecutorResult,
     ForeignKey,
     QueryResult,
-    SystemMetrics,
     TemplateExecuteRequest,
     TemplateListItem
 } from "./models.js";

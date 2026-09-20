@@ -12,18 +12,12 @@ import { filterDatabaseInfos, parseShowSystemDatabases } from '@/utils/sql/sqlVi
 import type { TableColumn } from '@/utils/tableLayout'
 import type { DBConnection } from '@/types'
 
-/**
- * 连接元数据查看：左侧表 / 视图，右侧选中表的字段（名称 / 类型 / 注释）。
- *
- * 数据来自 metadataStore（与 SQL 执行页的智能补全同一份缓存）：
- * 打开弹窗时若缓存命中会立即渲染，只有缺失或过期才真正查询数据库；
- * 在连接管理页点「刷新元数据」后，这里会直接看到新结果。
- */
+/** 连接元数据查看：左侧表 / 视图，右侧字段（名称 / 类型 / 注释） */
 
 const props = defineProps<{
   /** 是否显示 */
   visible: boolean
-  /** 要查看的连接；为 null 时不加载 */
+  /** 要查看的连接 */
   connection: DBConnection | null
 }>()
 
@@ -34,10 +28,10 @@ const emit = defineEmits<{
 const meta = useMetadataStore()
 const configStore = useConfigStore()
 
-/** 该连接的方言（系统库判定按它走） */
+/** 该连接的方言 */
 const dialect = computed(() => dialectOf(props.connection?.dbType ?? ''))
 
-/** 设置项：是否展示系统库（默认展示，与补全候选同一策略） */
+/** 是否展示系统库 */
 const showSystemDatabases = computed(() =>
   parseShowSystemDatabases(configStore.values.sql_show_system_databases))
 
@@ -56,12 +50,7 @@ const keyword = ref('')
 /** 当前选中的表 */
 const selectedTable = ref('')
 
-/**
- * 下拉框展示的库列表（系统库按设置过滤）。
- *
- * 只过滤**展示**：store 里的库一个不少，所以「之前选中的系统库」不会被清掉，
- * 关掉设置也不需要重新拉元数据。
- */
+/** 下拉框展示的库列表（系统库按设置过滤） */
 const databases = computed(() => filterDatabaseInfos(
   connId.value ? meta.databaseInfos[connId.value] ?? [] : [],
   dialect.value,
@@ -92,19 +81,14 @@ const columnsLoading = computed(
   () => meta.isColumnsLoading(connId.value, database.value, selectedTable.value),
 )
 
-/** 字段表列：三列都是弹性列，注释列权重最大（它最长） */
+/** 字段表列 */
 const FIELD_COLUMNS: TableColumn[] = [
   { key: 'name', label: '字段', minWidth: 150, ellipsis: true },
   { key: 'dataType', label: '类型', minWidth: 130, ellipsis: true },
   { key: 'comment', label: '注释', minWidth: 180, ellipsis: true },
 ]
 
-/**
- * 字段表空态文案。
- *
- * 旧代码用 `v-loading` 盖一层加载遮罩；这里改成**直接换文案**：
- * 桌面端小面板里再叠一层半透明遮罩，反而看不清「到底在等什么」。
- */
+/** 字段表空态文案 */
 const fieldEmptyText = computed(() => {
   if (columnsLoading.value) {
     return '正在读取字段…'
@@ -112,7 +96,7 @@ const fieldEmptyText = computed(() => {
   return selectedTable.value ? '该表没有字段信息' : '选择左侧的表查看字段'
 })
 
-/** 库下拉选项（Combobox 只吃 label / value） */
+/** 库下拉选项 */
 const databaseOptions = computed(() =>
   databases.value.map(info => ({ label: info.name, value: info.name })))
 
@@ -130,16 +114,10 @@ watch(() => props.visible, async (open) => {
 async function prepare() {
   try {
     const list = await meta.loadDatabases(connId.value)
-    /*
-     * 选库优先级：上次查看的库 → 连接自身配置的库 → 列表首项。
-     * 这里只是「看元数据」，不会影响 SQL 执行页实际使用的库。
-     */
+    // 选库优先级：上次查看的库 → 连接配置的库 → 列表首项
     const preferred = [database.value, props.connection?.database ?? '']
       .find(name => Boolean(name) && list.includes(name))
-    /*
-     * 兜底取「列表首项」时跳过被隐藏的系统库：隐藏之后还把 information_schema
-     * 选中当默认查看对象，会让人以为设置没生效。列表里只有系统库时照旧取首项。
-     */
+    // 兜底取首项时跳过被隐藏的系统库
     const visible = filterDatabaseInfos(
       meta.ensureDatabaseInfos(connId.value),
       dialect.value,
@@ -166,7 +144,7 @@ async function handleDatabaseChange() {
   }
 }
 
-/** 选中表：字段按需加载（缓存命中则直接展示） */
+/** 选中表：按需加载字段 */
 async function selectTable(name: string) {
   selectedTable.value = name
   try {
@@ -206,11 +184,7 @@ async function selectTable(name: string) {
       </header>
 
       <div class="flex h-[460px] min-h-0 gap-3">
-        <!--
-          表 / 视图列表：固定宽 + 内部滚动。
-          条目必须 `shrink-0`：这是纵向 flex 容器，条目默认可收缩，
-          而系统库动辄上百张表，不写会被平均压扁（表现为每行只露出文字上沿）。
-        -->
+        <!-- 表 / 视图列表：固定宽度，条目保持 shrink-0 -->
         <ul class="flex w-[240px] shrink-0 flex-col overflow-auto rounded-md border border-border p-1.5">
           <li
             v-for="name in tables"

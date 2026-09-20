@@ -25,7 +25,11 @@ export class ColumnMeta {
         }
         if (!("type" in $$source)) {
             /**
-             * Type 数据库类型名（驱动提供时填充，否则为空）
+             * Type 数据库类型（含长度 / 精度，如 varchar(255) / decimal(10,2)）。
+             * 
+             * 长度优先取数据字典（information_schema.columns.column_type，精确），
+             * 取不到时退回驱动给的粗略类型名（见 columnTypeOf）；
+             * 驱动不支持类型信息时为空。
              * @member
              * @type {string}
              */
@@ -38,6 +42,14 @@ export class ColumnMeta {
              * @type {string}
              */
             this["comment"] = "";
+        }
+        if (!("table" in $$source)) {
+            /**
+             * Table 来源表（注释反查时一并带出；表达式列 / 别名列 / 非 MySQL 方言为空）
+             * @member
+             * @type {string}
+             */
+            this["table"] = "";
         }
 
         Object.assign(this, $$source);
@@ -139,6 +151,15 @@ export class ExecuteRequest {
              * @type {string}
              */
             this["postScript"] = "";
+        }
+        if (!("database" in $$source)) {
+            /**
+             * Database 本次查询使用的库 / 模式；空表示用连接配置里的默认库。
+             * 与执行器的语义一致：会把它「钉」在会话上，而不是只改 DSN。
+             * @member
+             * @type {string}
+             */
+            this["database"] = "";
         }
         if (!("page" in $$source)) {
             /**
@@ -609,6 +630,14 @@ export class QueryResult {
              */
             this["pageCount"] = 0;
         }
+        if (!("database" in $$source)) {
+            /**
+             * Database 实际生效的库 / 模式（会话上钉住的那个），前端展示与后续操作用于核对
+             * @member
+             * @type {string}
+             */
+            this["database"] = "";
+        }
 
         Object.assign(this, $$source);
     }
@@ -629,89 +658,6 @@ export class QueryResult {
             $$parsedSource["rows"] = $$createField1_0($$parsedSource["rows"]);
         }
         return new QueryResult(/** @type {Partial<QueryResult>} */($$parsedSource));
-    }
-}
-
-/**
- * SystemMetrics 描述「应用自身 + 所在机器」的一次实时资源采样。
- * 
- * 前端首页的监控卡片按秒级轮询本结构即可；
- * 字段全部为零值表示采样失败（不抛错，避免仪表盘因为一次采样失败而报错）。
- */
-export class SystemMetrics {
-    /**
-     * Creates a new SystemMetrics instance.
-     * @param {Partial<SystemMetrics>} [$$source = {}] - The source object to create the SystemMetrics.
-     */
-    constructor($$source = {}) {
-        if (!("appMemoryMB" in $$source)) {
-            /**
-             * AppMemoryMB 当前进程内存占用（Windows 为工作集，其它平台为 RSS）
-             * @member
-             * @type {number}
-             */
-            this["appMemoryMB"] = 0;
-        }
-        if (!("memoryTotalMB" in $$source)) {
-            /**
-             * MemoryTotalMB 物理内存总量
-             * @member
-             * @type {number}
-             */
-            this["memoryTotalMB"] = 0;
-        }
-        if (!("memoryUsedMB" in $$source)) {
-            /**
-             * MemoryUsedMB 已用物理内存
-             * @member
-             * @type {number}
-             */
-            this["memoryUsedMB"] = 0;
-        }
-        if (!("memoryPercent" in $$source)) {
-            /**
-             * MemoryPercent 物理内存使用率（0~100）
-             * @member
-             * @type {number}
-             */
-            this["memoryPercent"] = 0;
-        }
-        if (!("cpuPercent" in $$source)) {
-            /**
-             * CPUPercent 全系统 CPU 使用率（0~100）
-             * @member
-             * @type {number}
-             */
-            this["cpuPercent"] = 0;
-        }
-        if (!("cpuCount" in $$source)) {
-            /**
-             * CPUCount 逻辑核心数
-             * @member
-             * @type {number}
-             */
-            this["cpuCount"] = 0;
-        }
-        if (!("timestamp" in $$source)) {
-            /**
-             * Timestamp 采样时刻（Unix 毫秒）
-             * @member
-             * @type {number}
-             */
-            this["timestamp"] = 0;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new SystemMetrics instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {SystemMetrics}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new SystemMetrics(/** @type {Partial<SystemMetrics>} */($$parsedSource));
     }
 }
 
@@ -744,6 +690,14 @@ export class TemplateExecuteRequest {
              * @type {{ [_ in string]?: any }}
              */
             this["variables"] = {};
+        }
+        if (!("database" in $$source)) {
+            /**
+             * Database 本次查询使用的库 / 模式；空表示用连接配置里的默认库
+             * @member
+             * @type {string}
+             */
+            this["database"] = "";
         }
         if (!("page" in $$source)) {
             /**
@@ -832,6 +786,14 @@ export class TemplateListItem {
              * @type {string}
              */
             this["sqlText"] = "";
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * Enabled 是否启用：停用的模板在查询页标记出来并拒绝执行
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
         }
 
         Object.assign(this, $$source);

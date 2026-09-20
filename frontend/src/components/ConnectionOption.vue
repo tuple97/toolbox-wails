@@ -4,12 +4,7 @@ import Tag from '@/components/ui/Tag.vue'
 import { connectionEnvBadge } from '@/utils/connectionDisplay'
 import type { DBConnection } from '@/types'
 
-/**
- * 连接下拉里的选项内容：颜色点 + 名称 + 环境标签 + 只读标签 + 数据库类型。
- *
- * 供「连接下拉」的选项行与选中项共用（`<ConnectionOption :connection="conn" />`），
- * 这样各个「选择数据源」的展示完全一致 —— 下拉里长什么样，选中后就长什么样。
- */
+/** 连接下拉里的选项内容：色点 + 名称 + 环境标签 + 只读标签 + 类型 */
 
 const props = defineProps<{
   /** 要展示的连接 */
@@ -61,7 +56,7 @@ const envBadge = computed(() => connectionEnvBadge(props.connection))
   white-space: nowrap;
 }
 
-/* 类型靠右，作为次要信息 */
+/* 类型靠右 */
 .conn-option__type {
   margin-left: auto;
   padding-left: 8px;

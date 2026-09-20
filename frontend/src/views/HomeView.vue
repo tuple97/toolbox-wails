@@ -1,39 +1,45 @@
 <script setup lang="ts">
-/**
- * 工作台首页：欢迎语 + 快捷入口 + 已打开标签 + 系统监控（ECharts）。
- *
- * 约定：
- *  - 视图初始化结束必须 emit('ready')（用 try/finally 保证失败也上报），
- *    否则 Workbench 的首次加载遮罩会一直盖住内容区；
- *  - ECharts 实例是重量级对象，必须放 shallowRef，且卸载时 dispose；
- *  - 图表的颜色从 CSS 变量读取（主题切换时重算），数据每 2 秒轮询后端。
- */
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import * as echarts from 'echarts/core'
-import { LineChart } from 'echarts/charts'
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+/** 工作台首页：欢迎条 + 卡片式概览 */
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import Button from '@/components/ui/Button.vue'
+import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { fetchSystemMetrics } from '@/api/system'
-import type { SystemMetrics } from '@/api/system'
-import { useConfigStore } from '@/stores/configStore'
+import Tag from '@/components/ui/Tag.vue'
+import { EventsOn } from '@/api/runtime'
+import { fetchAppInfo } from '@/api/system'
+import { fetchConnections } from '@/api/db'
+import { fetchTemplateList } from '@/api/templates'
+import { useDictStore } from '@/stores/dictStore'
 import { useTabStore } from '@/stores/tabStore'
+import { connectionEnvBadge } from '@/utils/connectionDisplay'
 import { toolOf } from '@/utils/tools'
-import type { ToolType } from '@/types'
-
-echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
+import type { AppInfo } from '@/api/system'
+import type { DBConnection, TemplateListItem, ToolType } from '@/types'
 
 const emit = defineEmits<{ (e: 'ready'): void }>()
 
 const tabStore = useTabStore()
-const configStore = useConfigStore()
+const dictStore = useDictStore()
 
-/** 工具图标名（注册表里没有对应工具时给问号图标，模板里就不必到处判空） */
-function iconOf(type: string): string {
-  return toolOf(type)?.icon ?? 'question'
-}
+// ---------------------------------------------------------------- 欢迎条
 
-// ---------------------------------------------------------------- 顶部
+/** 按当前时段问候 */
+const greeting = computed(() => {
+  const hour = new Date().getHours()
+  if (hour < 5) {
+    return '夜深了'
+  }
+  if (hour < 11) {
+    return '早上好'
+  }
+  if (hour < 13) {
+    return '中午好'
+  }
+  if (hour < 18) {
+    return '下午好'
+  }
+  return '晚上好'
+})
 
 /** 当前日期（中文长格式） */
 const today = computed(() =>
@@ -45,7 +51,51 @@ const today = computed(() =>
   }),
 )
 
-// ---------------------------------------------------------------- 快捷入口
+// ---------------------------------------------------------------- 数据
+
+const connections = ref<DBConnection[]>([])
+const templates = ref<TemplateListItem[]>([])
+const appInfo = ref<Partial<AppInfo>>({})
+/** 是否还在首次读取 */
+const loading = ref(true)
+
+/** 加载连接列表（失败保留空数组） */
+async function loadConnections() {
+  try {
+    connections.value = await fetchConnections()
+  }
+  catch {
+    connections.value = []
+  }
+}
+
+/** 加载模板列表（失败保留空数组） */
+async function loadTemplates() {
+  try {
+    templates.value = await fetchTemplateList()
+  }
+  catch {
+    templates.value = []
+  }
+}
+
+/** 加载词典与词条 */
+async function loadDictionaries() {
+  await dictStore.loadAll()
+}
+
+/** 刷新全部卡片数据 */
+async function refresh() {
+  await Promise.allSettled([
+    loadConnections(),
+    loadTemplates(),
+    loadDictionaries(),
+    fetchAppInfo().then((info) => { appInfo.value = info }),
+  ])
+  loading.value = false
+}
+
+// ---------------------------------------------------------------- 快捷操作
 
 interface QuickAction {
   type: ToolType
@@ -54,300 +104,254 @@ interface QuickAction {
   description: string
 }
 
-/** 四个常用入口：多例工具新建实例，单例工具跳转 */
+/** 常用入口 */
 const QUICK_ACTIONS: QuickAction[] = [
   { type: 'db-query', label: 'SQL 查询', icon: 'search', description: '按模板执行查询' },
   { type: 'command-executor', label: 'SQL 执行', icon: 'terminal', description: '自由编写并执行 SQL' },
+  { type: 'sql-template', label: 'SQL 模板', icon: 'document', description: '维护模板与变量' },
   { type: 'connections', label: '连接管理', icon: 'link', description: '维护数据库连接' },
-  { type: 'dictionary', label: '词典管理', icon: 'book', description: '维护本地词典数据' },
+  { type: 'dictionary', label: '词典', icon: 'book', description: '维护本地词典数据' },
+  { type: 'settings', label: '设置', icon: 'settings', description: '外观与行为设置' },
 ]
 
-function openQuick(action: QuickAction) {
-  tabStore.openTool(action.type, { newInstance: toolOf(action.type)?.multi ?? false })
+function openTool(type: ToolType) {
+  tabStore.openTool(type, { newInstance: toolOf(type)?.multi ?? false })
 }
 
-// ---------------------------------------------------------------- 已打开的标签
+// ---------------------------------------------------------------- 打开的标签
 
-/**
- * 已打开的标签（最多 5 个）。
- * 注意：tabStore 只维护打开顺序，没有「最近活跃时间」这类字段，
- * 这里按标签栏顺序取前 5 个，不虚构数据。
- */
-const recentTabs = computed(() => tabStore.tabs.slice(0, 5))
+/** 已打开的标签 */
+const openTabs = computed(() => tabStore.tabs)
 
 function activateTab(id: number) {
   tabStore.setActive(id)
 }
 
-// ---------------------------------------------------------------- 系统监控
+// ---------------------------------------------------------------- 数据源概览
 
-/** 最近一次采样（用于数值卡片） */
-const metrics = ref<SystemMetrics | null>(null)
-/** 曲线数据点上限：2 秒一个点，约 1 分钟窗口 */
-const MAX_SAMPLES = 30
-/** 图表数据：时间轴 + 系统内存百分比 + 应用内存 MB */
-const samples = ref<{ time: string, memoryPercent: number, appMemory: number }[]>([])
-
-const chartEl = ref<HTMLDivElement | null>(null)
-/** ECharts 实例（重量级对象：必须 shallowRef，严禁普通 ref） */
-const chart = shallowRef<echarts.ECharts | null>(null)
-let resizeObserver: ResizeObserver | null = null
-let timer: number | null = null
-/** 防止上一次采样未返回就叠加下一次 */
-let polling = false
-
-/** 读取主题变量（主题切换后颜色会随之变化） */
-function cssVar(name: string, fallback: string): string {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-  return value || fallback
-}
-
-/** 给十六进制颜色加透明度（CSS 变量里的品牌色是 #rrggbb） */
-function withAlpha(color: string, alpha: number): string {
-  const hex = color.trim()
-  if (/^#[0-9a-f]{6}$/i.test(hex)) {
-    const r = Number.parseInt(hex.slice(1, 3), 16)
-    const g = Number.parseInt(hex.slice(3, 5), 16)
-    const b = Number.parseInt(hex.slice(5, 7), 16)
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`
-  }
-  return hex
-}
-
-function buildOption(): echarts.EChartsCoreOption {
-  const brand = cssVar('--brand-color', '#6e79f4')
-  const accent = cssVar('--accent-color', '#818cf8')
-  const muted = cssVar('--text-muted', '#94a3b8')
-  const text = cssVar('--text-color', '#e2e8f0')
-  const border = cssVar('--border-color', 'rgba(255, 255, 255, 0.1)')
-  const tooltipBg = cssVar('--overlay-bg', 'rgba(30, 42, 72, 0.92)')
-
-  const axisLabel = { color: muted, fontSize: 11 }
-  const splitLine = { lineStyle: { color: border, type: 'dashed' as const } }
-
-  return {
-    // 每 2 秒更新一次，关闭动画避免曲线抖动
-    animation: false,
-    grid: { left: 46, right: 46, top: 28, bottom: 24 },
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: tooltipBg,
-      borderColor: border,
-      textStyle: { color: text, fontSize: 12 },
-    },
-    legend: {
-      right: 0,
-      top: 0,
-      icon: 'roundRect',
-      itemWidth: 8,
-      itemHeight: 8,
-      textStyle: { color: muted, fontSize: 11 },
-    },
-    xAxis: {
-      type: 'category',
-      boundaryGap: false,
-      data: samples.value.map(item => item.time),
-      axisLine: { lineStyle: { color: border } },
-      axisTick: { show: false },
-      axisLabel: { ...axisLabel, showMaxLabel: true },
-    },
-    yAxis: [
-      {
-        type: 'value',
-        name: '内存 %',
-        max: 100,
-        nameTextStyle: axisLabel,
-        axisLabel: axisLabel,
-        splitLine,
-      },
-      {
-        type: 'value',
-        name: '应用 MB',
-        nameTextStyle: axisLabel,
-        axisLabel: axisLabel,
-        splitLine: { show: false },
-      },
-    ],
-    series: [
-      {
-        name: '系统内存',
-        type: 'line',
-        smooth: true,
-        showSymbol: false,
-        data: samples.value.map(item => item.memoryPercent),
-        lineStyle: { width: 1.5, color: brand },
-        itemStyle: { color: brand },
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
-            colorStops: [
-              { offset: 0, color: withAlpha(brand, 0.28) },
-              { offset: 1, color: withAlpha(brand, 0) },
-            ],
-          },
-        },
-      },
-      {
-        name: '应用内存',
-        type: 'line',
-        yAxisIndex: 1,
-        smooth: true,
-        showSymbol: false,
-        data: samples.value.map(item => item.appMemory),
-        lineStyle: { width: 1.5, color: accent },
-        itemStyle: { color: accent },
-      },
-    ],
-  }
-}
-
-/** 重绘（主题切换与数据更新都走这里；notMerge 保证颜色立即生效） */
-function renderChart() {
-  chart.value?.setOption(buildOption(), true)
-}
-
-/** 采样一次；失败静默保留上一次数据（仪表盘不该因为一次采样失败而报错） */
-async function sample() {
-  if (polling) {
-    return
-  }
-  polling = true
-  try {
-    const next = await fetchSystemMetrics()
-    if (!next) {
-      return
+/** 环境分布统计 */
+const envCounts = computed(() => {
+  let local = 0
+  let test = 0
+  let production = 0
+  for (const conn of connections.value) {
+    if (conn.isProduction) {
+      production += 1
     }
-    metrics.value = next
-    const time = new Date(next.timestamp || Date.now()).toLocaleTimeString('zh-CN', { hour12: false })
-    samples.value = [
-      ...samples.value,
-      { time, memoryPercent: next.memoryPercent, appMemory: next.appMemoryMB },
-    ].slice(-MAX_SAMPLES)
-    renderChart()
+    else if (conn.isTest) {
+      test += 1
+    }
+    else if (conn.isLocal) {
+      local += 1
+    }
   }
-  finally {
-    polling = false
-  }
+  return { local, test, production }
+})
+
+/** 卡片里最多列几条 */
+const PREVIEW_LIMIT = 5
+
+/** 连接预览行（带环境标签） */
+const connectionPreview = computed(() =>
+  connections.value.slice(0, PREVIEW_LIMIT).map(conn => ({
+    conn,
+    badge: connectionEnvBadge(conn),
+  })))
+
+// ---------------------------------------------------------------- SQL 模板概览
+
+const templateStats = computed(() => ({
+  total: templates.value.length,
+  disabled: templates.value.filter(item => !item.enabled).length,
+}))
+
+/** 最近创建的 3 个模板 */
+const recentTemplates = computed(() => [...templates.value].slice(-3).reverse())
+
+// ---------------------------------------------------------------- 词典概览
+
+const dictStats = computed(() => ({
+  total: dictStore.dictionaries.length,
+  items: Object.values(dictStore.items).reduce((sum, list) => sum + list.length, 0),
+}))
+
+const dictionaryPreview = computed(() => dictStore.dictionaries.slice(0, 3))
+
+/** 某个词典的词条数 */
+function itemCountOf(dictionaryId: number): number {
+  return dictStore.items[dictionaryId]?.length ?? 0
 }
 
-/** 数值卡片：系统内存展示为「已用 / 总量 GB」 */
-const memoryText = computed(() => {
-  const value = metrics.value
-  if (!value || !value.memoryTotalMB) {
-    return '—'
+// ---------------------------------------------------------------- 生命周期
+
+/** 其它页面改了连接 / 模板后刷新对应卡片 */
+const offConnectionsChanged = EventsOn('connections:changed', () => void loadConnections())
+const offTemplatesChanged = EventsOn('templates:changed', () => void loadTemplates())
+
+/** 切回首页时重新拉一次 */
+watch(() => tabStore.activeSingleton, (current) => {
+  if (current === 'home' && !loading.value) {
+    void refresh()
   }
-  return `${(value.memoryUsedMB / 1024).toFixed(1)} / ${(value.memoryTotalMB / 1024).toFixed(1)} GB`
 })
 
 onMounted(async () => {
   try {
-    if (chartEl.value) {
-      chart.value = echarts.init(chartEl.value)
-      resizeObserver = new ResizeObserver(() => chart.value?.resize())
-      resizeObserver.observe(chartEl.value)
-      renderChart()
-    }
-    await sample()
-    timer = window.setInterval(() => void sample(), 2000)
+    await refresh()
   }
   finally {
-    // 失败也要上报，否则加载遮罩不会消失
+    // 失败也要上报
     emit('ready')
   }
 })
 
 onBeforeUnmount(() => {
-  if (timer !== null) {
-    window.clearInterval(timer)
-    timer = null
-  }
-  resizeObserver?.disconnect()
-  resizeObserver = null
-  chart.value?.dispose()
-  chart.value = null
+  offConnectionsChanged()
+  offTemplatesChanged()
 })
-
-// 主题切换：重算图表颜色（实例不重建）
-watch(() => configStore.theme, () => renderChart())
 </script>
 
 <template>
   <div class="home">
-    <header class="home__header">
-      <h1 class="home__title">欢迎使用 Toolbox</h1>
-      <span class="home__date">{{ today }}</span>
+    <header class="home__welcome">
+      <div class="home__welcome-main">
+        <h1 class="home__hello">{{ greeting }}，欢迎使用 Toolbox</h1>
+        <p class="home__sub">{{ today }}</p>
+      </div>
+      <Tag v-if="appInfo.version" tone="brand" effect="plain">v{{ appInfo.version }}</Tag>
     </header>
 
-    <!-- 快捷入口 -->
-    <section class="home__section">
-      <h2 class="home__section-title">快捷操作</h2>
-      <div class="home__quick">
-        <button
-          v-for="action in QUICK_ACTIONS"
-          :key="action.type"
-          class="home__card home__card--action"
-          type="button"
-          @click="openQuick(action)"
-        >
-          <Icon class="home__card-icon" :name="action.icon" />
-          <span class="home__card-title">{{ action.label }}</span>
-          <span class="home__card-desc">{{ action.description }}</span>
-        </button>
-      </div>
-    </section>
-
-    <div class="home__columns">
-      <!-- 系统监控 -->
-      <section class="home__section">
-        <h2 class="home__section-title">系统监控</h2>
-        <div class="home__stats">
-          <div class="home__card home__stat">
-            <span class="home__stat-label">应用内存</span>
-            <span class="home__stat-value">
-              {{ metrics ? `${metrics.appMemoryMB.toFixed(1)} MB` : '—' }}
-            </span>
-          </div>
-          <div class="home__card home__stat">
-            <span class="home__stat-label">系统内存</span>
-            <span class="home__stat-value">{{ memoryText }}</span>
-            <span class="home__stat-hint">
-              {{ metrics ? `占用 ${metrics.memoryPercent.toFixed(0)}%` : '' }}
-            </span>
-          </div>
-          <div class="home__card home__stat">
-            <span class="home__stat-label">CPU</span>
-            <span class="home__stat-value">
-              {{ metrics ? `${metrics.cpuPercent.toFixed(0)}%` : '—' }}
-            </span>
-            <span class="home__stat-hint">
-              {{ metrics ? `${metrics.cpuCount} 逻辑核心` : '' }}
-            </span>
-          </div>
+    <div class="home__grid">
+      <Card title="快捷操作" icon="wand">
+        <div class="quick">
+          <button
+            v-for="action in QUICK_ACTIONS"
+            :key="action.type"
+            type="button"
+            class="quick__item"
+            @click="openTool(action.type)"
+          >
+            <span class="quick__icon"><Icon :name="action.icon" /></span>
+            <span class="quick__label">{{ action.label }}</span>
+            <span class="quick__desc">{{ action.description }}</span>
+          </button>
         </div>
-        <div ref="chartEl" class="home__chart" />
-      </section>
+      </Card>
 
-      <!-- 已打开的标签 -->
-      <section class="home__section">
-        <h2 class="home__section-title">已打开的标签</h2>
-        <ul v-if="recentTabs.length" class="home__tabs">
+      <Card title="打开的标签" icon="inbox">
+        <template #action>
+          <span class="home__count">{{ openTabs.length }}</span>
+        </template>
+
+        <ul v-if="openTabs.length" class="rows">
           <li
-            v-for="tab in recentTabs"
+            v-for="tab in openTabs"
             :key="tab.uid"
-            class="home__card home__tab"
+            class="rows__item rows__item--clickable"
             :class="{ 'is-active': tab.id === tabStore.activeId }"
             @click="activateTab(tab.id)"
           >
-            <Icon v-if="toolOf(tab.toolType)" class="home__tab-icon" :name="iconOf(tab.toolType)" />
-            <span class="home__tab-name">{{ tab.name }}</span>
+            <Icon class="rows__icon" :name="toolOf(tab.toolType)?.icon ?? 'question'" />
+            <span class="rows__name">{{ tab.name }}</span>
+            <Tag v-if="tab.isLocked" size="sm" effect="plain">锁定</Tag>
           </li>
         </ul>
-        <p v-else class="home__empty">暂无打开的标签</p>
-      </section>
+        <p v-else class="home__empty">
+          {{ loading ? '正在读取…' : '还没有打开的标签' }}
+        </p>
+      </Card>
+
+      <Card title="数据源概览" icon="link">
+        <template #action>
+          <Button variant="ghost" size="sm" class="text-brand" @click="openTool('connections')">
+            查看全部
+          </Button>
+        </template>
+
+        <div class="chips">
+          <span class="chip chip--plain">
+            共 <b>{{ connections.length }}</b> 个连接
+          </span>
+          <span class="chip chip--success">本地 {{ envCounts.local }}</span>
+          <span class="chip chip--warning">测试 {{ envCounts.test }}</span>
+          <span class="chip chip--danger">生产 {{ envCounts.production }}</span>
+        </div>
+
+        <ul v-if="connectionPreview.length" class="rows">
+          <li v-for="row in connectionPreview" :key="row.conn.id" class="rows__item">
+            <span
+              class="rows__dot"
+              :style="row.conn.color ? { background: row.conn.color } : undefined"
+            />
+            <span class="rows__name">{{ row.conn.name }}</span>
+            <Tag v-if="row.conn.readOnly" size="sm" effect="plain">只读</Tag>
+            <Tag v-if="row.badge" size="sm" effect="plain" :tone="row.badge.type">
+              {{ row.badge.text }}
+            </Tag>
+            <span class="rows__meta">{{ row.conn.dbType }}</span>
+          </li>
+        </ul>
+        <p v-else class="home__empty">
+          {{ loading ? '正在读取…' : '还没有配置数据库连接' }}
+        </p>
+      </Card>
+
+      <Card title="SQL 模板概览" icon="document">
+        <template #action>
+          <Button variant="ghost" size="sm" class="text-brand" @click="openTool('sql-template')">
+            查看全部
+          </Button>
+        </template>
+
+        <div class="chips">
+          <span class="chip chip--plain">
+            共 <b>{{ templateStats.total }}</b> 个模板
+          </span>
+          <span v-if="templateStats.disabled" class="chip chip--warning">
+            已停用 {{ templateStats.disabled }}
+          </span>
+        </div>
+
+        <ul v-if="recentTemplates.length" class="rows">
+          <li v-for="tpl in recentTemplates" :key="tpl.id" class="rows__item rows__item--stack">
+            <div class="rows__line">
+              <span class="rows__name">{{ tpl.name }}</span>
+              <Tag v-if="!tpl.enabled" size="sm" tone="warning" effect="plain">已停用</Tag>
+            </div>
+            <code class="rows__code">{{ tpl.sqlText }}</code>
+          </li>
+        </ul>
+        <p v-else class="home__empty">
+          {{ loading ? '正在读取…' : '还没有创建 SQL 模板' }}
+        </p>
+      </Card>
+
+      <Card title="词典概览" icon="book">
+        <template #action>
+          <Button variant="ghost" size="sm" class="text-brand" @click="openTool('dictionary')">
+            查看全部
+          </Button>
+        </template>
+
+        <div class="chips">
+          <span class="chip chip--plain">
+            共 <b>{{ dictStats.total }}</b> 个词典
+          </span>
+          <span class="chip chip--plain">
+            共 <b>{{ dictStats.items }}</b> 条词条
+          </span>
+        </div>
+
+        <ul v-if="dictionaryPreview.length" class="rows">
+          <li v-for="dict in dictionaryPreview" :key="dict.id" class="rows__item">
+            <span class="rows__name">{{ dict.name }}</span>
+            <span class="rows__meta">{{ itemCountOf(dict.id) }} 条词条</span>
+          </li>
+        </ul>
+        <p v-else class="home__empty">
+          {{ loading ? '正在读取…' : '还没有词典' }}
+        </p>
+      </Card>
     </div>
   </div>
 </template>
@@ -359,171 +363,217 @@ watch(() => configStore.theme, () => renderChart())
   overflow: auto;
 }
 
-.home__header {
+/* ------------------------------------------------------------ 欢迎条 */
+
+.home__welcome {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-4);
-  max-width: 1280px;
-  margin: 0 auto var(--space-5);
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 1400px;
+  margin: 0 auto var(--space-4);
 }
 
-.home__title {
+.home__welcome-main {
+  min-width: 0;
+}
+
+.home__hello {
   margin: 0;
+  color: var(--text-color);
   font-size: var(--app-font-size-xl);
   font-weight: 600;
-  color: var(--text-color);
 }
 
-.home__date {
+.home__sub {
+  margin: 2px 0 0;
   color: var(--text-muted);
   font-size: var(--app-font-size-sm);
 }
 
-.home__section {
-  max-width: 1280px;
-  margin: 0 auto var(--space-5);
+/* ------------------------------------------------------------ 卡片网格 */
+
+/* ------------------------------------------------------------ 卡片网格 */
+
+.home__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
+  gap: var(--space-4);
+  max-width: 1400px;
+  margin: 0 auto;
 }
 
-.home__section-title {
-  margin: 0 0 var(--space-3);
+.home__count {
   color: var(--text-muted);
   font-size: var(--app-font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
 }
 
-/* 卡片：无阴影，靠边框与悬浮描边区分层级 */
-.home__card {
-  border: 1px solid var(--border-color);
+.home__empty {
+  margin: 0;
+  padding: var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-sm);
+  line-height: 1.6;
+}
+
+/* ------------------------------------------------------------ 快捷操作 */
+
+.quick {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.quick__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px var(--space-2);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: var(--surface-color);
+  background: transparent;
   color: var(--text-color);
+  text-align: left;
+  cursor: pointer;
   transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
-.home__quick {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: var(--space-3);
+.quick__item:hover {
+  border-color: color-mix(in srgb, var(--brand-color) 45%, transparent);
+  background: var(--hover-bg);
 }
 
-.home__card--action {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-1);
-  padding: var(--space-4);
-  text-align: left;
-  cursor: pointer;
-}
-
-.home__card--action:hover {
-  border-color: var(--brand-color);
-}
-
-.home__card-icon {
-  margin-bottom: var(--space-2);
+/* 图标块：跨行占据左侧两行高度 */
+.quick__icon {
+  display: inline-flex;
+  grid-row: span 2;
+  align-items: center;
+  justify-content: center;
+  width: calc(30px * var(--app-control-scale));
+  height: calc(30px * var(--app-control-scale));
+  border-radius: 8px;
+  background: var(--active-bg);
   color: var(--brand-color);
-  font-size: var(--app-font-size-xl);
+  font-size: calc(16px * var(--app-control-scale));
 }
 
-.home__card-title {
+.quick__label {
   font-size: var(--app-font-size);
   font-weight: 600;
 }
 
-.home__card-desc {
-  color: var(--text-muted);
-  font-size: var(--app-font-size-xs);
-}
-
-.home__columns {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: var(--space-4);
-  max-width: 1280px;
-  margin: 0 auto;
-}
-
-.home__columns .home__section {
-  margin-bottom: 0;
-}
-
-@media (max-width: 1080px) {
-  .home__columns {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.home__stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
-.home__stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--space-3) var(--space-4);
-}
-
-.home__stat-label {
+.quick__desc {
+  overflow: hidden;
   color: var(--text-muted);
   font-size: var(--app-font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.home__stat-value {
-  font-size: var(--app-font-size-lg);
+/* ------------------------------------------------------------ 统计胶囊 */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.chip {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-2xs);
+  line-height: 1.7;
+}
+
+.chip b {
+  color: var(--text-color);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.home__stat-hint {
-  min-height: 1em;
-  color: var(--text-muted);
-  font-size: var(--app-font-size-2xs);
+/* 环境胶囊：颜色只是提示 */
+.chip--success {
+  border-color: color-mix(in srgb, var(--success-color) 45%, transparent);
+  color: var(--success-color);
 }
 
-.home__chart {
-  height: 220px;
-  margin-top: var(--space-3);
+.chip--warning {
+  border-color: color-mix(in srgb, var(--warning-color) 45%, transparent);
+  color: var(--warning-color);
 }
 
-.home__tabs {
+.chip--danger {
+  border-color: color-mix(in srgb, var(--danger-color) 45%, transparent);
+  color: var(--danger-color);
+}
+
+/* ------------------------------------------------------------ 列表行 */
+
+.rows {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: 2px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.home__tab {
+.rows__item {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-2);
+  border-radius: 8px;
+}
+
+.rows__item--clickable {
   cursor: pointer;
 }
 
-.home__tab:hover {
-  border-color: var(--brand-color);
+.rows__item--clickable:hover {
+  background: var(--hover-bg);
 }
 
-.home__tab.is-active {
-  border-color: var(--brand-color);
+.rows__item.is-active {
   background: var(--active-bg);
 }
 
-.home__tab-icon {
+.rows__item--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.rows__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.rows__icon {
+  flex: 0 0 auto;
   color: var(--text-muted);
   font-size: var(--app-font-size-sm);
 }
 
-.home__tab-name {
+/* 连接色点：没设颜色时退化成灰点 */
+.rows__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border-color);
+}
+
+.rows__name {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   font-size: var(--app-font-size-sm);
@@ -531,9 +581,18 @@ watch(() => configStore.theme, () => renderChart())
   white-space: nowrap;
 }
 
-.home__empty {
-  margin: 0;
+.rows__meta {
+  flex: 0 0 auto;
   color: var(--text-muted);
-  font-size: var(--app-font-size-sm);
+  font-size: var(--app-font-size-2xs);
+}
+
+.rows__code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--app-font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

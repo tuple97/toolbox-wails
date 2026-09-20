@@ -2,14 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ICONS, hasIcon, iconBody } from '@/utils/icons'
 import { TOOLS } from '@/utils/tools'
 
-/**
- * 自绘图标库的不变式。
- *
- * 最要紧的一条是「注册表里的图标名必须真实存在」：历史上就踩过
- * —— 工具注册表写了 `Terminal`（Element Plus 里根本没这个导出），
- * 结果侧边菜单与标签页的图标**静默消失**，没人报错。
- * 换成自绘库后这个坑更容易踩（名字是我们自己定的），所以用用例锁住。
- */
+/** 自绘图标库的不变式 */
 describe('自绘图标库', () => {
   it('工具注册表的图标名都存在（拼错会让菜单与标签静默没有图标）', () => {
     for (const tool of TOOLS) {

@@ -1,19 +1,4 @@
-/**
- * 候选资格（Eligibility）：**这个候选有没有资格出现**。
- *
- * 文档强调的一条分界：
- *  - 资格（本模块）：答案只有「能 / 不能」，与分数无关；
- *  - 排序（sqlCompletionRank）：只在**都有资格**的候选之间排先后。
- *
- * 以前这两件事混在一起（`WHERE.boost -= 1000`），于是 `SELECT |` 里
- * FROM / WHERE / GROUP BY 照样出现，只是排在后面。现在它们**根本不会生成**：
- *
- *   `SELECT |`  → slot = select-item-start → 关键字只给 DISTINCT / CASE / EXISTS…
- *   `WHERE |`   → slot = where-expression  → 不给 FROM / JOIN / GROUP BY / ORDER BY
- *   `FROM users |` → slot = from-after-source → 只给 JOIN / WHERE 这些子句关键字
- *
- * 纯函数：只吃「候选种类 + 槽位」，不碰编辑器与元数据（可离线测试）。
- */
+/** 候选资格：这个候选有没有资格出现（与排序无关） */
 import {
   CLAUSE_KEYWORDS,
   EXPRESSION_KEYWORDS,
@@ -58,21 +43,16 @@ export function candidateKindOf(option: { type?: string }): SqlCandidateKind {
 /** 资格判定的上下文（槽位 + 该槽位内的细分状态） */
 export interface EligibilityContext {
   slot: SqlCompletionSlot
-  /** 命中的子句关键字（用来区分 `WHERE |` 与 `WHERE a = 1 |`） */
+  /** 命中的子句关键字 */
   keyword: string
   /** 命中关键字之后是否已经有内容 */
   hasTail: boolean
 }
 
-/** SELECT 列表刚开头允许的关键字（只给「表达式起手」的那些） */
+/** SELECT 列表刚开头允许的关键字 */
 const ITEM_START_KEYWORDS = ['DISTINCT', 'ALL', 'CASE', 'EXISTS']
 
-/**
- * 表达式之后「下一个子句」的关键字。
- *
- * 条件 / 分组写完（`WHERE a = 1 |`、`GROUP BY a |`）之后，接下来只能是这些 ——
- * FROM / JOIN / WHERE 本身不可能再出现。
- */
+/** 表达式之后「下一个子句」的关键字 */
 const FOLLOWING_CLAUSE_KEYWORDS = CLAUSE_KEYWORDS.filter(keyword =>
   ['GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'UNION', 'UNION ALL'].includes(keyword))
 
@@ -85,21 +65,10 @@ const NAME_ONLY_SLOTS: SqlCompletionSlot[] = [
   'alias',
 ]
 
-/**
- * 语句开头允许的关键字：语句级起始关键字（SELECT / WITH / INSERT / SHOW / DDL…）。
- *
- * 额外补 `SET` —— 它既是 `UPDATE … SET` 的子句关键字，本身也是一条完整语句
- * （`SET @x = 1`）。子句 / 表达式关键字（`AS` / `OFFSET` / `VALUES` / `AND`…）
- * 在语句开头没有意义：它们出现了，就说明位置类别又退回「上一条 SQL 的 clause」了。
- */
+/** 语句开头允许的关键字：语句级起始关键字 + SET */
 const STATEMENT_START_KEYWORDS = [...STATEMENT_KEYWORDS, 'SET']
 
-/**
- * 该槽位允许出现的关键字（顺序即候选顺序）。
- *
- * 这是 `keywordsFor(kind)` 的替代：粒度从「位置大类」细化到槽位，
- * 于是 `SELECT |` 不会再生成 FROM / WHERE / GROUP BY / ORDER BY。
- */
+/** 该槽位允许出现的关键字（顺序即候选顺序） */
 export function keywordsForSlot(ctx: EligibilityContext): string[] {
   if (NAME_ONLY_SLOTS.includes(ctx.slot)) {
     return []
@@ -115,7 +84,6 @@ export function keywordsForSlot(ctx: EligibilityContext): string[] {
     case 'where-expression':
     case 'having-expression':
     case 'group-by-expression':
-      // 条件 / 分组刚开头：FROM、JOIN、GROUP BY、ORDER BY 都不该出现
       return ctx.hasTail
         ? [...EXPRESSION_KEYWORDS, ...FOLLOWING_CLAUSE_KEYWORDS]
         : [...EXPRESSION_KEYWORDS]
@@ -130,17 +98,12 @@ export function keywordsForSlot(ctx: EligibilityContext): string[] {
     case 'statement-start':
       return STATEMENT_START_KEYWORDS
     default:
-      // unknown：位置真的判不出来（空文档、纯注释…）→ 宽松给全量
+      // 判不出位置（空文档、纯注释…）→ 宽松给全量
       return SQL_KEYWORDS
   }
 }
 
-/**
- * 该候选有没有资格出现在这个槽位。
- *
- * 默认宽松（判不出来就不拦），只对「明显不该在这里」的组合说不 ——
- * 因为漏拦只会让人多看一眼列表，误拦会让本该有的候选消失。
- */
+/** 该候选有没有资格出现在该槽位（默认宽松，只拦明显不该有的） */
 export function isCandidateAllowed(
   option: { type?: string, label: string },
   ctx: EligibilityContext,
@@ -149,21 +112,17 @@ export function isCandidateAllowed(
 
   switch (ctx.slot) {
     case 'from-source':
-      // 来源位置：表 / 视图 / CTE / 库名；列名与关键字都不给
+      // 来源位置：表 / 视图 / CTE / 库名，不给列名与关键字
       return kind === 'table' || kind === 'namespace'
     case 'from-after-source':
-      /*
-       * 表来源写完了：给「接下来能写什么」（JOIN / WHERE …）。
-       * 表名与库名在这一律不给（`FROM users |` 再冒一遍表列表是典型噪音），
-       * 但结构化候选（智能项，如 INSERT 的表名之后补列清单）要留着。
-       */
+      // 表来源写完：只给接下来的子句关键字与结构化候选
       return kind === 'keyword' || kind === 'other'
     case 'insert-column':
     case 'update-set-column':
       // 列清单 / SET 左侧：只写列
       return kind === 'column' || kind === 'other'
     case 'insert-value':
-      // VALUES：函数与字面量，列名在这里没有意义
+      // VALUES：函数与字面量
       return kind === 'function' || kind === 'keyword' || kind === 'other'
     case 'alias':
       return false
@@ -176,7 +135,7 @@ export function isCandidateAllowed(
     case 'order-by-expression':
     case 'join-predicate-start':
     case 'join-expression':
-      // 表达式位置：列 / 别名 / 函数 / 关键字 / 智能项都合理，唯独不该冒出表和库
+      // 表达式位置：不给表和库
       return kind !== 'table' && kind !== 'namespace'
     default:
       return true

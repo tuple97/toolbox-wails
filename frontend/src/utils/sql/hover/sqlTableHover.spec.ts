@@ -1,9 +1,4 @@
-/**
- * 表结构悬停用例。
- *
- * 验证解析链：位置 → 物理表（表名或别名）→ 元数据列（保持顺序）→ 建表语句。
- * 拿不准的情况（字符串 / 注释、派生表、列元数据没到位）一律不提示。
- */
+/** 表结构悬停用例 */
 import { EditorState } from '@codemirror/state'
 import { MySQL, sql } from '@codemirror/lang-sql'
 import { describe, expect, it } from 'vitest'

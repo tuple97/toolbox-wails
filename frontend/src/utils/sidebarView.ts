@@ -1,12 +1,4 @@
-/**
- * 侧边菜单的视图状态（持久化在 settings.sidebar_view）。
- *
- * 与 sidebar_config（顺序 / 显隐）分开存放：
- * 那一个是「菜单里有什么」，这一份是「怎么看」——整体收起、分组折叠，
- * 改动频率高，混在一起会让菜单配置频繁重写。
- *
- * 只记「被收起的分组」：新增分组自然处于展开态，不需要迁移配置。
- */
+/** 侧边菜单的视图状态（持久化在 settings.sidebar_view） */
 
 import { TOOL_GROUPS } from '@/utils/tools'
 
@@ -24,7 +16,7 @@ export const DEFAULT_SIDEBAR_VIEW: SidebarViewState = {
   collapsedGroups: [],
 }
 
-/** 解析持久化配置；损坏或缺失时回退默认值，未知分组直接剔除 */
+/** 解析持久化配置；损坏或缺失时回退默认值（未知分组剔除） */
 export function parseSidebarView(raw: string | undefined): SidebarViewState {
   const state: SidebarViewState = { ...DEFAULT_SIDEBAR_VIEW, collapsedGroups: [] }
   try {

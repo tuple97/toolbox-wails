@@ -1,19 +1,5 @@
 <script setup lang="ts">
-/**
- * 下拉选择（可搜索）。替代 `el-select` + `el-option`。
- *
- * 为什么自己写：需要「搜索 + 键盘上下选 + 可自定义选项内容」，且不引第三方组件库。
- * 字体列表有两百多项，靠肉眼滚动不现实，所以搜索与键盘是必备项。
- *
- * 浮层用 **Teleport + fixed 定位**（不再是组件内的 absolute）：
- * 下拉出现在弹窗、可滚动面板、表格容器里时，父级的 `overflow: hidden`
- * 会把浮层裁掉一半；固定定位 + 按触发器位置计算，则到哪儿都完整可见
- * （与 `ContextMenu.vue` 同一套做法：空间不足时向上翻转）。
- *
- * 交互：点击展开 → 输入即过滤 → ↑↓ 移动 → Enter 选中 → Esc / 点外部关闭。
- * 未选中时显示 placeholder；选项可以带 `hint`（右侧次要说明，如字体来源）。
- * 需要「行内容长这样」的场景（连接下拉）用 `#option` / `#value` 插槽自定义。
- */
+/** 下拉选择（可搜索） */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { cn } from '@/lib/utils'
 import Icon from '@/components/ui/Icon.vue'
@@ -22,7 +8,7 @@ import { usePopoverAnchor } from '@/utils/popover'
 export interface ComboboxOption {
   label: string
   value: string
-  /** 次要说明（右侧小字） */
+  /** 次要说明 */
   hint?: string
 }
 
@@ -30,18 +16,14 @@ const props = withDefaults(defineProps<{
   options: ComboboxOption[]
   placeholder?: string
   disabled?: boolean
-  /** 搜索框占位文案 */
   searchPlaceholder?: string
-  /** 显示「清除」按钮（有值时出现，对应 EP 的 clearable） */
+  /** 显示清除按钮 */
   clearable?: boolean
-  /**
-   * 允许把搜索框里的内容直接当作值（对应 EP 的 allow-create）。
-   * 分页的「每页条数」靠它输入任意数字：列表里给预设，输入框里给自由值。
-   */
+  /** 允许把搜索框内容直接当作值 */
   allowCreate?: boolean
-  /** 是否提供搜索框（对应 EP 的 filterable；关掉后仍支持 ↑↓ + Enter 选择） */
+  /** 是否提供搜索框 */
   filterable?: boolean
-  /** `sm` 用在工具条 / 分页这种紧凑行里 */
+  /** 紧凑尺寸 */
   size?: 'sm' | 'default'
   class?: string
 }>(), {
@@ -56,18 +38,15 @@ const model = defineModel<string>({ default: '' })
 const open = ref(false)
 const keyword = ref('')
 const active = ref(0)
-/** 触发器所在容器：点它不算「点外部」 */
+/** 触发器所在容器 */
 const root = ref<HTMLElement | null>(null)
-/** 触发按钮：浮层定位以它为准 */
+/** 触发按钮：浮层定位基准 */
 const trigger = ref<HTMLElement | null>(null)
-/** 浮层本体：点它也不算「点外部」，另外键盘移动时用它滚动 */
+/** 浮层本体 */
 const list = ref<HTMLElement | null>(null)
 const search = ref<HTMLInputElement | null>(null)
 
-/*
- * 浮层定位：与 MultiSelect 共用同一套（位置算法、向上翻转、跟随滚动），
- * 免得两个下拉在同样场景下表现不一致。
- */
+/* 浮层定位：与 MultiSelect 共用 */
 const { position, update: updatePosition, bind: bindViewportListeners, unbind: unbindViewportListeners }
   = usePopoverAnchor(trigger, list)
 
@@ -80,10 +59,7 @@ const filtered = computed<ComboboxOption[]>(() => {
     : props.options.filter(option =>
         option.label.toLowerCase().includes(text) || option.value.toLowerCase().includes(text))
 
-  /*
-   * allow-create：搜索框里的内容没有精确命中任何选项时，把它作为一项附在末尾。
-   * 放在末尾而不是插到最前 —— 预设项才是常用路径，自由输入是例外。
-   */
+  // allow-create：未精确命中时把输入作为一项附在末尾
   const raw = keyword.value.trim()
   if (!props.allowCreate || !raw) {
     return matched
@@ -107,7 +83,7 @@ async function show() {
   active.value = Math.max(0, props.options.findIndex(option => option.value === model.value))
   bindViewportListeners()
   await updatePosition()
-  // 有搜索框就聚焦它；没有（filterable=false）就聚焦浮层本身，键盘操作照样可用
+  // 无搜索框时聚焦浮层本身
   if (props.filterable) {
     search.value?.focus()
   }
@@ -130,12 +106,12 @@ function pick(option: ComboboxOption) {
   close()
 }
 
-/** 清除选择：值置空而不是删除该项（选项来自元数据 / 注册表，不由这里增删） */
+/** 清除选择：值置空 */
 function clear() {
   model.value = ''
 }
 
-/** 键盘：上下移动会跟着把候选项滚进视野（列表可能很长） */
+/** 键盘移动时把候选项滚进视野 */
 async function move(step: number) {
   const next = Math.min(Math.max(active.value + step, 0), filtered.value.length - 1)
   active.value = next
@@ -168,12 +144,7 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
-/**
- * 点击外部关闭（capture 阶段处理，避免被内部的 stopPropagation 影响）。
- *
- * 必须同时检查 `root` 与 `list`：浮层已 Teleport 到 body，
- * 它不在 root 里 —— 只看 root 的话，点选项会先被当成「点外部」而关闭。
- */
+/** 点击外部关闭（含 Teleport 到 body 的浮层） */
 function onDocumentPointerDown(event: PointerEvent) {
   if (!open.value) {
     return
@@ -215,7 +186,7 @@ onBeforeUnmount(() => {
       :aria-expanded="open"
       @click="toggle"
     >
-      <!-- 选中项：默认显示 label；给了 #value 插槽就交给调用方渲染（如连接下拉的标签行） -->
+      <!-- 选中项：默认 label，#value 插槽可自定义 -->
       <span v-if="$slots.value" class="min-w-0 flex-1">
         <slot v-if="current" name="value" :option="current" />
         <span v-else class="block truncate">{{ placeholder }}</span>
@@ -274,7 +245,7 @@ onBeforeUnmount(() => {
             @mouseenter="active = index"
             @click="pick(option)"
           >
-            <!-- 选项行：默认 label + hint；给了 #option 插槽就整行交给调用方 -->
+            <!-- 选项行：默认 label + hint，#option 插槽可自定义 -->
             <slot v-if="$slots.option" name="option" :option="option" />
             <template v-else>
               <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>

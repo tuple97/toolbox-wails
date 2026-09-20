@@ -5,12 +5,7 @@ import Tag from '@/components/ui/Tag.vue'
 import type { TableColumn } from '@/utils/tableLayout'
 import type { ScriptRunSummary, StatementRunRecord } from '@/types'
 
-/**
- * 「执行全部」的摘要页签。
- *
- * 上半部分为整体信息（语句总数 / 成功 / 失败 / 开始时间 / 结束时间 / 总耗时），
- * 下半部分是逐条语句的执行明细表。
- */
+/** 「执行全部」的摘要页签：上半整体信息，下半逐条明细 */
 const props = defineProps<{
   summary: ScriptRunSummary
 }>()
@@ -43,12 +38,7 @@ const stats = computed(() => [
   { label: '总耗时', value: props.summary.totalMs ? formatDuration(props.summary.totalMs) : '—' },
 ])
 
-/**
- * 明细表列。
- *
- * 固定信息的列给 `width`（时间、耗时、状态），语句与结果给 `minWidth`
- * —— 它们内容长度差异最大，按 220 : 160 的比例分剩余空间。
- */
+/** 明细表列 */
 const COLUMNS: TableColumn[] = [
   { key: 'sql', label: '语句', minWidth: 220, ellipsis: true },
   { key: 'status', label: '状态', width: 96, align: 'center' },
@@ -72,7 +62,7 @@ function statusText(record: StatementRunRecord): string {
   }
 }
 
-/** 状态标签语气（`brand` 就是原来的 primary，自绘 Tag 用这个名字） */
+/** 状态标签语气 */
 function statusTone(record: StatementRunRecord): 'success' | 'danger' | 'info' | 'brand' {
   switch (record.status) {
     case 'success':
@@ -86,7 +76,7 @@ function statusTone(record: StatementRunRecord): 'success' | 'danger' | 'info' |
   }
 }
 
-/** 结果列文案：查询给返回行数、执行给影响行数，失败/取消给原因 */
+/** 结果列文案 */
 function resultText(record: StatementRunRecord): string {
   if (record.status === 'failed' || record.status === 'cancelled') {
     return record.error ?? statusText(record)
@@ -108,7 +98,7 @@ function isFailed(record: StatementRunRecord): boolean {
   return record.status === 'failed' || record.status === 'cancelled'
 }
 
-/** 行号列：明细表从 1 开始编号（写成函数而不是模板里的箭头 —— 模板里的箭头参数没有类型推断） */
+/** 行号：从 1 开始 */
 function rowNumberOf(index: number): number {
   return index + 1
 }
@@ -143,7 +133,7 @@ function rowNumberOf(index: number): number {
         </Tag>
       </template>
 
-      <!-- 结果列：默认弱化色，失败/取消用错误色 -->
+      <!-- 结果列 -->
       <template #cell-result="{ row }">
         <span :class="isFailed(row) ? 'text-danger' : 'text-muted'">{{ resultText(row) }}</span>
       </template>

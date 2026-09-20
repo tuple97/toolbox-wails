@@ -558,3 +558,60 @@ describe('SQL 补全：列悬停信息', () => {
     expect(columnHoverAt(state, 7, { mode: 'sql', metadata })).toBeNull()
   })
 })
+
+/**
+ * 库限定名 + 已输入前缀。
+ *
+ * 回归点：限定符必须取自光标分析层（按词首回看），只看「光标是否紧邻点号」
+ * 会在 `` `other`.u| `` 时丢掉库名，退化成「当前库的表」——
+ * 于是当前库里恰好同名的表能蒙对，不同名的表永远补不出来。
+ */
+describe('SQL 补全：库限定名 + 前缀', () => {
+  /** 第二个库：与当前库（testdb）的表名刻意不同，才能验出限定符有没有生效 */
+  const twoDbMetadata: MetadataProvider = {
+    databases: () => ['testdb', 'other'],
+    tables: (_connId, database) => {
+      if (database === 'testdb') {
+        return ['users', 'orders']
+      }
+      if (database === 'other') {
+        return ['device_log', 'user_roles']
+      }
+      return []
+    },
+    columns: () => [],
+  }
+
+  /** 当前库固定为 testdb，限定符指向 other */
+  function labelsInOther(docWithCursor: string): string[] {
+    const pos = docWithCursor.indexOf('|')
+    const doc = docWithCursor.replace('|', '')
+    const state = EditorState.create({ doc, extensions: [sql({ dialect: MySQL })] })
+    const bundle = collectCompletions(state, pos, {
+      mode: 'sql',
+      sql: { connId: 1, database: 'testdb', dbType: 'mysql' },
+      metadata: twoDbMetadata,
+    })
+    return (bundle?.options ?? []).map(item => item.label)
+  }
+
+  it('点号后为空：给限定库的全部表', () => {
+    const labels = labelsInOther('SELECT * FROM `other`.|')
+    expect(labels).toContain('device_log')
+    expect(labels).toContain('user_roles')
+    expect(labels).not.toContain('users')
+  })
+
+  it('点号后已打前缀：仍按限定库过滤（`other`.u|）', () => {
+    const labels = labelsInOther('SELECT * FROM `other`.u|')
+    expect(labels).toContain('user_roles')
+    // 当前库的同名前缀表不能混进来
+    expect(labels).not.toContain('users')
+  })
+
+  it('前缀正好是子句关键字（use|）也不当关键字处理', () => {
+    // `use` 在 TABLE_CLAUSE_KEYWORDS 里；限定名之后的它只能是表名的一部分
+    expect(scanClause('SELECT * FROM `other`.use').kind).toBe('source')
+    expect(labelsInOther('SELECT * FROM `other`.use|')).toContain('user_roles')
+  })
+})

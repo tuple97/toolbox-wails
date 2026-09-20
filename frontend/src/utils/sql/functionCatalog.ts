@@ -1,21 +1,6 @@
-/**
- * SQL 函数目录：**函数元数据的唯一出处**。
- *
- * 谁消费它：
- *  - 补全候选的函数列表与签名说明（sqlCompletionKeywords.SQL_FUNCTIONS 由这里派生）；
- *  - Ctrl+P 参数提示（sqlParameterInfo）：参数名逐个列出、当前参数高亮、
- *    附函数描述与返回类型。
- *
- * 为什么做成声明式目录：函数集合随方言 / 产品取舍演进，**加一个函数只该改数据**。
- * 这里不写任何解析或 UI 逻辑；识别「光标在不在某个函数的参数列表里」是
- * sqlParameterInfo 的职责，它也只依赖本目录判断「这个标识符是不是受支持的函数」。
- *
- * 扩展方式：往 `SQL_FUNCTION_DOCS` 里加一条（params 用中性的参数名，
- * 可选参数标 `optional`，可重复的把最后一个参数名以 `…` 结尾并标 `variadic`），
- * 补全与参数提示同时生效，不需要改任何调用方。
- */
+/** SQL 函数目录：函数元数据的唯一出处，补全与参数提示都从这里派生 */
 
-/** 一个参数：`name` 是展示名，`optional` 为可选，`variadic` 标记可重复 */
+/** 一个参数：name 是展示名，optional 为可选 */
 export interface SqlFunctionParam {
   name: string
   description?: string
@@ -29,9 +14,9 @@ export interface SqlFunctionDoc {
   /** 一句话说明 */
   description: string
   params: SqlFunctionParam[]
-  /** 末参数可重复（如 CONCAT 的任意多个值） */
+  /** 末参数可重复 */
   variadic?: boolean
-  /** 返回类型说明（可选） */
+  /** 返回类型说明 */
   returns?: string
 }
 

@@ -13,12 +13,9 @@ import type { VariableConfig, VariableOption } from '@/types'
 const props = withDefaults(defineProps<{
   /** 变量配置列表 */
   configs: VariableConfig[]
-  /** 当前连接 ID，用于拉取动态选项 */
+  /** 当前连接 ID */
   connId: number | null
-  /**
-   * 多个变量是否横向排布。
-   * 查询页的条件区位于结果区上方，横向排布更省垂直空间。
-   */
+  /** 多个变量是否横向排布 */
   inline?: boolean
 }>(), {
   inline: false,
@@ -26,11 +23,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: 'change', values: Record<string, unknown>): void
-  /**
-   * 条件区按下回车。
-   * 单行输入框在 <form> 内回车会触发原生提交，若不拦截会导致整页重载，
-   * 因此统一在表单上 preventDefault 后，把回车转成「执行查询」交给父组件。
-   */
+  /** 条件区按下回车 */
   (e: 'submit'): void
 }>()
 
@@ -50,19 +43,12 @@ function applyDefaults() {
   }
 }
 
-/** 该变量是否使用下拉选项（需要加载选项来源） */
+/** 该变量是否使用下拉选项 */
 function usesOptions(config: VariableConfig): boolean {
   return config.component === 'select' || config.component === 'multi-select'
 }
 
-/**
- * 读取变量当前值。
- *
- * 模板中统一使用 getValue/setValue 而非直接写 v-model="values[name]"：
- *  - 避免在模板里出现 TS 类型断言（断言不是合法的 v-model 赋值目标，
- *    会导致 Vue 的响应式追踪异常并引发持续重渲染）
- *  - 集中处理空值默认值，减少模板分支
- */
+/** 读取变量当前值 */
 function getValue(config: VariableConfig): unknown {
   const current = values[config.name]
   if (current !== undefined) {
@@ -77,26 +63,26 @@ function setValue(config: VariableConfig, value: unknown) {
   notifyChange()
 }
 
-/** 读取字符串值（输入类组件使用） */
+/** 读取字符串值 */
 function getStringValue(config: VariableConfig): string {
   const current = getValue(config)
   return current === null || current === undefined ? '' : String(current)
 }
 
-/** 读取数组值（多选组件使用） */
+/** 读取数组值 */
 function getArrayValue(config: VariableConfig): string[] {
   const current = getValue(config)
   return Array.isArray(current) ? (current as string[]) : []
 }
 
-/** 读取数字值（滑块使用） */
+/** 读取数字值 */
 function getNumberValue(config: VariableConfig): number {
   const current = getValue(config)
   const parsed = Number(current)
   return Number.isFinite(parsed) ? parsed : (config.min ?? 0)
 }
 
-/** 读取布尔值（开关使用） */
+/** 读取布尔值 */
 function getBooleanValue(config: VariableConfig): boolean {
   return Boolean(getValue(config))
 }
@@ -130,7 +116,6 @@ async function loadDynamicOptions(config: VariableConfig) {
       const value = row[dynamic.valueColumn]
       const label = row[dynamic.labelColumn]
       return {
-        // 选项值统一转字符串，避免数字与字符串比较失败
         value: value === null || value === undefined ? '' : String(value),
         label: label === null || label === undefined ? String(value ?? '') : String(label),
       }
@@ -149,11 +134,7 @@ function optionsFor(config: VariableConfig): VariableOption[] {
   return dynamicOptions[config.name] ?? config.options ?? []
 }
 
-/**
- * 是否占用整行。
- * 多行文本与滑块（带输入框）横向空间需求大，放进网格单列会很局促，
- * 因此让它们横跨整行。
- */
+/** 是否占用整行 */
 function isFullWidthItem(config: VariableConfig): boolean {
   return config.component === 'textarea' || config.component === 'slider'
 }
@@ -188,7 +169,7 @@ function convertValue(value: unknown, dataType: VariableConfig['dataType']): unk
   }
 }
 
-/** 暴露当前取值，供父组件在查询时读取 */
+/** 暴露当前取值，供父组件读取 */
 function getValues(): Record<string, unknown> {
   const converted: Record<string, unknown> = {}
   for (const config of props.configs) {
@@ -207,7 +188,7 @@ onMounted(() => {
   notifyChange()
 })
 
-/** 变量配置发生变化时，补齐默认值并加载新变量的动态选项 */
+/** 变量配置变化时同步默认值与动态选项 */
 watch(
   () => props.configs.map(c => c.name).join('|'),
   () => {
@@ -228,10 +209,7 @@ watch(
       模板中未检测到变量。在 SQL 中使用 <code>&#123;&#123; 变量名 &#125;&#125;</code> 即可自动识别。
     </p>
 
-    <!--
-      横向模式（查询页的条件区）：条件名与控件同一行，两者作为整体参与换行，
-      避免条件名与控件被拆到两行；网格 300px 起步，窗口越宽列数越多。
-    -->
+    <!-- 横向模式：条件名与控件同一行 -->
     <form
       v-else
       :class="inline
@@ -244,7 +222,6 @@ watch(
         :key="config.name"
         :class="cn(
           inline ? 'flex items-center gap-2' : 'flex flex-col gap-1',
-          // 多行文本与滑块横向需求大，放进网格单列会很局促，横跨整行
           inline && isFullWidthItem(config) && 'col-span-full',
         )"
       >
@@ -277,7 +254,7 @@ watch(
             @update:model-value="setValue(config, $event)"
           />
 
-          <!-- 单选下拉（动态选项尚在读取时用占位文案说明，而不是静默的空列表） -->
+          <!-- 单选下拉 -->
           <Combobox
             v-else-if="config.component === 'select'"
             :model-value="getStringValue(config)"
@@ -298,14 +275,14 @@ watch(
             @update:model-value="setValue(config, $event)"
           />
 
-          <!-- 日期选择（原生 date 的值格式就是 YYYY-MM-DD，与旧 value-format 一致） -->
+          <!-- 日期选择 -->
           <DateInput
             v-else-if="config.component === 'date-picker'"
             :model-value="getStringValue(config)"
             @update:model-value="setValue(config, $event)"
           />
 
-          <!-- 滑块：数值文本由这里渲染（EP 的 show-input 位置） -->
+          <!-- 滑块 -->
           <div v-else-if="config.component === 'slider'" class="flex items-center gap-3">
             <Slider
               :model-value="getNumberValue(config)"
@@ -340,11 +317,6 @@ watch(
 </template>
 
 <style scoped>
-/*
- * 只剩「未检测到变量」这条提示还需要样式：它是带虚线框的说明块，
- * 用 Tailwind 写会很长且与语义无关，留在 scoped 里更好读。
- * 其余版面（网格 / 标签对齐 / 横跨整行）都在模板里用工具类表达。
- */
 .dynamic-form__empty {
   margin: 0;
   padding: 18px;

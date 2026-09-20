@@ -1,15 +1,4 @@
-/**
- * 列悬停提示（鼠标停在列名上显示「来源表 · 类型 · 注释」）。
- *
- * 从 sqlCompletion.ts 拆出：与补全共用同一套作用域解析（buildScopes），
- * 但交互完全独立 —— hover tooltip 由 CodeEditor.vue 单独挂载。
- *
- * 与补全共用同一套作用域解析（内层优先、点号限定符精确匹配），
- * 元数据同样走 provider 的「同步缓存 + 后台补齐」，所以悬停不会卡界面。
- *
- * 以下情况不提示：没登记连接、光标不在词上、词是限定符（右侧紧跟着 `.`）、
- * 处于字符串 / 注释中、该词在当前作用域里找不到对应列。
- */
+/** 列悬停提示（鼠标停在列名上显示「来源表 · 类型 · 注释」），与补全共用作用域解析 */
 import type { EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { inLiteralOrComment } from '@/utils/sql/sqlSyntax'
@@ -35,7 +24,7 @@ export interface SqlColumnInfo {
   dataType?: string
   /** 字段注释 */
   comment?: string
-  /** 该列来自派生表 / CTE 的静态解析（提示里会标注） */
+  /** 该列来自派生表 / CTE 的静态解析 */
   derived?: boolean
 }
 
@@ -46,9 +35,7 @@ export interface SqlColumnHover {
   info: SqlColumnInfo
 }
 
-/**
- * 取某个位置上的「列」信息，供悬停提示使用。
- */
+/** 取某个位置上的「列」信息，供悬停提示使用 */
 export function columnHoverAt(
   state: EditorState,
   pos: number,
@@ -144,6 +131,6 @@ function columnInfoOf(
   return { name: meta.name, table: ref.table, dataType: meta.dataType, comment: meta.comment }
 }
 
-// re-export：CodeEditor.vue 只需要从这一个模块拿悬停相关 API
+// re-export：CodeEditor.vue 只从这里拿悬停 API
 export { sqlContextOf }
 export type { SqlContext }

@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// ListSettings 返回全部配置项。
+// ListSettings 返回全部配置项
 func (r *Repository) ListSettings() ([]Setting, error) {
 	rows, err := r.db.conn.Query(`
 		SELECT config_key, config_type, config_value
@@ -26,7 +26,7 @@ func (r *Repository) ListSettings() ([]Setting, error) {
 	return list, rows.Err()
 }
 
-// GetSetting 按 key 返回配置项，不存在时返回 sql.ErrNoRows。
+// GetSetting 按 key 返回配置项，不存在时返回 sql.ErrNoRows
 func (r *Repository) GetSetting(key string) (*Setting, error) {
 	row := r.db.conn.QueryRow(`
 		SELECT config_key, config_type, config_value
@@ -42,7 +42,7 @@ func (r *Repository) GetSetting(key string) (*Setting, error) {
 	return &s, nil
 }
 
-// UpsertSetting 写入或更新配置项。
+// UpsertSetting 写入或更新配置项
 func (r *Repository) UpsertSetting(s Setting) error {
 	_, err := r.db.conn.Exec(`
 		INSERT INTO app_settings (config_key, config_type, config_value)
@@ -57,7 +57,7 @@ func (r *Repository) UpsertSetting(s Setting) error {
 	return nil
 }
 
-// CountSettings 返回配置项数量，用于判断是否需要写入默认值。
+// CountSettings 返回配置项数量
 func (r *Repository) CountSettings() (int, error) {
 	var count int
 	if err := r.db.conn.QueryRow(`SELECT COUNT(*) FROM app_settings`).Scan(&count); err != nil {

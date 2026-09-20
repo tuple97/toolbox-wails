@@ -344,7 +344,7 @@ export class DictionaryItem {
 
 /**
  * SQLTemplate 对应 sql_templates 表。
- * Variables 与 FieldMappings 均为 JSON 字符串。
+ * Variables、FieldMappings 与 ExportTemplates 均为 JSON 字符串。
  */
 export class SQLTemplate {
     /**
@@ -380,6 +380,15 @@ export class SQLTemplate {
              */
             this["sqlText"] = "";
         }
+        if (!("database" in $$source)) {
+            /**
+             * Database 模板自带的库 / 模式：空表示用连接配置里的默认库。
+             * 模板编辑器按它做补全，SQL 查询页选到模板后也用它作为默认选中项。
+             * @member
+             * @type {string}
+             */
+            this["database"] = "";
+        }
         if (!("variables" in $$source)) {
             /**
              * @member
@@ -394,6 +403,15 @@ export class SQLTemplate {
              */
             this["fieldMappings"] = "";
         }
+        if (!("exportTemplates" in $$source)) {
+            /**
+             * ExportTemplates 导出模板列表（JSON：[{id,name,content,enabled}]）。
+             * content 用结果行的列名作变量（{{ 列名 }}），在结果表格「复制为…」里逐行渲染。
+             * @member
+             * @type {string}
+             */
+            this["exportTemplates"] = "";
+        }
         if (!("preScript" in $$source)) {
             /**
              * @member
@@ -407,6 +425,14 @@ export class SQLTemplate {
              * @type {string}
              */
             this["postScript"] = "";
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * Enabled 是否启用（默认启用）：停用的模板仍保留配置，但不允许执行
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
         }
         if (!("pageSize" in $$source)) {
             /**

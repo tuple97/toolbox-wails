@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { activeNotices, dismiss, notify } from '@/utils/notify'
 
-/** 把队列清空，避免用例之间互相影响（模块级状态是刻意的：提示本来就是全局的） */
+/** 把队列清空，避免用例之间互相影响 */
 function clearAll() {
   for (const notice of [...activeNotices.value]) {
     dismiss(notice.id)

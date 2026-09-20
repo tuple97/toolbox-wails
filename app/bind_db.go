@@ -11,8 +11,7 @@ import (
 
 // ---------------------------------------------------------------- 数据库连接
 
-// ListConnections 返回全部数据库连接配置。
-// 密码字段为密文，前端展示时用掩码，仅在用户主动查看时调用 RevealPassword。
+// ListConnections 返回全部数据库连接配置（密码为密文）
 func (a *App) ListConnections() ([]database.DBConnection, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
@@ -58,8 +57,7 @@ func (a *App) TestConnection(conn database.DBConnection) error {
 	return a.dbService.TestConnection(conn)
 }
 
-// RevealPassword 解密并返回明文密码。
-// 仅在用户明确点击「显示密码」时调用，避免明文在任何列表接口中泄露。
+// RevealPassword 解密并返回明文密码
 func (a *App) RevealPassword(encrypted string) (string, error) {
 	if err := a.ready(); err != nil {
 		return "", err
@@ -83,7 +81,7 @@ func (a *App) ExecuteQuery(
 	return a.dbService.Execute(ctx, req)
 }
 
-// QueryVariableOptions 执行 SQL 以获取变量的动态选项。
+// QueryVariableOptions 执行 SQL 取变量的动态选项
 func (a *App) QueryVariableOptions(
 	ctx context.Context,
 	connID int64,

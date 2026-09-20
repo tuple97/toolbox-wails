@@ -27,15 +27,7 @@ import { useTabStore } from '@/stores/tabStore'
 import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
 import type { ConnectionEnv, DBConnection } from '@/types'
 
-/**
- * 连接管理（单例标签页）。
- *
- * 布局与 SQL 模板管理一致：左侧连接列表，右侧是选中连接的详情表单
- * （基本 / 高级 / SSL 三个页签，与原先弹窗里的分页相同）。
- *
- * 与其他标签的关系：连接变更后广播 `connections:changed`，
- * SQL 查询标签页监听该事件刷新连接下拉。
- */
+/** 连接管理（单例标签页）：左列表 + 右详情（基本 / 高级 / SSL）；连接变更后广播 connections:changed */
 
 const emit = defineEmits<{
   /** 首次加载完成（父级据此关闭 loading 遮罩） */
@@ -56,10 +48,7 @@ const DEFAULT_PORTS: Record<string, number> = {
   postgres: 5432,
 }
 
-/**
- * SSL 模式（统一一套取值，后端按方言映射：
- * MySQL → tls=preferred/skip-verify/true，PostgreSQL → sslmode）。
- */
+/** SSL 模式（统一取值，后端按方言映射：MySQL → tls，PostgreSQL → sslmode） */
 const SSL_MODES = [
   { value: 'disable', label: 'disable（不加密）' },
   { value: 'prefer', label: 'prefer（优先加密）' },
@@ -68,24 +57,19 @@ const SSL_MODES = [
   { value: 'verify-full', label: 'verify-full（校验 CA 与主机名）' },
 ]
 
-/** 各 SSL 模式的说明（SSL 页底部展示） */
+/** 各 SSL 模式的说明 */
 const SSL_HINTS: Record<string, string> = {
-  disable: '不启用加密，内网直连一般够用。',
-  prefer: '优先加密，服务端不支持时回退为明文连接。',
-  require: '强制加密但不校验证书（MySQL → tls=skip-verify，PostgreSQL → sslmode=require）。',
-  'verify-ca': '强制加密并校验服务端证书由指定 CA 签发，需填写 CA 证书路径。',
-  'verify-full': '强制加密并校验服务端证书与主机名，需填写 CA 证书路径。',
+  disable: '不加密',
+  prefer: '优先加密，不支持则明文',
+  require: '强制加密，不校验证书',
+  'verify-ca': '校验证书签发机构，需填 CA 路径',
+  'verify-full': '校验证书与主机名，需填 CA 路径',
 }
 
 /** 详情页签 */
 const activeTab = ref('basic')
 
-/**
- * 详情页签定义。
- *
- * SSL 页签上有个「已启用」小圆点，由 `#tab-ssl` 插槽渲染
- * （页签文字本身不带状态，圆点才不该出现在无障碍名称里）。
- */
+/** 详情页签定义（SSL 页签的「已启用」圆点走 #tab-ssl 插槽） */
 const CONN_TABS = [
   { value: 'basic', label: '基本' },
   { value: 'advanced', label: '高级' },
@@ -100,17 +84,11 @@ const loading = ref(false)
 const testing = ref(false)
 const saving = ref(false)
 
-/**
- * 正在编辑的连接 ID；0 表示「新建」。
- * 同时用作左侧列表的选中态。
- */
+/** 正在编辑的连接 ID（0 表示新建），同时用作列表选中态 */
 const editingId = ref(0)
 const form = reactive<DBConnection>(createEmptyForm())
 
-/**
- * 元数据缓存（与 SQL 执行页的智能补全共用同一份）。
- * 在这里刷新后，查询页补全立刻用到新数据，不需要各自维护缓存。
- */
+/** 元数据缓存（与查询页补全共用同一份） */
 const metadataStore = useMetadataStore()
 /** 元数据查看弹窗 */
 const metadataVisible = ref(false)
@@ -171,10 +149,7 @@ function notifyChanged() {
   void Events.Emit('connections:changed')
 }
 
-/**
- * 当前连接的环境标识；本地 / 测试 / 生产三者互斥，空串表示未标记。
- * 用「单一取值 + 三个勾选框」表达互斥，比三个独立布尔更不容易出现冲突状态。
- */
+/** 当前连接的环境标识；本地 / 测试 / 生产互斥，空串表示未标记 */
 const envMark = computed<ConnectionEnv>(() => {
   if (form.isProduction) {
     return 'production'
@@ -188,10 +163,7 @@ const envMark = computed<ConnectionEnv>(() => {
   return ''
 })
 
-/**
- * 切换环境标识：勾选一个即清掉其它两个，再次点击已勾选的则取消标记。
- * 后端保存时也会再归一一次，避免脏数据同时挂多个环境标签。
- */
+/** 切换环境标识：勾选一个清掉其它两个，再点已勾选的取消标记 */
 function toggleEnv(env: Exclude<ConnectionEnv, ''>, checked: boolean) {
   const next = checked ? env : ''
   form.isLocal = next === 'local'
@@ -213,7 +185,7 @@ function startCreate() {
 
 /** 把某个连接载入右侧详情 */
 function selectConnection(conn: DBConnection) {
-  // 老数据可能没有后加的列（后端已用默认值兜底，这里再补一层，避免输入框出现 undefined）
+  // 老数据可能缺后加的列，这里补一层默认值
   Object.assign(form, {
     ...createEmptyForm(),
     ...conn,
@@ -228,13 +200,7 @@ function selectConnection(conn: DBConnection) {
   activeTab.value = 'basic'
 }
 
-/**
- * 构造提交给后端的表单副本。
- *
- * 密码框留空表示「不修改」：正在编辑已有连接时取回已保存的密文（`enc:` 前缀）补上——
- * 后端对 `enc:` 开头的密码不会再加密，可直接解密使用。
- * 否则测试连接会带着空密码去连（必然失败），保存还会把已存密码写空。
- */
+/** 构造提交给后端的表单副本（密码留空表示不修改，取回已存密文补上） */
 async function buildPayload(): Promise<DBConnection> {
   const payload = { ...form } as DBConnection
   if (!payload.password && editingId.value) {
@@ -243,10 +209,7 @@ async function buildPayload(): Promise<DBConnection> {
   return payload
 }
 
-/**
- * 查看 / 刷新元数据前的校验：必须已保存连接。
- * 元数据接口按连接 ID 读取已保存的连接配置，未保存的连接没有 ID 可用。
- */
+/** 查看 / 刷新元数据前的校验：必须已保存连接 */
 function requireSavedConnection(): DBConnection | null {
   const conn = savedConnection.value
   if (!conn) {
@@ -331,10 +294,7 @@ async function handleSave() {
 
 /** 删除连接 */
 async function handleDelete(conn: DBConnection) {
-  /*
-   * 取消是正常分支：旧写法靠 `catch (e) { if (e !== 'cancel') ... }`
-   * 用魔法字符串区分「用户取消」与「真出错」，改动一个字就会吞掉真错误。
-   */
+  // 取消是正常分支，直接走下面的判断
   const confirmed = await askConfirm({
     message: `确定删除连接「${conn.name}」吗？其下的 SQL 模板也会一并删除。`,
     title: '删除连接',
@@ -366,12 +326,7 @@ async function handleDelete(conn: DBConnection) {
   }
 }
 
-/**
- * Ctrl/Cmd + S 保存当前连接。
- *
- * 顺手拦掉浏览器的「保存网页」默认行为；
- * 视图是切换即卸载的（非 keep-alive），所以不会在别的标签页误触发。
- */
+/** Ctrl/Cmd + S 保存当前连接（顺手拦掉浏览器的「保存网页」） */
 function handleSaveShortcut(event: KeyboardEvent) {
   // 单例页面会用 v-show 常驻；只有当前可见页面可以处理自己的快捷键。
   if (tabStore.activeSingleton !== 'connections') {
@@ -460,16 +415,15 @@ onBeforeUnmount(() => {
         </ul>
       </aside>
 
-      <!-- 右：选中连接的详情（基本 / 高级 / SSL，与弹窗里的分页一致） -->
+      <!-- 右：所选连接的详情 -->
       <section class="conn-mgr__editor">
         <header class="conn-mgr__editor-head">
           <span class="conn-mgr__editor-title">
             {{ editingId ? '编辑连接' : '新建连接' }}
           </span>
-          <small class="conn-mgr__editor-note">密码加密保存在本地，留空表示不修改</small>
 
           <div class="conn-mgr__editor-actions">
-            <!-- 元数据：查看（放大镜）/ 刷新，放在「测试连接」左边 -->
+            <!-- 元数据：查看 / 刷新 -->
             <Button
               variant="secondary"
               size="icon"
@@ -530,7 +484,6 @@ onBeforeUnmount(() => {
               </Field>
 
               <Field label="密码" label-width="100px">
-                <!-- 输入框自带的「眼睛」切换明文（对应 EP 的 show-password） -->
                 <Input
                   v-model="form.password"
                   type="password"
@@ -547,7 +500,7 @@ onBeforeUnmount(() => {
                 <div class="conn-form__markers">
                   <ColorInput v-model="form.color" />
 
-                  <!-- 环境标识：三者互斥，生产在最右 -->
+                  <!-- 环境标识（互斥） -->
                   <Checkbox
                     :model-value="envMark === 'local'"
                     @update:model-value="toggleEnv('local', $event)"
@@ -570,10 +523,6 @@ onBeforeUnmount(() => {
                   <Checkbox v-model="form.readOnly">只读连接</Checkbox>
                 </div>
               </Field>
-              <p class="conn-form__tip">
-                颜色用于列表着色区分环境；本地 / 测试 / 生产为互斥的环境标识；
-                只读连接会在后端拒绝执行写操作。
-              </p>
             </template>
 
             <!-- 高级：方言、超时与自定义参数 -->
@@ -582,7 +531,7 @@ onBeforeUnmount(() => {
                 <Input v-model="form.charset" placeholder="默认 utf8mb4" />
               </Field>
               <Field v-else label="默认模式" label-width="100px">
-                <Input v-model="form.defaultSchema" placeholder="如 public，留空用连接默认 search_path" />
+                <Input v-model="form.defaultSchema" placeholder="如 public" />
               </Field>
 
               <Field label="连接超时" label-width="100px">
@@ -611,7 +560,7 @@ onBeforeUnmount(() => {
                   v-model="form.urlParams"
                   type="textarea"
                   :rows="3"
-                  placeholder="key=value&key2=value2，同名参数会覆盖上面的默认值"
+                  placeholder="key=value&key2=value2"
                 />
               </Field>
             </template>
@@ -632,13 +581,13 @@ onBeforeUnmount(() => {
 
               <template v-if="form.sslMode !== 'disable'">
                 <Field label="CA 证书" label-width="100px">
-                  <Input v-model="form.sslCaPath" placeholder="verify-ca / verify-full 时需要，如 /etc/ssl/ca.pem" />
+                  <Input v-model="form.sslCaPath" placeholder="/etc/ssl/ca.pem" />
                 </Field>
                 <Field label="客户端证书" label-width="100px">
-                  <Input v-model="form.sslCertPath" placeholder="双向认证时填写，如 /etc/ssl/client.pem" />
+                  <Input v-model="form.sslCertPath" placeholder="/etc/ssl/client.pem" />
                 </Field>
                 <Field label="客户端私钥" label-width="100px">
-                  <Input v-model="form.sslKeyPath" placeholder="双向认证时填写，如 /etc/ssl/client.key" />
+                  <Input v-model="form.sslKeyPath" placeholder="/etc/ssl/client.key" />
                 </Field>
               </template>
 
@@ -865,19 +814,18 @@ onBeforeUnmount(() => {
 }
 
 .conn-form__tip {
-  /* 与 el-form 的 label-width 对齐（见模板上的 :label-width="100"） */
   margin: -6px 0 10px 100px;
   color: var(--text-muted);
   font-size: var(--app-font-size-xs);
 }
 
-/* SSL 页的说明段落没有表单项在前，单独去掉左缩进 */
+/* SSL 页的说明段落 */
 .conn-form__tip--ssl {
   margin-left: 0;
   line-height: 1.6;
 }
 
-/* SSL 页签：启用后带一个小圆点，切换页签前也能看出状态 */
+/* SSL 页签：启用后带小圆点 */
 .conn-form__tab {
   display: inline-flex;
   align-items: center;

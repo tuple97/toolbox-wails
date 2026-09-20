@@ -77,10 +77,13 @@ CREATE TABLE IF NOT EXISTS sql_templates (
   conn_id        INTEGER NOT NULL REFERENCES db_connections(id) ON DELETE CASCADE,
   name           TEXT    NOT NULL,
   sql_text       TEXT    NOT NULL,
+  database       TEXT    NOT NULL DEFAULT '',
   variables      TEXT    NOT NULL,
   field_mappings TEXT    NOT NULL,
+  export_templates TEXT  NOT NULL DEFAULT '[]',
   pre_script     TEXT,
   post_script    TEXT,
+  enabled        INTEGER NOT NULL DEFAULT 1,
   page_size      INTEGER NOT NULL DEFAULT 50
 );
 
@@ -191,6 +194,12 @@ type columnMigration struct {
 // 新增字段时在此登记即可，无需用户手动删库。
 var columnMigrations = []columnMigration{
 	{table: "sql_templates", column: "page_size", ddl: "page_size INTEGER NOT NULL DEFAULT 50"},
+	// 导出模板（2026-09-20）：结果行「复制为…」里的自定义导出模板列表
+	{table: "sql_templates", column: "export_templates", ddl: "export_templates TEXT NOT NULL DEFAULT '[]'"},
+	// 启用状态（2026-09-20）：默认启用，停用的模板不允许执行
+	{table: "sql_templates", column: "enabled", ddl: "enabled INTEGER NOT NULL DEFAULT 1"},
+	// 模板自带库（2026-09-21）：空表示用连接配置里的默认库
+	{table: "sql_templates", column: "database", ddl: "database TEXT NOT NULL DEFAULT ''"},
 	// 连接参数扩展（2026-09-14）：备注/颜色/方言/超时/SSL/自定义参数/只读与生产标记
 	{table: "db_connections", column: "note", ddl: "note TEXT"},
 	{table: "db_connections", column: "color", ddl: "color TEXT"},

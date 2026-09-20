@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"strings"
 
 	"toolbox-wails/app/internal/database"
 	"toolbox-wails/app/internal/script"
@@ -43,6 +44,7 @@ func (s *TemplateService) ListWithPreview(limit int) ([]TemplateListItem, error)
 			Name:    tpl.Name,
 			ConnID:  tpl.ConnID,
 			SQLText: truncate(tpl.SQLText, limit),
+			Enabled: tpl.Enabled,
 		})
 	}
 	return items, nil
@@ -54,6 +56,8 @@ type TemplateListItem struct {
 	Name    string `json:"name"`
 	ConnID  int64  `json:"connId"`
 	SQLText string `json:"sqlText"`
+	// Enabled 是否启用：停用的模板在查询页标记出来并拒绝执行
+	Enabled bool `json:"enabled"`
 }
 
 // Get 按 ID 返回完整模板。
@@ -115,6 +119,43 @@ func (s *TemplateService) Preview(sqlText string, variables map[string]any) (str
 	rendered, err := utils.RenderSQL(sqlText, variables)
 	if err != nil {
 		return "", fmt.Errorf("模板渲染失败: %w", err)
+	}
+	return rendered, nil
+}
+
+// RenderExport 按导出模板渲染一批结果行，返回与输入逐行对应的文本。
+//
+// 模板语法与 SQL 模板完全一致（`{{ 列名 }}` 就是结果行里的那一列，同样支持
+// quote / if / range 等函数），用户不必再学一套写法。
+//
+// 结果行未必包含模板引用的所有列（同一个导出模板可能被多条查询复用），
+// 缺列按空值补齐后再渲染 —— 与 Preview 的口径一致，避免一行缺列就让整批复制失败。
+func (s *TemplateService) RenderExport(tplText string, rows []map[string]any) ([]string, error) {
+	if strings.TrimSpace(tplText) == "" {
+		return nil, fmt.Errorf("导出模板内容不能为空")
+	}
+	if err := utils.ValidateTemplate(tplText); err != nil {
+		return nil, err
+	}
+
+	names := utils.ExtractTemplateVariables(tplText)
+	rendered := make([]string, 0, len(rows))
+	for _, row := range rows {
+		variables := make(map[string]any, len(row)+len(names))
+		for name, value := range row {
+			variables[name] = value
+		}
+		for _, name := range names {
+			if _, exists := variables[name]; !exists {
+				variables[name] = ""
+			}
+		}
+
+		text, err := utils.RenderSQL(tplText, variables)
+		if err != nil {
+			return nil, fmt.Errorf("导出模板渲染失败: %w", err)
+		}
+		rendered = append(rendered, text)
 	}
 	return rendered, nil
 }

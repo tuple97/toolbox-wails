@@ -14,7 +14,7 @@ import type { VariableComponent, VariableConfig, VariableDataType, VariableOptio
 const props = defineProps<{
   /** 变量配置列表 */
   modelValue: VariableConfig[]
-  /** 当前连接 ID，动态选项需要 */
+  /** 当前连接 ID */
   connId: number | null
 }>()
 
@@ -22,7 +22,7 @@ const emit = defineEmits<{
   (e: 'update:modelValue', value: VariableConfig[]): void
 }>()
 
-/** 主从布局：始终选中第一条；列表变化时仅在当前项消失才回退。 */
+/** 主从布局的选中项 */
 const selectedName = ref('')
 watch(() => props.modelValue, (items) => {
   if (!items.some(item => item.name === selectedName.value)) {
@@ -53,13 +53,13 @@ const DATA_TYPES: Array<{ value: VariableDataType, label: string }> = [
   { value: 'date', label: '日期' },
 ]
 
-/** 选项来源（分段控件；两个模式互斥，用分段比下拉更直白） */
+/** 选项来源 */
 const SOURCE_MODES = [
   { value: 'static', label: '静态配置' },
   { value: 'dynamic', label: 'SQL 动态获取' },
 ]
 
-/** 组件类型的中文名（收起态标记用） */
+/** 组件类型的中文名 */
 function componentLabel(component: VariableComponent): string {
   return COMPONENTS.find(item => item.value === component)?.label ?? component
 }
@@ -103,13 +103,7 @@ function optionsMode(config: VariableConfig): 'static' | 'dynamic' {
   return config.dynamicOptions ? 'dynamic' : 'static'
 }
 
-/**
- * 只改动态选项里的某一个字段。
- *
- * 动态选项是「三个字段一起存」的对象，旧模板里三处各自手写嵌套对象
- * （`{ dynamicOptions: { sql: ..., valueColumn: ..., labelColumn: ... } }`），
- * 抄错一个字段就会静默丢配置；这里统一合并一次。
- */
+/** 只改动态选项里的某一个字段 */
 function updateDynamicOption(
   index: number,
   config: VariableConfig,
@@ -144,7 +138,7 @@ function removeOption(index: number, config: VariableConfig, optionIndex: number
   update(index, { options })
 }
 
-/** 测试动态选项 SQL 是否能正确返回数据 */
+/** 测试动态选项 SQL */
 async function testDynamicOptions(config: VariableConfig) {
   if (!props.connId) {
     notify.warning('请先在工具栏选择数据库连接')
@@ -172,169 +166,112 @@ async function testDynamicOptions(config: VariableConfig) {
 
 <template>
   <div class="tpl-panel-list">
-    <EmptyState
-      v-if="!modelValue.length"
-      description="暂无变量，在 SQL 中使用 {{ 变量名 }} 会自动识别"
-    />
+    <EmptyState v-if="!modelValue.length" description="暂无变量" />
 
     <div v-else class="tpl-master">
       <aside class="tpl-master__list" aria-label="变量列表">
-        <button
-          v-for="config in modelValue"
-          :key="config.name"
-          type="button"
-          class="tpl-master__item"
-          :class="{ 'is-active': config.name === selectedName }"
-          @click="selectConfig(config.name)"
-        >
+        <button v-for="config in modelValue" :key="config.name" type="button" class="tpl-master__item"
+          :class="{ 'is-active': config.name === selectedName }" @click="selectConfig(config.name)">
           <code>{{ config.name }}</code>
           <span>{{ config.label || '未设置展示名称' }}</span>
           <small>{{ componentLabel(config.component) }}</small>
         </button>
       </aside>
       <div class="tpl-master__detail">
-      <div
-        v-for="(config, index) in modelValue"
-        :key="config.name"
-        v-show="config.name === selectedName"
-        class="tpl-master__detail-item"
-      >
-        <div class="tpl-panel__form">
-          <!-- 展示设置 -->
-          <section class="tpl-panel__group">
-            <div class="tpl-panel__group-title">展示设置</div>
-            <div class="tpl-panel__grid">
-              <Field label="展示名称" label-width="76px">
-                <Input
-                  :model-value="config.label"
-                  placeholder="界面上的标签"
-                  @update:model-value="update(index, { label: $event })"
-                />
+        <div v-for="(config, index) in modelValue" :key="config.name" v-show="config.name === selectedName"
+          class="tpl-master__detail-item">
+          <div class="tpl-panel__form">
+            <section class="tpl-panel__group">
+              <div class="tpl-panel__grid">
+                <Field label="展示名称" label-width="76px">
+                  <Input :model-value="config.label" placeholder="界面上的标签"
+                    @update:model-value="update(index, { label: $event })" />
+                </Field>
+
+                <Field label="组件类型" label-width="76px">
+                  <Combobox :model-value="config.component" :options="COMPONENTS"
+                    @update:model-value="update(index, { component: $event as VariableComponent })" />
+                </Field>
+
+                <Field label="数据类型" label-width="76px">
+                  <Combobox :model-value="config.dataType" :options="DATA_TYPES"
+                    @update:model-value="update(index, { dataType: $event as VariableDataType })" />
+                </Field>
+              </div>
+            </section>
+
+            <section v-if="usesRange(config.component)" class="tpl-panel__group">
+              <div class="tpl-panel__group-title">取值范围</div>
+              <div class="tpl-panel__grid">
+                <Field label="最小值" label-width="76px">
+                  <NumberInput :model-value="config.min ?? 0" @update:model-value="update(index, { min: $event })" />
+                </Field>
+
+                <Field label="最大值" label-width="76px">
+                  <NumberInput :model-value="config.max ?? 100" @update:model-value="update(index, { max: $event })" />
+                </Field>
+              </div>
+            </section>
+
+            <section v-if="usesOptions(config.component)" class="tpl-panel__group">
+              <div class="tpl-panel__group-title">下拉选项</div>
+
+              <Field label="选项来源" label-width="76px">
+                <Tabs :model-value="optionsMode(config)" :items="SOURCE_MODES"
+                  @update:model-value="handleSourceChange(index, config, $event)" />
               </Field>
 
-              <Field label="组件类型" label-width="76px">
-                <Combobox
-                  :model-value="config.component"
-                  :options="COMPONENTS"
-                  @update:model-value="update(index, { component: $event as VariableComponent })"
-                />
-              </Field>
+              <!-- 静态选项 -->
+              <template v-if="optionsMode(config) === 'static'">
+                <div class="tpl-panel__options mt-2.5">
+                  <div v-for="(opt, optIndex) in config.options ?? []" :key="optIndex" class="tpl-panel__option-row">
+                    <Input :model-value="opt.label" placeholder="显示文本"
+                      @update:model-value="updateOption(index, config, optIndex, { label: $event })" />
+                    <Input :model-value="opt.value" placeholder="实际值"
+                      @update:model-value="updateOption(index, config, optIndex, { value: $event })" />
+                    <Button variant="ghost" size="sm" class="shrink-0 text-danger"
+                      @click="removeOption(index, config, optIndex)">
+                      删除
+                    </Button>
+                  </div>
+                </div>
 
-              <Field label="数据类型" label-width="76px">
-                <Combobox
-                  :model-value="config.dataType"
-                  :options="DATA_TYPES"
-                  @update:model-value="update(index, { dataType: $event as VariableDataType })"
-                />
-              </Field>
-            </div>
-          </section>
-
-          <!-- 滑块取值范围 -->
-          <section v-if="usesRange(config.component)" class="tpl-panel__group">
-            <div class="tpl-panel__group-title">取值范围</div>
-            <div class="tpl-panel__grid">
-              <Field label="最小值" label-width="76px">
-                <NumberInput
-                  :model-value="config.min ?? 0"
-                  @update:model-value="update(index, { min: $event })"
-                />
-              </Field>
-
-              <Field label="最大值" label-width="76px">
-                <NumberInput
-                  :model-value="config.max ?? 100"
-                  @update:model-value="update(index, { max: $event })"
-                />
-              </Field>
-            </div>
-          </section>
-
-          <!-- 下拉选项配置 -->
-          <section v-if="usesOptions(config.component)" class="tpl-panel__group">
-            <div class="tpl-panel__group-title">下拉选项</div>
-
-            <Field label="选项来源" label-width="76px">
-              <Tabs
-                :model-value="optionsMode(config)"
-                :items="SOURCE_MODES"
-                @update:model-value="handleSourceChange(index, config, $event)"
-              />
-            </Field>
-
-            <!-- 静态选项 -->
-            <template v-if="optionsMode(config) === 'static'">
-              <div class="tpl-panel__options mt-2.5">
-                <div
-                  v-for="(opt, optIndex) in config.options ?? []"
-                  :key="optIndex"
-                  class="tpl-panel__option-row"
-                >
-                  <Input
-                    :model-value="opt.label"
-                    placeholder="显示文本"
-                    @update:model-value="updateOption(index, config, optIndex, { label: $event })"
-                  />
-                  <Input
-                    :model-value="opt.value"
-                    placeholder="实际值"
-                    @update:model-value="updateOption(index, config, optIndex, { value: $event })"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    class="shrink-0 text-danger"
-                    @click="removeOption(index, config, optIndex)"
-                  >
-                    删除
+                <div class="tpl-panel__actions">
+                  <Button variant="ghost" size="sm" class="text-brand" @click="addOption(index, config)">
+                    ＋ 添加选项
                   </Button>
                 </div>
-              </div>
+              </template>
 
-              <div class="tpl-panel__actions">
-                <Button variant="ghost" size="sm" class="text-brand" @click="addOption(index, config)">
-                  ＋ 添加选项
-                </Button>
-              </div>
-            </template>
-
-            <!-- 动态选项 -->
-            <template v-else>
-              <Field label="查询 SQL" label-width="76px">
-                <Input
-                  :model-value="config.dynamicOptions?.sql ?? ''"
-                  type="textarea"
-                  :rows="3"
-                  placeholder="SELECT status AS value, status_name AS label FROM dict"
-                  @update:model-value="updateDynamicOption(index, config, { sql: $event })"
-                />
-              </Field>
-
-              <div class="tpl-panel__grid">
-                <Field label="值列名" label-width="76px">
-                  <Input
-                    :model-value="config.dynamicOptions?.valueColumn ?? ''"
-                    @update:model-value="updateDynamicOption(index, config, { valueColumn: $event })"
-                  />
+              <!-- 动态选项 -->
+              <template v-else>
+                <Field label="查询 SQL" label-width="76px">
+                  <Input :model-value="config.dynamicOptions?.sql ?? ''" type="textarea" :rows="3"
+                    placeholder="SELECT status AS value, status_name AS label FROM dict"
+                    @update:model-value="updateDynamicOption(index, config, { sql: $event })" />
                 </Field>
 
-                <Field label="文本列名" label-width="76px">
-                  <Input
-                    :model-value="config.dynamicOptions?.labelColumn ?? ''"
-                    @update:model-value="updateDynamicOption(index, config, { labelColumn: $event })"
-                  />
-                </Field>
-              </div>
+                <div class="tpl-panel__grid">
+                  <Field label="值列名" label-width="76px">
+                    <Input :model-value="config.dynamicOptions?.valueColumn ?? ''"
+                      @update:model-value="updateDynamicOption(index, config, { valueColumn: $event })" />
+                  </Field>
 
-              <div class="tpl-panel__actions">
-                <Button variant="ghost" size="sm" class="text-brand" @click="testDynamicOptions(config)">
-                  测试查询
-                </Button>
-              </div>
-            </template>
-          </section>
+                  <Field label="文本列名" label-width="76px">
+                    <Input :model-value="config.dynamicOptions?.labelColumn ?? ''"
+                      @update:model-value="updateDynamicOption(index, config, { labelColumn: $event })" />
+                  </Field>
+                </div>
+
+                <div class="tpl-panel__actions">
+                  <Button variant="ghost" size="sm" class="text-brand" @click="testDynamicOptions(config)">
+                    测试查询
+                  </Button>
+                </div>
+              </template>
+            </section>
+          </div>
         </div>
-      </div>
       </div>
     </div>
   </div>
@@ -346,14 +283,84 @@ async function testDynamicOptions(config: VariableConfig) {
   padding: 2px 0;
 }
 
-.tpl-master { display: grid; grid-template-columns: minmax(180px, 26%) minmax(0, 1fr); min-height: 300px; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: color-mix(in srgb, var(--bg-color) 88%, var(--brand-color)); }
-.tpl-master__list { display: flex; flex-direction: column; margin: 0; padding: 4px 0; border-right: 1px solid var(--border-color); background: var(--bg-color-soft); overflow: auto; }
-.tpl-master__item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; width: 100%; padding: 10px 12px; border: 0; border-radius: 0; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }
-.tpl-master__item:hover { background: var(--hover-bg); }
-.tpl-master__item.is-active { background: var(--active-bg); box-shadow: inset 3px 0 0 var(--brand-color); }
-.tpl-master__item code { color: var(--brand-color); font-family: var(--font-mono); font-size: var(--app-font-size-sm); }
-.tpl-master__item span { grid-column: 1 / -1; overflow: hidden; color: var(--text-muted); font-size: var(--app-font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
-.tpl-master__item small { color: var(--text-muted); font-size: var(--app-font-size-xs); }
-.tpl-master__detail { min-width: 0; padding: 16px 18px; overflow: auto; }
-@media (max-width: 720px) { .tpl-master { grid-template-columns: 1fr; } .tpl-master__list { max-height: 150px; border-right: 0; border-bottom: 1px solid var(--border-color); } }
+.tpl-master {
+  display: grid;
+  grid-template-columns: minmax(180px, 26%) minmax(0, 1fr);
+  min-height: 300px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg-color) 88%, var(--brand-color));
+}
+
+.tpl-master__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 4px 0;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-color-soft);
+  overflow: auto;
+}
+
+.tpl-master__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-color);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tpl-master__item:hover {
+  background: var(--hover-bg);
+}
+
+.tpl-master__item.is-active {
+  background: var(--active-bg);
+  box-shadow: inset 3px 0 0 var(--brand-color);
+}
+
+.tpl-master__item code {
+  color: var(--brand-color);
+  font-family: var(--font-mono);
+  font-size: var(--app-font-size-sm);
+}
+
+.tpl-master__item span {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tpl-master__item small {
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.tpl-master__detail {
+  min-width: 0;
+  padding: 16px 18px;
+  overflow: auto;
+}
+
+@media (max-width: 720px) {
+  .tpl-master {
+    grid-template-columns: 1fr;
+  }
+
+  .tpl-master__list {
+    max-height: 150px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-color);
+  }
+}
 </style>

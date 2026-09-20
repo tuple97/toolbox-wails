@@ -10,6 +10,7 @@ import {
   dumpCompletionHistory,
   hasCjk,
   historyBoostOf,
+  matchRanges,
   matchedByPinyinOnly,
   matchesPrefix,
   pinyinInitialsOf,
@@ -234,5 +235,32 @@ describe('候选排序：历史加权', () => {
     recordCompletionSelection('name')
     resetCompletionHistory()
     expect(historyBoostOf('name')).toBe(0)
+  })
+})
+
+/**
+ * 命中区间：自行过滤（filter: false）时补全要把加粗位置交回编辑器。
+ * 少了它，打字触发的重查会把上一次画出的加粗擦掉（表现为「粗体一闪就没了」）。
+ */
+describe('补全命中区间', () => {
+  it('前缀命中：标出最前面的那一段', () => {
+    expect(matchRanges('users', 'us')).toEqual([0, 2])
+    expect(matchRanges('users', 'US')).toEqual([0, 2])
+  })
+
+  it('子串命中：标出中间那一段', () => {
+    expect(matchRanges('user_roles', 'roles')).toEqual([5, 10])
+  })
+
+  it('紧凑子序列：逐个字符标出，相邻区间合并', () => {
+    expect(matchRanges('user_orders', 'uo')).toEqual([0, 1, 5, 6])
+    // u(0) s(1) r(3)：中间跳过的 e 不标，区间不重叠
+    expect(matchRanges('user', 'usr')).toEqual([0, 2, 3, 4])
+  })
+
+  it('没命中 / 空前缀：不加粗', () => {
+    expect(matchRanges('users', 'zz')).toEqual([])
+    expect(matchRanges('users', '')).toEqual([])
+    expect(matchRanges('', 'us')).toEqual([])
   })
 })

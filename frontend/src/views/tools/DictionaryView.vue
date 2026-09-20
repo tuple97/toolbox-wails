@@ -23,27 +23,19 @@ import { useTabStore } from '@/stores/tabStore'
 import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
 import type { Dictionary, DictionaryItem } from '@/types'
 
-/**
- * 词典管理（单例标签页）。
- *
- * 用途：查询结果的「字段映射 → 绑定词典」用它把原始值翻译成可读文本
- * （如 status=1 → 启用）。这里维护词典与其条目。
- *
- * 保存策略：条目为**全量保存**（后端的 SaveDictionaryItems 语义），
- * 因此本地维护草稿列表，点击保存时整体提交。
- */
+/** 词典管理（单例标签页）：维护词典与条目 */
 
 const dictStore = useDictStore()
 const configStore = useConfigStore()
 const tabStore = useTabStore()
 
 const emit = defineEmits<{
-  /** 首次加载完成（父级据此关闭 loading 遮罩） */
+  /** 首次加载完成 */
   (e: 'ready'): void
 }>()
 
 function handleSaveShortcut(event: KeyboardEvent) {
-  // 单例视图仅在激活时接管快捷键；切走后不影响其他页面。
+  // 仅本页激活时接管快捷键
   if (tabStore.activeSingleton !== 'dictionary') return
   if (event.defaultPrevented) return
   if (!matchesShortcut(event, shortcutOf('save-dictionary', configStore.values.shortcut_config))) return
@@ -156,10 +148,6 @@ async function handleSaveDictionary() {
 }
 
 async function handleDeleteDictionary(dict: Dictionary) {
-  /*
-   * 取消是正常分支：旧写法用 `catch (e) { if (e !== 'cancel') ... }`
-   * 靠魔法字符串区分「用户取消」与「真出错」，写错一个字就会把真错误吞掉。
-   */
   const confirmed = await askConfirm({
     message: `确定删除词典「${dict.name}」及其全部条目吗？已绑定该词典的字段映射会失效。`,
     title: '删除词典',
@@ -184,12 +172,7 @@ async function handleDeleteDictionary(dict: Dictionary) {
 
 // ------------------------------------------------------------ 条目编辑
 
-/**
- * 条目表列。
- *
- * 三个字段都是「可编辑单元格」（插槽里放输入框），操作列固定 80px 放删除按钮；
- * 其余按 150 : 150 : 180 的比例分剩余空间 —— 备注最长，给的权重最大。
- */
+/** 条目表列 */
 const ITEM_COLUMNS: TableColumn[] = [
   { key: 'value', label: '原始值', minWidth: 150 },
   { key: 'meaning', label: '显示文本', minWidth: 150 },
@@ -197,7 +180,7 @@ const ITEM_COLUMNS: TableColumn[] = [
   { key: 'actions', label: '操作', width: 80, align: 'center' },
 ]
 
-/** 条目表空态：把「正在读取」与「一条都没有」分开说（旧代码是一层加载遮罩） */
+/** 条目表空态文案 */
 const itemsEmptyText = computed(() =>
   itemsLoading.value ? '正在读取条目…' : '暂无条目，点击「添加条目」')
 
@@ -248,7 +231,7 @@ async function handleSaveItems() {
   }
 }
 
-/** 刷新全局词典缓存（查询结果的字段翻译依赖它） */
+/** 刷新全局词典缓存 */
 async function refreshCache() {
   await dictStore.loadAll()
 }
@@ -260,7 +243,7 @@ onMounted(async () => {
     await loadItems()
   }
   finally {
-    // 失败也要上报，否则遮罩会一直盖住界面
+    // 失败也要上报
     emit('ready')
   }
 })
@@ -274,7 +257,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       <div class="dict-view__title">
         <span class="dict-view__bar" aria-hidden="true" />
         <span>词典</span>
-        <small>把查询结果中的原始值翻译成可读文本，供字段映射绑定</small>
       </div>
 
       <Button @click="openCreateDictionary">
@@ -287,29 +269,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       <!-- 左：词典列表 -->
       <aside class="dict-view__list">
         <ul class="dict-view__items">
-          <li
-            v-for="dict in dictionaries"
-            :key="dict.id"
-            class="dict-view__item"
-            :class="{ 'is-active': dict.id === selectedId }"
-            @click="handleSelect(dict.id)"
-          >
+          <li v-for="dict in dictionaries" :key="dict.id" class="dict-view__item"
+            :class="{ 'is-active': dict.id === selectedId }" @click="handleSelect(dict.id)">
             <div class="dict-view__item-main">
               <span class="dict-view__item-name">{{ dict.name }}</span>
-              <span class="dict-view__item-desc">{{ dict.description || '无描述' }}</span>
+              <span class="dict-view__item-desc">{{ dict.description }}</span>
             </div>
-            <Icon
-              name="pencil"
-              class="dict-view__item-edit"
-              title="编辑"
-              @click.stop="openEditDictionary(dict)"
-            />
-            <Icon
-              name="trash"
-              class="dict-view__item-del"
-              title="删除"
-              @click.stop="handleDeleteDictionary(dict)"
-            />
+            <Icon name="pencil" class="dict-view__item-edit" title="编辑" @click.stop="openEditDictionary(dict)" />
+            <Icon name="trash" class="dict-view__item-del" title="删除" @click.stop="handleDeleteDictionary(dict)" />
           </li>
 
           <li v-if="!dictionaries.length" class="dict-view__empty">
@@ -336,22 +303,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
             </div>
           </div>
 
-          <!-- 可编辑表格：单元格里直接放输入框，改完点「保存条目」一起提交 -->
-          <DataTable
-            :columns="ITEM_COLUMNS"
-            :rows="draftItems"
-            size="sm"
-            class="min-h-0 flex-1"
-            :empty-text="itemsEmptyText"
-          >
+          <!-- 可编辑表格：改完点「保存条目」提交 -->
+          <DataTable :columns="ITEM_COLUMNS" :rows="draftItems" size="sm" class="min-h-0 flex-1"
+            :empty-text="itemsEmptyText">
             <template #cell-value="{ row }">
-              <Input v-model="row.value" size="sm" placeholder="如 1" />
+              <Input v-model="row.value" size="sm" placeholder="" />
             </template>
             <template #cell-meaning="{ row }">
-              <Input v-model="row.meaning" size="sm" placeholder="如 启用" />
+              <Input v-model="row.meaning" size="sm" placeholder="" />
             </template>
             <template #cell-description="{ row }">
-              <Input v-model="row.description" size="sm" placeholder="可选" />
+              <Input v-model="row.description" size="sm" placeholder="" />
             </template>
             <template #cell-actions="{ index }">
               <Button variant="ghost" size="sm" class="text-danger" @click="removeItem(index)">
@@ -365,23 +327,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       </section>
     </div>
 
-    <!-- 词典编辑弹窗 -->
-    <Dialog
-      v-model="dictDialogVisible"
-      :title="dictForm.id ? '编辑词典' : '新建词典'"
-      :width="460"
-    >
+    <Dialog v-model="dictDialogVisible" :title="dictForm.id ? '编辑词典' : '新建词典'" :width="460">
       <div class="flex flex-col gap-1">
         <Field label="名称" required label-width="80px">
-          <Input v-model="dictForm.name" placeholder="如：设备状态" />
+          <Input v-model="dictForm.name" placeholder="" />
         </Field>
         <Field label="描述" label-width="80px">
-          <Input
-            v-model="dictForm.description"
-            type="textarea"
-            :rows="2"
-            placeholder="用途说明，可选"
-          />
+          <Input v-model="dictForm.description" type="textarea" :rows="2" placeholder="" />
         </Field>
       </div>
 
@@ -434,7 +386,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
   font-weight: 400;
 }
 
-/* 左列表 + 右明细，撑满剩余高度 */
+/* 左列表 + 右明细 */
 .dict-view__body {
   display: flex;
   gap: 12px;
@@ -568,5 +520,4 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
   margin-left: auto;
 }
 
-/* 条目表的尺寸由 DataTable 自己的 flex 布局承担（不再需要撑高的 EP 覆盖） */
 </style>

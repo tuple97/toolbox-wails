@@ -172,6 +172,52 @@ export function matchesPrefix(label: string, prefix: string): boolean {
 }
 
 /**
+ * 候选标签里「与输入前缀匹配」的区间（扁平数组：`[from, to, from, to…]`）。
+ *
+ * 补全自行过滤时会把编辑器的 `filter` 关掉，此时**编辑器不再自己算命中区间**，
+ * 必须由这里交回去 —— 否则命中加粗会先被上一次结果画出来、再被重查结果擦掉，
+ * 用户看到的就是「粗体一闪就没了」。
+ *
+ * 口径与 tierOf 的字面量命中一致：前缀 → 子串 → 紧凑子序列；
+ * 拼音首字母命中落不到标签的具体字符上，这里返回空数组（不高亮，但不影响排序）。
+ */
+export function matchRanges(label: string, prefix: string): number[] {
+  const trimmed = prefix.trim()
+  if (!trimmed || !label) {
+    return []
+  }
+  const lowerLabel = label.toLowerCase()
+  const lowerPrefix = trimmed.toLowerCase()
+
+  if (lowerLabel.startsWith(lowerPrefix)) {
+    return [0, trimmed.length]
+  }
+
+  const substringAt = lowerLabel.indexOf(lowerPrefix)
+  if (substringAt >= 0) {
+    return [substringAt, substringAt + trimmed.length]
+  }
+
+  // 紧凑子序列：逐字符标出命中位置，相邻的合并成一段（区间不重叠）
+  const ranges: number[] = []
+  let cursor = 0
+  for (let i = 0; i < lowerLabel.length && cursor < lowerPrefix.length; i++) {
+    if (lowerLabel[i] !== lowerPrefix[cursor]) {
+      continue
+    }
+    const lastEnd = ranges[ranges.length - 1]
+    if (lastEnd === i) {
+      ranges[ranges.length - 1] = i + 1
+    }
+    else {
+      ranges.push(i, i + 1)
+    }
+    cursor++
+  }
+  return cursor === lowerPrefix.length ? ranges : []
+}
+
+/**
  * 是否「仅」靠拼音首字母命中（字面量匹配不到）。
  * 这种候选项编辑器自带的匹配认不出来，需要由本模块接管过滤。
  */

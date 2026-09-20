@@ -1,19 +1,4 @@
-/**
- * CREATE TABLE 生成器（元数据 → DDL）。
- *
- * 独立于任何 UI：悬停卡片的「复制建表语句」按钮只负责把这里的结果写进剪贴板。
- *
- * 铁律（文档第三十条）：**只输出元数据里确实有的东西**。
- * 拿不到的就不要写：
- *  - `nullable` / `defaultValue` / `autoIncrement` / `primaryKey` 未提供 → 不写
- *    `NOT NULL` / `DEFAULT` / `AUTO_INCREMENT` / `PRIMARY KEY`；
- *  - 表选项（ENGINE / CHARSET / COLLATE）只有明确给出时才附在末尾；
- *  - 注释按方言处理：MySQL 用列内 `COMMENT '…'`，PostgreSQL 用
- *    `COMMENT ON COLUMN`（那边没有列内注释语法，编一段假的只会跑不通）。
- *
- * 结构上先建模型（`CreateTableModel`）再按方言生成，将来加 SQLite / SQL Server
- * 只是多一个 generator，不需要动解析与调用方。
- */
+/** CREATE TABLE 生成器（元数据 → DDL）；只输出元数据里确实有的东西 */
 import type { ExecutorColumn } from '@/types'
 import { quoteIdent } from '../rowSql'
 import type { SqlDialect } from '../rowSql'
@@ -29,7 +14,7 @@ export interface CreateTableColumn {
   autoIncrement?: boolean
 }
 
-/** 外键定义（元数据给出时才生成 CONSTRAINT 行） */
+/** 外键定义 */
 export interface CreateTableForeignKey {
   column: string
   referencedTable: string
@@ -44,18 +29,13 @@ export interface CreateTableModel {
   columns: CreateTableColumn[]
   primaryKeys?: string[]
   foreignKeys?: CreateTableForeignKey[]
-  /** 表注释（只有元数据提供时才会用上） */
+  /** 表注释 */
   tableComment?: string
-  /** 表选项（`ENGINE=InnoDB DEFAULT CHARSET=utf8mb4` 之类）：原样附在末尾 */
+  /** 表选项：原样附在末尾 */
   options?: string
 }
 
-/**
- * 由连接元数据构造建表模型。
- *
- * 当前元数据只有「列名 / 类型 / 注释」，因此模型里也只有这三样 ——
- * 不为了「看起来完整」补主键、非空、默认值。
- */
+/** 由连接元数据构造建表模型 */
 export function createTableModelOf(source: {
   schema?: string
   tableName: string
@@ -79,7 +59,7 @@ function columnSql(column: CreateTableColumn, dialect: SqlDialect): string {
     parts.push('NOT NULL')
   }
   if (column.autoIncrement) {
-    // 各库的自增写法不同：MySQL 是属性，PostgreSQL 用 SERIAL / identity 类型
+    // MySQL 是属性，PostgreSQL 用 identity
     if (dialect === 'mysql') {
       parts.push('AUTO_INCREMENT')
     }
@@ -90,7 +70,7 @@ function columnSql(column: CreateTableColumn, dialect: SqlDialect): string {
   if (column.defaultValue) {
     parts.push(`DEFAULT ${column.defaultValue}`)
   }
-  // 行内注释只有 MySQL 有；PostgreSQL 单独生成 COMMENT ON COLUMN
+  // 行内注释只有 MySQL 有
   if (column.comment && dialect === 'mysql') {
     parts.push(`COMMENT '${column.comment.replace(/'/g, "''")}'`)
   }
@@ -163,15 +143,10 @@ function postgresDdl(model: CreateTableModel): string {
   return statements.join('\n')
 }
 
-/**
- * 生成建表语句。
- *
- * 列顺序按模型顺序（= 元数据的 ordinal 顺序），**不重排**：
- * 「主键在最前」之类的整理会让复制出来的 DDL 与库里的定义顺序不一致。
- */
+/** 生成建表语句；列顺序按模型顺序，不重排 */
 export function generateCreateTableSql(model: CreateTableModel, dialect: SqlDialect): string {
   if (!model.columns.length) {
-    // 没有列信息说明元数据还没到位 —— 宁可不给，也不要输出半截 DDL
+    // 没有列信息（元数据未到位）：不输出半截 DDL
     return ''
   }
   return dialect === 'postgres' ? postgresDdl(model) : mysqlDdl(model)

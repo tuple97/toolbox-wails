@@ -92,3 +92,27 @@ func TestQualifiedTableRef(t *testing.T) {
 		}
 	}
 }
+
+// TestDisplayTypeOf 覆盖「字典里的类型 → 结果表头展示用类型」的整理规则。
+func TestDisplayTypeOf(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"varchar(255)", "VARCHAR(255)"},
+		{"decimal(10,2)", "DECIMAL(10,2)"},
+		{"int unsigned", "INT UNSIGNED"},
+		{"bigint", "BIGINT"},
+		// enum / set 的取值大小写有意义，只大写类型名本身
+		{"enum('a','B')", "ENUM('a','B')"},
+		{"  datetime(3)  ", "DATETIME(3)"},
+		{"", ""},
+		{"   ", ""},
+	}
+
+	for _, item := range cases {
+		if got := displayTypeOf(item.raw); got != item.want {
+			t.Fatalf("displayTypeOf(%q) = %q, 期望 %q", item.raw, got, item.want)
+		}
+	}
+}

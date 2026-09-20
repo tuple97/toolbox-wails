@@ -17,6 +17,20 @@ import { scanTemplateRegions } from './templateRegion'
 
 // ---------------------------------------------------------------- 结构模型
 
+/**
+ * 收尾关键字：不出现在函数规格表里，但同样是模板语言的关键字。
+ *
+ * 单独列在这里是为了让「哪些词是关键字」只有一处定义 —— 解析、收尾候选、
+ * 占位符提取（`else` / `end` 不是占位变量）都读它。
+ */
+export const TEMPLATE_CLOSING_KEYWORDS: ReadonlySet<string> = new Set(['else', 'end'])
+
+/** 该名字是不是模板语言的关键字（收尾词或函数 / 指令表中的名字） */
+export function isTemplateKeyword(name: string): boolean {
+  const lower = name.toLowerCase()
+  return TEMPLATE_CLOSING_KEYWORDS.has(lower) || templateFunctionSpec(lower) !== undefined
+}
+
 /** 一个参数（顶层空格分隔；括号内的整体算一个） */
 export interface TemplateArgument {
   text: string
@@ -171,7 +185,7 @@ export function parseTemplateDocument(text: string, offset = 0): TemplateDocumen
       continue
     }
 
-    if (name === 'else') {
+    if (TEMPLATE_CLOSING_KEYWORDS.has(name)) {
       const current = stack[stack.length - 1]
       if (!current) {
         continue

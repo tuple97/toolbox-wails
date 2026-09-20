@@ -10,7 +10,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// 字体注册表项（机器级 + 用户级，后者用于「仅为当前用户安装」的字体）。
+// 字体注册表项（机器级 + 用户级）
 var fontRegistryKeys = []struct {
 	root registry.Key
 	path string
@@ -19,7 +19,7 @@ var fontRegistryKeys = []struct {
 	{registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts`},
 }
 
-// 注册表值名末尾的字体类型后缀，需要剥掉才能得到字体族名。
+// 注册表值名末尾的字体类型后缀
 var fontTypeSuffixes = []string{
 	" (TrueType)",
 	" (OpenType)",
@@ -28,31 +28,23 @@ var fontTypeSuffixes = []string{
 	" (Plotter)",
 }
 
-// 纯符号/装饰字体，出现在字体选择里无意义。
+// 纯符号/装饰字体
 var symbolFontPatterns = []string{
 	"symbol", "wingdings", "webdings", "marlett", "holiday", "camcorder",
 }
 
-// 样式后缀：Windows 会把部分字体按字重/字形单独注册
-//（如「Arial Bold」），这些不是独立字族，选中后不会生效。
-// 注意：仅当去掉后缀后的名字也在列表里时才丢弃，
-// 避免误删「Arial Black」「Calibri Light」这类真实字族。
+// 样式后缀，仅当去掉后缀后的名字也在列表里时才丢弃
 var fontStyleSuffixes = []string{
 	" Bold Italic", " Bold Oblique", " Bold", " Italic", " Oblique", " Regular",
 }
 
-// 字体列表在单次运行内不会变化，缓存一次即可。
+// 字体列表在单次运行内缓存
 var (
 	fontsOnce  sync.Once
 	fontsCache []string
 )
 
-// ListSystemFonts 返回本机已安装的字体族名称（去重、忽略大小写排序）。
-//
-// 实现方式：读取 Windows 字体注册表项。值名形如
-// 「Microsoft YaHei & Microsoft YaHei UI (TrueType)」，
-// 剥掉类型后缀并按 " & " 拆分即可得到字体族名。
-// 相比 GDI 的 EnumFontFamiliesEx，无需 cgo、不依赖窗口句柄，且更快。
+// ListSystemFonts 返回本机已安装的字体族名称（去重、忽略大小写排序）
 func ListSystemFonts() []string {
 	fontsOnce.Do(func() {
 		fontsCache = collectSystemFonts()
@@ -63,7 +55,7 @@ func ListSystemFonts() []string {
 	return result
 }
 
-// collectSystemFonts 汇总所有注册表项中的字体族名。
+// collectSystemFonts 汇总所有注册表项中的字体族名
 func collectSystemFonts() []string {
 	seen := make(map[string]struct{})
 	names := make([]string, 0, 256)
@@ -86,7 +78,7 @@ func collectSystemFonts() []string {
 	return dropStyleVariants(names)
 }
 
-// dropStyleVariants 丢弃「已有字族 + 样式后缀」的冗余条目。
+// dropStyleVariants 丢弃「已有字族 + 样式后缀」的冗余条目
 func dropStyleVariants(names []string) []string {
 	existing := make(map[string]struct{}, len(names))
 	for _, name := range names {
@@ -137,8 +129,7 @@ func readFontFamilies(root registry.Key, path string) []string {
 	return families
 }
 
-// splitFontValueName 把注册表值名拆成字体族名。
-// 一个值名可能包含多个族（用 " & " 连接）或直接是字体文件名。
+// splitFontValueName 把注册表值名拆成字体族名（多个族用 " & " 连接）
 func splitFontValueName(valueName string) []string {
 	name := strings.TrimSpace(valueName)
 	if name == "" || looksLikeFileName(name) {
@@ -164,7 +155,7 @@ func splitFontValueName(valueName string) []string {
 	return result
 }
 
-// looksLikeFileName 判断注册表值名是否为字体文件名（少数条目如此）。
+// looksLikeFileName 判断注册表值名是否为字体文件名
 func looksLikeFileName(name string) bool {
 	lower := strings.ToLower(name)
 	for _, ext := range []string{".ttf", ".ttc", ".otf", ".fon", ".fnt"} {

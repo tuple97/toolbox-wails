@@ -1,9 +1,4 @@
-/**
- * 混合语言光标分析用例。
- *
- * 关键点：语言区域是**结构判定**（`{{ … }}` 是内嵌语言），
- * 所以写在 SQL 字符串里的插值归模板管；而纯 SQL 编辑器里 `{{` 只是普通字符。
- */
+/** 混合语言光标分析用例 */
 import { EditorState } from '@codemirror/state'
 import { MySQL, sql } from '@codemirror/lang-sql'
 import { describe, expect, it } from 'vitest'
@@ -31,7 +26,7 @@ describe('语言区域判定', () => {
     const cursor = analyzeAt('SELECT * FROM users WHERE name = {{ dev§', 'sql-template')
     expect(cursor.language).toBe('template')
     expect(cursor.prefix).toBe('dev')
-    // `{{` 之前是 33 个字符（`SELECT * FROM users WHERE name = `）
+    // `{{` 之前是 33 个字符
     expect(cursor.templateRegion?.openAt).toBe(33)
   })
 
@@ -75,7 +70,6 @@ describe('替换范围与限定符', () => {
   })
 
   it('点号紧贴光标：范围退化成空词，限定符照常识别', () => {
-    // 替换范围不含 `u.` 是补全能出候选的前提（编辑器拿它当匹配输入）
     const cursor = analyzeAt('SELECT u.§', 'sql')
     expect(cursor.wordRange).toEqual({ from: 9, to: 9 })
     expect(cursor.qualifier).toBe('u.')

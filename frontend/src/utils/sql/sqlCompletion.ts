@@ -50,7 +50,7 @@ import { insertCompletionText, startCompletion } from '@codemirror/autocomplete'
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete'
 import type { EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
-import { matchesPrefix, recordCompletionSelection, sortByRank } from './sqlCompletionRank'
+import { matchRanges, matchesPrefix, recordCompletionSelection, sortByRank } from './sqlCompletionRank'
 import { joinConditionItems } from './sqlCompletionJoin'
 import type { ForeignKeyInfo, JoinSide } from './sqlCompletionJoin'
 import {
@@ -104,6 +104,7 @@ import {
   templateBundle,
   templateClosingItems,
 } from './sqlTemplateCompletion'
+import type { FragmentActionCompletion } from './sqlTemplateCompletion'
 import type { ColumnCompletion } from './sqlCompletionInsert'
 import { analyzeHybridCursor } from './hybridCursor'
 import type { HybridCursor } from './hybridCursor'
@@ -339,10 +340,14 @@ function finalizeBundle(
    * 有输入时必须由本模块同时过滤和排序。若仍交给 CodeMirror 的 filter，
    * 它会按自身的模糊匹配分数再次重排，覆盖「完整/前缀命中优先」的规则。
    * 这也顺便覆盖拼音命中；匹配口径统一为 matchesPrefix。
+   *
+   * 例外：整段替换型候选（块片段）与前缀无关 —— 它替换整个 `{{ … }}`，
+   * 用户已经在片段里写了内容时仍然要能选中（见 isOfferedRegardlessOfPrefix）。
    */
   const customFilter = Boolean(prefix)
   const matched = customFilter
-    ? bundle.options.filter(option => matchesPrefix(option.label, prefix))
+    ? bundle.options.filter(option =>
+        matchesPrefix(option.label, prefix) || isOfferedRegardlessOfPrefix(option))
     : bundle.options
 
   /*
@@ -356,6 +361,11 @@ function finalizeBundle(
     options: runtime.useHistory ? withHistoryRecording(capped) : capped,
     filter: customFilter ? false : bundle.filter,
   }
+}
+
+/** 整段替换型候选（块片段）：替换整个 `{{ … }}`，过滤时不看已输入的前缀 */
+function isOfferedRegardlessOfPrefix(option: Completion): boolean {
+  return (option as FragmentActionCompletion).alwaysOffered === true
 }
 
 /**
@@ -522,7 +532,18 @@ export function createSqlCompletion(
      * 编辑器只在「自己过滤」的路径上使用 validFor。
      */
     if (bundle.filter === false) {
-      return { from: bundle.from, to: bundle.to, options: bundle.options, filter: false }
+      const prefix = context.state.sliceDoc(Math.min(bundle.from, context.pos), context.pos)
+      return {
+        from: bundle.from,
+        to: bundle.to,
+        options: bundle.options,
+        filter: false,
+        /*
+         * 关掉 filter 后编辑器不会自己算命中区间，必须由这里补上：
+         * 少了它，打字触发的重查会把上一次画出的加粗擦掉（「粗体一闪就没了」）。
+         */
+        getMatch: option => matchRanges(option.label, prefix),
+      }
     }
 
     return {
@@ -644,8 +665,6 @@ function sqlBundle(
 ): CompletionBundle | null {
   const metadata = runtime.metadata
   const doc = state.doc.toString()
-  const line = state.doc.lineAt(pos)
-  const lineBefore = line.text.slice(0, pos - line.from)
 
   const word = cursor.prefix
   /*
@@ -739,7 +758,13 @@ function sqlBundle(
   })
   const eligibility = { slot, keyword: scan.keyword, hasTail: Boolean(scan.tail) }
 
-  const qualifier = readQualifierBeforeCursor(lineBefore)
+  /*
+   * 限定符取光标分析层的结果（按「词首」回看，含点号）——
+   * 这样 `` `test`.u `` 也能解析出 `['test']`，走 after-dot 路径补 test 库的表；
+   * 只看「光标紧邻点号」的 readQualifierBeforeCursor 在这里会返回 null，
+   * 库名被丢掉后退化成「当前库的表」，于是 `u` 匹配不到 test.user。
+   */
+  const qualifier = qualifierSegments(cursor.qualifier)
 
   /*
    * 候选族注册表（见 completion/sqlBundleProviders.ts）：
@@ -750,7 +775,6 @@ function sqlBundle(
     state,
     pos,
     doc,
-    lineBefore,
     word,
     qualifier,
     intent,
@@ -1054,7 +1078,7 @@ export type { TableRef, VirtualColumn } from './sqlSchema'
 import {
   columnsOfRef,
   groupByPromotion,
-  readQualifierBeforeCursor,
+  qualifierSegments,
   staticOptions,
 } from './sqlSuggestions'
 import { runBundleProviders } from './completion/sqlBundleProviders'

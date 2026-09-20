@@ -1,15 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-/*
- * 主键查询要走一趟数据库（information_schema），所以把执行接口换成假的：
- * 这里要验的是「问谁、什么时候不问、失败怎么办」，不是后端能不能查主键。
- */
+// 主键查询要走数据库，把执行接口换成假的
 const mocks = vi.hoisted(() => ({ executeStatement: vi.fn() }))
 vi.mock('@/api/executor', () => ({ executeStatement: mocks.executeStatement }))
+
+// 导出模板的渲染在后端，同样换成假的
+const templateMocks = vi.hoisted(() => ({ renderExportTemplate: vi.fn() }))
+vi.mock('@/api/templates', () => ({
+  renderExportTemplate: templateMocks.renderExportTemplate,
+}))
 
 import {
   buildRowSqlStatement,
   dialectOf,
+  exportTemplateOfMenuItem,
   kindOfMenuItem,
   parseTableRef,
   primaryKeysOfResult,
@@ -17,13 +21,7 @@ import {
 } from '@/utils/sql/rowSql'
 import type { ResultSourceContext, RowSqlContext, RowSqlTarget } from '@/utils/sql/rowSql'
 
-/**
- * 结果行 SQL 生成的**纯函数**部分。
- *
- * 这里能覆盖的都是「不看数据库也能判定对错」的规则：
- * 转义、主键选择、以及最要紧的一条 —— 主键值缺失时必须拒绝生成，
- * 否则 WHERE 会写成 `id = NULL`（永远不成立），拿去执行等于白跑一趟。
- */
+/** 结果行 SQL 生成的纯函数部分（不查库） */
 function ctxOf(overrides: Partial<RowSqlContext> = {}): RowSqlContext {
   return {
     connId: 1,
@@ -68,11 +66,11 @@ describe('结果行 SQL 生成', () => {
       .toBe('DELETE FROM "public"."user" WHERE "id" = 7;')
   })
 
-  it('主键值缺失时拒绝生成（`id = NULL` 恒不成立，比不生成更糟）', () => {
+  it('主键值缺失时拒绝生成', () => {
     const ctx = ctxOf({ row: { id: null, name: 'Tom' } })
     expect(buildRowSqlStatement('delete', ctx, targetOf())).toBeNull()
     expect(buildRowSqlStatement('update', ctx, targetOf())).toBeNull()
-    // 同一行的 INSERT 仍然合法：NULL 是正常的字段值
+    // 同一行的 INSERT 仍合法
     expect(buildRowSqlStatement('insert', ctx, targetOf())).not.toBeNull()
   })
 
@@ -95,7 +93,7 @@ describe('结果表格右键菜单', () => {
       .toEqual(['INSERT', 'UPDATE（按主键）', 'DELETE（按主键）'])
   })
 
-  it('多行：标签带上行数（批量操作最怕不知道作用于几行）', () => {
+  it('多行：标签带上行数', () => {
     const items = rowSqlMenuItems(3)
     expect(items[0].label).toBe('批量复制为…（3 行）')
     expect(items[0].children?.map(item => item.label))
@@ -107,6 +105,39 @@ describe('结果表格右键菜单', () => {
     expect(kindOfMenuItem('copy-update')).toBe('update')
     expect(kindOfMenuItem('copy-delete')).toBe('delete')
     expect(kindOfMenuItem('format')).toBeNull()
+  })
+
+  it('导出模板：接在内置三项之后，key 带上模板 id', () => {
+    const items = rowSqlMenuItems(3, [
+      { id: 'a', name: '批次 INSERT', content: 'x' },
+      { id: 'b', name: 'CSV 行', content: 'y' },
+    ])
+    expect(items[0].children?.map(item => item.label)).toEqual([
+      'INSERT（3 行）',
+      'UPDATE（按主键）（3 行）',
+      'DELETE（按主键）（3 行）',
+      '批次 INSERT（3 行）',
+      'CSV 行（3 行）',
+    ])
+    expect(items[0].children?.map(item => item.key)).toEqual([
+      'copy-insert', 'copy-update', 'copy-delete', 'export:a', 'export:b',
+    ])
+  })
+
+  it('停用的导出模板不进菜单', () => {
+    const items = rowSqlMenuItems(1, [
+      { id: 'a', name: '启用中的', content: 'x', enabled: true },
+      { id: 'b', name: '已停用', content: 'y', enabled: false },
+    ])
+    expect(items[0].children?.map(item => item.label))
+      .toEqual(['INSERT', 'UPDATE（按主键）', 'DELETE（按主键）', '启用中的'])
+  })
+
+  it('导出模板菜单键 → 模板；非导出项或模板已删除时返回 null', () => {
+    const templates = [{ id: 'a', name: 'A', content: 'x' }]
+    expect(exportTemplateOfMenuItem('export:a', templates)?.name).toBe('A')
+    expect(exportTemplateOfMenuItem('export:b', templates)).toBeNull()
+    expect(exportTemplateOfMenuItem('copy-insert', templates)).toBeNull()
   })
 })
 
@@ -126,7 +157,7 @@ describe('辅助解析', () => {
 })
 
 describe('结果集主键（表头标识用）', () => {
-  /** 查主键用的来源上下文；表名各不相同 —— 主键结果有模块级缓存，同名会互相干扰 */
+  /** 查主键用的来源上下文；表名各不相同，避免命中主键缓存 */
   function sourceOf(sql: string, overrides: Partial<ResultSourceContext> = {}): ResultSourceContext {
     return { connId: 1, database: 'mydb', dbType: 'mysql', sql, ...overrides }
   }
@@ -139,25 +170,24 @@ describe('结果集主键（表头标识用）', () => {
     mocks.executeStatement.mockResolvedValue({ rows: [{ name: 'id' }] })
     await expect(primaryKeysOfResult(sourceOf('SELECT * FROM pk_basic_users')))
       .resolves.toEqual(['id'])
-    // 查的是这张表（库名来自上下文）
     const [request] = mocks.executeStatement.mock.calls[0]
     expect(request.sql).toContain("tc.table_name = 'pk_basic_users'")
     expect(request.sql).toContain("tc.table_schema = 'mydb'")
   })
 
-  it('复合主键按 ordinal 顺序原样返回（顺序有用：WHERE 条件按它拼）', async () => {
+  it('复合主键按 ordinal 顺序原样返回', async () => {
     mocks.executeStatement.mockResolvedValue({ rows: [{ name: 'tenant' }, { name: 'id' }] })
     await expect(primaryKeysOfResult(sourceOf('SELECT * FROM pk_composite')))
       .resolves.toEqual(['tenant', 'id'])
   })
 
-  it('没有连接时不查库（表头不加标识，不打扰用户）', async () => {
+  it('没有连接时不查库', async () => {
     await expect(primaryKeysOfResult(sourceOf('SELECT * FROM whatever', { connId: null })))
       .resolves.toEqual([])
     expect(mocks.executeStatement).not.toHaveBeenCalled()
   })
 
-  it('SQL 里识别不出表时不查库（函数 / 复杂子查询的结果）', async () => {
+  it('SQL 里识别不出表时不查库', async () => {
     await expect(primaryKeysOfResult(sourceOf('SELECT 1')))
       .resolves.toEqual([])
     await expect(primaryKeysOfResult(sourceOf('SELECT * FROM (SELECT 1) t')))
@@ -165,13 +195,13 @@ describe('结果集主键（表头标识用）', () => {
     expect(mocks.executeStatement).not.toHaveBeenCalled()
   })
 
-  it('查询失败时安静返回空集 —— 主键标识是装饰，不该弹错打断看数据', async () => {
+  it('查询失败时安静返回空集', async () => {
     mocks.executeStatement.mockRejectedValue(new Error('permission denied'))
     await expect(primaryKeysOfResult(sourceOf('SELECT * FROM pk_denied')))
       .resolves.toEqual([])
   })
 
-  it('同一张表重复问只查一次（翻页 / 重渲染不会反复打库）', async () => {
+  it('同一张表重复问只查一次', async () => {
     mocks.executeStatement.mockResolvedValue({ rows: [{ name: 'id' }] })
     const source = sourceOf('SELECT * FROM pk_cached_users')
     await primaryKeysOfResult(source)

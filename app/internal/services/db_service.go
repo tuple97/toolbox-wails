@@ -39,7 +39,11 @@ func NewDBService(repo *database.Repository, cipher *utils.Cipher, engine *scrip
 type ColumnMeta struct {
 	// Name 列名
 	Name string `json:"name"`
-	// Type 数据库类型名（驱动提供时填充，否则为空）
+	// Type 数据库类型（含长度 / 精度，如 varchar(255) / decimal(10,2)）。
+	//
+	// 长度优先取数据字典（information_schema.columns.column_type，精确），
+	// 取不到时退回驱动给的粗略类型名（见 columnTypeOf）；
+	// 驱动不支持类型信息时为空。
 	Type string `json:"type"`
 	// Comment 字段注释（从数据字典反查；表达式列 / 别名列 / 非 MySQL 方言为空）
 	Comment string `json:"comment"`
@@ -194,12 +198,12 @@ func (s *DBService) Execute(ctx context.Context, req ExecuteRequest) (*QueryResu
 	elapsed := time.Since(start).Milliseconds()
 
 	/*
-	 * 结果列注释与来源表：查一次数据字典补上（独立短超时，失败静默跳过）。
+	 * 结果列注释 / 来源表 / 含长度的类型：查一次数据字典补上（独立短超时，失败静默跳过）。
 	 * 表名取「未加分页的原文」，与结果列同源；库用**实际生效的库** ——
 	 * 用连接默认库的话，没配默认库的连接会查空（模板查询曾因此没有描述）。
 	 */
 	commentCtx, cancelComments := context.WithTimeout(ctx, metaTimeout)
-	annotateColumnComments(commentCtx, session, conn.DBType, effectiveDB, countableSQL, columns)
+	annotateResultColumns(commentCtx, session, conn.DBType, effectiveDB, countableSQL, columns)
 	cancelComments()
 
 	// 4. 后置脚本：对结果集做加工
@@ -334,6 +338,16 @@ func (s *DBService) ExecuteTemplateQuery(
 		return nil, err
 	}
 
+	/*
+	 * 停用的模板不允许执行。
+	 *
+	 * 拦截放在这里而不是只放前端：模板可能被其它标签页 / 旧状态引用，
+	 * 「停用」的语义必须在真正跑 SQL 的这一层成立，否则停用形同虚设。
+	 */
+	if !tpl.Enabled {
+		return nil, fmt.Errorf("模板「%s」已停用，请先在 SQL 模板管理中启用", tpl.Name)
+	}
+
 	// 连接优先使用入参，未指定时回退到模板上配置的连接
 	connID := req.ConnID
 	if connID <= 0 {
@@ -410,7 +424,7 @@ func queryRowsLimited(ctx context.Context, db rowQueryer, query string, limit in
 	for i, name := range rawColumns {
 		columns[i] = ColumnMeta{Name: name}
 		if columnTypes != nil && i < len(columnTypes) && columnTypes[i] != nil {
-			columns[i].Type = columnTypes[i].DatabaseTypeName()
+			columns[i].Type = columnTypeOf(columnTypes[i])
 		}
 	}
 
@@ -445,6 +459,26 @@ func queryRowsLimited(ctx context.Context, db rowQueryer, query string, limit in
 		return nil, nil, false, fmt.Errorf("遍历结果集失败: %w", err)
 	}
 	return result, columns, truncated, nil
+}
+
+/*
+ * columnTypeOf 把驱动的列类型整理成展示用的类型名。
+ *
+ * 只补 DECIMAL 这类精度（precision, scale）—— 它是驱动明确给出的语义。
+ *
+ * 刻意**不用** Length()：MySQL 下它给的是字节长度（utf8mb4 的 varchar(255)
+ * 会报 1020），直接展示会误导；字符串 / 时间的声明长度由数据字典反查补上
+ * （见 annotateResultColumns），那是精确的。
+ */
+func columnTypeOf(columnType *sql.ColumnType) string {
+	name := columnType.DatabaseTypeName()
+	if name == "" {
+		return ""
+	}
+	if precision, scale, ok := columnType.DecimalSize(); ok {
+		return fmt.Sprintf("%s(%d,%d)", name, precision, scale)
+	}
+	return name
 }
 
 // trimTrailingSemicolon 去掉 SQL 结尾的分号与空白。

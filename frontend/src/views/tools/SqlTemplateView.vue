@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import Button from '@/components/ui/Button.vue'
-import Dialog from '@/components/ui/Dialog.vue'
+import Combobox from '@/components/ui/Combobox.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Input from '@/components/ui/Input.vue'
+import Switch from '@/components/ui/Switch.vue'
 import TabGroup from '@/components/ui/TabGroup.vue'
 import Tag from '@/components/ui/Tag.vue'
 import { askConfirm } from '@/utils/confirm'
 import { notify } from '@/utils/notify'
 import { Events } from '@wailsio/runtime'
+import { EventsOn } from '@/api/runtime'
 import { useConfigStore } from '@/stores/configStore'
 import { useTabStore } from '@/stores/tabStore'
 import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
@@ -19,6 +21,8 @@ import type { CompletionRuntime } from '@/utils/sql/sqlCompletion'
 import { templateVariablesOf } from '@/utils/sql/template/templateVariables'
 import VariableConfigPanel from '@/components/VariableConfigPanel.vue'
 import FieldMappingPanel from '@/components/FieldMappingPanel.vue'
+import ExportTemplatePanel from '@/components/ExportTemplatePanel.vue'
+import SqlSnippetPicker from '@/components/SqlSnippetPicker.vue'
 import ConnectionSelect from '@/components/ConnectionSelect.vue'
 import {
   extractVariables,
@@ -31,10 +35,14 @@ import {
 } from '@/api/templates'
 import type { TemplateCheckResult } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
-import { SNIPPET_CATEGORIES, SQL_SNIPPETS } from '@/utils/sql/sqlSnippets'
+import { dialectOf } from '@/utils/sql/rowSql'
+import { filterDatabaseInfos, parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
+import { useMetadataStore } from '@/stores/metadataStore'
 import type { SqlSnippet } from '@/utils/sql/sqlSnippets'
 import type {
+  DatabaseInfo,
   DBConnection,
+  ExportTemplate,
   FieldMapping,
   SQLTemplate,
   TemplateListItem,
@@ -55,6 +63,8 @@ const emit = defineEmits<{
 }>()
 const configStore = useConfigStore()
 const tabStore = useTabStore()
+/** 元数据缓存：补全候选的数据来源，与连接管理 / 查询页共用同一份 */
+const metadataStore = useMetadataStore()
 
 function handleSaveShortcut(event: KeyboardEvent) {
   // 本页面隐藏时实例仍保留，不能和连接/词典页共同响应 Ctrl+S。
@@ -79,15 +89,20 @@ const form = reactive({
   name: '',
   connId: 0 as number,
   sqlText: '',
+  /** 模板自带的库；空表示用连接配置里的默认库 */
+  database: '',
   variables: '[]',
   fieldMappings: '[]',
   preScript: '',
   postScript: '',
+  /** 是否启用：停用的模板不允许执行，默认启用 */
+  enabled: true,
 })
 
-/** 变量配置与字段映射（解析后的对象形式） */
+/** 变量配置、字段映射与导出模板（解析后的对象形式） */
 const variableConfigs = ref<VariableConfig[]>([])
 const fieldMappings = ref<FieldMapping[]>([])
+const exportTemplates = ref<ExportTemplate[]>([])
 
 /** 检测到的变量名 */
 const detectedVariables = ref<string[]>([])
@@ -103,6 +118,7 @@ const configTab = ref('variables')
 const CONFIG_TABS = [
   { value: 'variables', label: '变量配置', lazy: true },
   { value: 'fields', label: '字段映射', lazy: true },
+  { value: 'exports', label: '导出模板', lazy: true },
   { value: 'pre', label: '前置脚本', lazy: true },
   { value: 'post', label: '后置脚本', lazy: true },
 ]
@@ -139,11 +155,14 @@ async function loadTemplate(id: number) {
     form.name = tpl.name
     form.connId = tpl.connId
     form.sqlText = tpl.sqlText
+    form.database = tpl.database ?? ''
     form.preScript = tpl.preScript
     form.postScript = tpl.postScript
+    form.enabled = tpl.enabled !== false
 
     variableConfigs.value = parseJSON<VariableConfig[]>(tpl.variables, [])
     fieldMappings.value = reuseUnchanged(parseJSON<FieldMapping[]>(tpl.fieldMappings, []))
+    exportTemplates.value = parseJSON<ExportTemplate[]>(tpl.exportTemplates, [])
 
     await refreshVariables()
     // 存的模板也可能带语法错误（旧数据 / 手工改库），载入后立刻标出来
@@ -277,10 +296,13 @@ function handleCreate() {
   form.name = ''
   form.connId = connections.value[0]?.id ?? 0
   form.sqlText = ''
+  form.database = ''
   form.preScript = ''
   form.postScript = ''
+  form.enabled = true
   variableConfigs.value = []
   fieldMappings.value = []
+  exportTemplates.value = []
   detectedVariables.value = []
   sqlEditorRef.value?.setErrors([])
 }
@@ -329,6 +351,29 @@ async function handleSave() {
     return
   }
 
+  // 导出模板同样要在保存前拦下：菜单里点一下就会渲染并复制，
+  // 存进去一段渲染不了的模板，出错时机就被推到了「用的时候」
+  for (const item of exportTemplates.value) {
+    if (!item.name.trim()) {
+      notify.warning('导出模板名称不能为空')
+      return
+    }
+    if (!item.content.trim()) {
+      notify.warning(`导出模板「${item.name}」的内容不能为空`)
+      return
+    }
+    try {
+      const check = await validateTemplate(item.content)
+      if (!check.valid) {
+        notify.warning(`导出模板「${item.name}」语法错误：${check.message || '请检查模板写法'}`)
+        return
+      }
+    }
+    catch {
+      // 校验不可用时不阻塞保存（与 SQL 模板一致）
+    }
+  }
+
   saving.value = true
   try {
     const payload: SQLTemplate = {
@@ -336,10 +381,13 @@ async function handleSave() {
       connId: form.connId,
       name: form.name.trim(),
       sqlText: form.sqlText,
+      database: form.database,
       variables: JSON.stringify(variableConfigs.value),
       fieldMappings: JSON.stringify(fieldMappings.value),
+      exportTemplates: JSON.stringify(exportTemplates.value),
       preScript: form.preScript,
       postScript: form.postScript,
+      enabled: form.enabled,
     }
 
     const id = await persistTemplate(payload)
@@ -394,19 +442,35 @@ async function handleDelete(item: TemplateListItem) {
  * 模板 SQL 编辑器的补全上下文（每页定向扩展）。
  *
  * 两样东西都是「按需实时求值」：
- *  - `sql`：模板所属连接的表 / 列元数据（连接从模板配置来，库名与方言从连接列表取）；
+ *  - `sql`：模板所属连接的表 / 列元数据（连接从模板配置来，方言从连接对象取，
+ *    **库取上面那个库下拉的生效库**：所选库优先、未选回落连接默认库）；
  *  - `templateVariables`：本模板的变量配置（含值类型，供参数位与点号取值使用）。
  *
- * 因为写成了函数，改连接、改变量配置后补全立即跟着变，不需要重建编辑器。
+ * 因为写成了函数，改连接、改库、改变量配置后补全立即跟着变，不需要重建编辑器。
  */
 function templateCompletionContext(): Partial<CompletionRuntime> {
-  const conn = templateConnection.value
   return {
-    sql: conn
-      ? { connId: conn.id, database: conn.database ?? '', dbType: conn.dbType }
-      : undefined,
+    sql: completionSqlContext(),
     templateVariables: templateVariablesOf(variableConfigs.value),
   }
+}
+
+/**
+ * 补全用的 SQL 上下文（连接 + 生效库 + 方言）；未绑定连接时为 undefined。
+ *
+ * 模板编辑器与导出模板编辑器共用它 —— 两处的「当前连接 / 当前库」本就是同一个，
+ * 差别只在模板编辑器还要额外给模板变量候选（导出模板里的 `{{ }}` 是结果列）。
+ */
+function completionSqlContext() {
+  const conn = templateConnection.value
+  return conn
+    ? { connId: conn.id, database: effectiveDatabase.value, dbType: conn.dbType }
+    : undefined
+}
+
+/** 导出模板编辑器的补全上下文：同一套连接 / 库，不给模板变量 */
+function exportCompletionContext(): Partial<CompletionRuntime> {
+  return { sql: completionSqlContext() }
 }
 
 /** 模板当前绑定的连接（补全上下文与编辑器方言都用它） */
@@ -416,6 +480,87 @@ const templateConnection = computed(
 
 /** 编辑器方言：跟随模板绑定的连接 */
 const templateConnectionDbType = computed(() => templateConnection.value?.dbType ?? '')
+
+// ------------------------------------------------------------ 补全用的「当前库」
+
+/**
+ * 模板自带的库（`form.database`，随模板保存）。
+ *
+ * 为什么需要它：表名候选只按「当前库」去查（`metadata.tables(connId, database)`），
+ * 编辑器原先的当前库取的是**连接配置里的默认库** —— 连接没填默认库时，
+ * 后端会拿空库名去过滤 `table_schema`（MySQL 下查不到任何表），
+ * 于是 `SELECT * FROM |` 只有库名候选、没有表名。这里补上库选择，
+ * 语义与 SQL 查询页 / 命令执行器完全一致：**空 = 用连接默认库**。
+ *
+ * 存进模板后，SQL 查询页选到这个模板时会拿它作为默认选中的库（见 DbQuery）。
+ */
+
+/**
+ * 库列表：直接读共享的元数据缓存（与连接管理页 / 查询页同一份）。
+ *
+ * 不自己发请求的好处：缓存命中时下拉立刻有值，也不会与补全各自拉一遍。
+ * 拉取时机见下面 connId 的 watcher。
+ */
+const databases = computed<DatabaseInfo[]>(() => {
+  const conn = templateConnection.value
+  return conn ? metadataStore.databaseInfos[conn.id] ?? [] : []
+})
+
+/** 「展示系统库」设置：与库下拉、补全候选共用同一套可见性策略 */
+const showSystemDatabases = computed(() =>
+  parseShowSystemDatabases(configStore.values.sql_show_system_databases))
+
+/** 过滤后的库列表 */
+const visibleDatabases = computed(() => filterDatabaseInfos(
+  databases.value,
+  dialectOf(templateConnection.value?.dbType ?? 'mysql'),
+  showSystemDatabases.value,
+))
+
+/** 库下拉选项 */
+const databaseOptions = computed(() =>
+  visibleDatabases.value.map(info => ({ label: info.name, value: info.name })))
+
+/** 占位文案：直接写清不选时会落到哪个连接默认库 */
+const databasePlaceholder = computed(() => {
+  const fallback = templateConnection.value?.database
+  return fallback ? `连接默认：${fallback}` : '选择数据库'
+})
+
+/** 生效库：模板自带的库优先，未配置时回落连接默认库（补全与元数据预热都用它） */
+const effectiveDatabase = computed(
+  () => form.database || templateConnection.value?.database || '',
+)
+
+/**
+ * 用户换连接：库是跟着连接走的，换连接即清掉原来那个连接上的库名，
+ * 否则补全与元数据预热会去查一个在新连接上并不存在的库。
+ *
+ * 只在**用户操作**时清（v-model 的 update 事件），载入模板时的程序化赋值不走这里。
+ */
+function handleConnectionChange() {
+  form.database = ''
+}
+
+/**
+ * 拉一次库列表：它同时是补全「手写 `库.`」的前提（resolveAfterDot 要按库名匹配），
+ * 所以连上就拉，而不是等用户敲出来才发现缓存是空的。
+ */
+watch(() => form.connId, (id) => {
+  if (!id) {
+    return
+  }
+  // 失败只是没有库名候选，不打扰编辑
+  void metadataStore.loadDatabases(id).catch(() => { })
+}, { immediate: true })
+
+/** 生效库变化时预热该库的表列表，候选不必等用户再敲一次才出现 */
+watch(effectiveDatabase, (current) => {
+  if (!form.connId || !current) {
+    return
+  }
+  void metadataStore.loadTables(form.connId, current).catch(() => { })
+}, { immediate: true })
 
 /** 前置脚本可用的全局标识符：注入的变量名 + variables / sqlTemplate */
 function handlePreScriptMount(view: EditorView) {
@@ -438,34 +583,13 @@ function handlePostScriptMount(view: EditorView) {
 const sqlEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null)
 /** 片段选择弹窗 */
 const snippetVisible = ref(false)
-/** 当前选中的分类 */
-const snippetCategory = ref<string>(SNIPPET_CATEGORIES[0])
-/** 分类分段控件的选项（分类名本身就是值） */
-const snippetCategories = computed(() =>
-  SNIPPET_CATEGORIES.map(category => ({ value: category, label: category })))
-/** 当前选中的片段 */
-const selectedSnippet = ref<SqlSnippet>(SQL_SNIPPETS[0])
-
-/** 当前分类下的片段 */
-const visibleSnippets = computed(() =>
-  SQL_SNIPPETS.filter(item => item.category === snippetCategory.value),
-)
-
-/** 打开弹窗时默认选中该分类的第一项 */
-function openSnippetPicker() {
-  const first = visibleSnippets.value[0]
-  if (first) {
-    selectedSnippet.value = first
-  }
-  snippetVisible.value = true
-}
 
 /**
  * 把片段插入到光标处。
  * 插入后编辑器会触发 change，由防抖逻辑自动重新解析变量。
  */
 function insertSnippet(snippet: SqlSnippet) {
-  if (!sqlEditorRef.value?.insertText(snippet.code)) {
+  if (!sqlEditorRef.value?.insertTemplateText(snippet.code)) {
     notify.warning('编辑器尚未就绪，请稍后再试')
     return
   }
@@ -494,7 +618,21 @@ onMounted(async () => {
   }
 })
 
-onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
+/**
+ * 连接管理页改动连接后刷新「所属连接」下拉。
+ *
+ * 本页是常驻单例标签页（切换时只切显隐），只在 onMounted 拉一次连接列表；
+ * 不监听的话改了连接名称 / 颜色 / 默认库之后，这里与模板编辑器的补全上下文
+ * （方言、库名都取自连接对象）都还停在旧数据上。
+ */
+const offConnectionsChanged = EventsOn('connections:changed', async () => {
+  await loadConnections()
+})
+
+onBeforeUnmount(() => {
+  offConnectionsChanged()
+  window.removeEventListener('keydown', handleSaveShortcut)
+})
 </script>
 
 <template>
@@ -511,23 +649,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
         </div>
 
         <ul class="tpl-mgr__items">
-          <li
-            v-for="item in templates"
-            :key="item.id"
-            class="tpl-mgr__item"
-            :class="{ 'is-active': item.id === editingId }"
-            @click="loadTemplate(item.id)"
-          >
+          <li v-for="item in templates" :key="item.id" class="tpl-mgr__item"
+            :class="{ 'is-active': item.id === editingId }" @click="loadTemplate(item.id)">
             <div class="tpl-mgr__item-main">
-              <span class="tpl-mgr__item-name">{{ item.name }}</span>
+              <span class="tpl-mgr__item-name">
+                <span class="tpl-mgr__item-text">{{ item.name }}</span>
+                <Tag v-if="!item.enabled" size="sm" tone="warning" effect="plain">已停用</Tag>
+              </span>
               <code class="tpl-mgr__item-sql">{{ item.sqlText }}</code>
             </div>
-            <Icon
-              name="trash"
-              class="tpl-mgr__item-del"
-              title="删除"
-              @click.stop="handleDelete(item)"
-            />
+            <Icon name="trash" class="tpl-mgr__item-del" title="删除" @click.stop="handleDelete(item)" />
           </li>
 
           <li v-if="!templates.length" class="tpl-mgr__empty">
@@ -539,17 +670,23 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       <!-- 右：编辑区 -->
       <section class="tpl-mgr__editor">
         <header class="tpl-mgr__editor-head">
-          <Input
-            v-model="form.name"
-            placeholder="模板名称"
-            class="tpl-mgr__name"
-          />
-          <ConnectionSelect
-            v-model="form.connId"
-            :connections="connections"
-            placeholder="所属连接"
-            class="tpl-mgr__conn"
-          />
+          <Input v-model="form.name" placeholder="模板名称" class="tpl-mgr__name" />
+          <ConnectionSelect v-model="form.connId" :connections="connections" placeholder="所属连接" class="tpl-mgr__conn"
+            @update:model-value="handleConnectionChange" />
+
+          <!--
+            模板自带的库（随模板保存）：空 = 用连接默认库。
+            补全的表名候选按它生成，SQL 查询页选到本模板时也用它作为默认选中的库。
+          -->
+          <Combobox v-model="form.database" :options="databaseOptions" :placeholder="databasePlaceholder"
+            search-placeholder="搜索数据库…" clearable class="tpl-mgr__db" />
+
+          <!-- 启用状态：停用的模板在查询页会被标记并拒绝执行 -->
+          <label class="tpl-mgr__enabled" title="停用后引用它的标签页将无法执行查询">
+            <Switch v-model="form.enabled" />
+            <span>{{ form.enabled ? '已启用' : '已停用' }}</span>
+          </label>
+
           <Button :loading="saving" @click="handleSave">
             保存模板
           </Button>
@@ -559,31 +696,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
         <div class="tpl-mgr__sql">
           <div class="tpl-mgr__sql-label">
             <span>SQL 模板</span>
-            <small>
-              用 <code>&#123;&#123; 变量名 &#125;&#125;</code> 插入变量；
-              支持 <code>&#123;&#123;if 变量&#125;&#125;...&#123;&#123;end&#125;&#125;</code> 条件拼接
-            </small>
-            <Button
-              variant="secondary"
-              size="sm"
-              class="tpl-mgr__sql-insert"
-              @click="openSnippetPicker"
-            >
+            <Button variant="secondary" size="sm" class="tpl-mgr__sql-insert" @click="snippetVisible = true">
               <Icon name="plus" />
               <span>插入模板</span>
             </Button>
           </div>
           <!-- 补全上下文：所属连接的表/列 + 本模板变量（见 templateCompletionContext） -->
-          <CodeEditor
-            ref="sqlEditorRef"
-            v-model="form.sqlText"
-            language="sql"
-            completion-mode="sql-template"
-            height="100%"
-            :db-type="templateConnectionDbType"
-            :completion-context="templateCompletionContext"
-            @change="scheduleParse"
-          />
+          <CodeEditor ref="sqlEditorRef" v-model="form.sqlText" language="sql" completion-mode="sql-template"
+            height="100%" :db-type="templateConnectionDbType" :completion-context="templateCompletionContext"
+            @change="scheduleParse" />
         </div>
 
         <!-- 下方：配置 Tab 区 -->
@@ -597,97 +718,40 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 
           <TabGroup v-model="configTab" :items="CONFIG_TABS" class="tpl-mgr__tabs">
             <template #panel-variables>
-              <VariableConfigPanel
-                v-model="variableConfigs"
-                :conn-id="form.connId || null"
-              />
+              <VariableConfigPanel v-model="variableConfigs" :conn-id="form.connId || null" />
             </template>
 
             <template #panel-fields>
               <FieldMappingPanel v-model="fieldMappings" />
             </template>
 
+            <template #panel-exports>
+              <ExportTemplatePanel v-model="exportTemplates" :db-type="templateConnectionDbType"
+                :completion-context="exportCompletionContext" />
+            </template>
+
             <template #panel-pre>
               <p class="tpl-mgr__hint">
-                可修改变量并追加 SQL 片段：
                 <code>return &#123; variables, sqlFragment &#125;</code>
               </p>
-              <CodeEditor
-                v-model="form.preScript"
-                language="javascript"
-                completion-mode="javascript"
-                height="220px"
-                @mount="handlePreScriptMount"
-              />
+              <CodeEditor v-model="form.preScript" language="javascript" completion-mode="javascript" height="220px"
+                @mount="handlePreScriptMount" />
             </template>
 
             <template #panel-post>
               <p class="tpl-mgr__hint">
-                可加工结果集：
                 <code>return &#123; rows &#125;</code>
               </p>
-              <CodeEditor
-                v-model="form.postScript"
-                language="javascript"
-                completion-mode="javascript"
-                height="220px"
-                @mount="handlePostScriptMount"
-              />
+              <CodeEditor v-model="form.postScript" language="javascript" completion-mode="javascript" height="220px"
+                @mount="handlePostScriptMount" />
             </template>
           </TabGroup>
         </div>
       </section>
     </div>
 
-    <!-- 插入模板片段：左侧选择，右侧预览 -->
-    <Dialog v-model="snippetVisible" title="插入模板片段" :width="860">
-      <div class="snippet">
-        <!-- 左：分类 + 片段列表 -->
-        <aside class="snippet__list">
-          <Tabs v-model="snippetCategory" :items="snippetCategories" class="snippet__cats" />
-
-          <ul class="snippet__items">
-            <li
-              v-for="item in visibleSnippets"
-              :key="item.id"
-              class="snippet__item"
-              :class="{ 'is-active': selectedSnippet.id === item.id }"
-              @click="selectedSnippet = item"
-              @dblclick="insertSnippet(item)"
-            >
-              {{ item.name }}
-            </li>
-          </ul>
-        </aside>
-
-        <!-- 右：预览 -->
-        <section v-if="selectedSnippet" class="snippet__preview">
-          <h4 class="snippet__title">{{ selectedSnippet.name }}</h4>
-          <p class="snippet__desc">{{ selectedSnippet.description }}</p>
-
-          <div class="snippet__block">
-            <div class="snippet__block-label">插入内容</div>
-            <pre class="snippet__code">{{ selectedSnippet.code }}</pre>
-          </div>
-
-          <div class="snippet__block">
-            <div class="snippet__block-label">示例</div>
-            <pre class="snippet__code snippet__code--example">{{ selectedSnippet.example }}</pre>
-          </div>
-
-          <p class="snippet__tip">
-            双击左侧列表项可直接插入；插入后片段中的「变量」会被自动选中，可直接改写。
-          </p>
-        </section>
-      </div>
-
-      <template #footer>
-        <Button variant="secondary" size="sm" @click="snippetVisible = false">关闭</Button>
-        <Button size="sm" @click="insertSnippet(selectedSnippet)">
-          插入
-        </Button>
-      </template>
-    </Dialog>
+    <!-- 插入模板片段：与导出模板编辑器共用同一个弹窗（组件内自带列表与预览） -->
+    <SqlSnippetPicker v-model="snippetVisible" @insert="insertSnippet" />
   </div>
 </template>
 
@@ -764,8 +828,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 }
 
 .tpl-mgr__item-name {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: var(--app-font-size);
+}
+
+/* 名字占满剩余宽度并省略；「已停用」标签固定在行尾不被挤掉 */
+.tpl-mgr__item-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -817,6 +889,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 .tpl-mgr__editor-head {
   display: flex;
   align-items: center;
+  /* 名称 + 连接 + 库 + 启用开关 + 保存：窗口窄时换行，不把控件挤出可视区 */
+  flex-wrap: wrap;
   gap: 8px;
   flex: 0 0 auto;
 }
@@ -827,6 +901,24 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 
 .tpl-mgr__conn {
   width: 200px;
+}
+
+/* 补全用的当前库（与上方所属连接同款：宽度落在组件根节点上） */
+.tpl-mgr__db {
+  width: 170px;
+}
+
+/* 启用开关：开关 + 文本，整体贴住「保存模板」按钮 */
+.tpl-mgr__enabled {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 0 2px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-sm);
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 /* SQL 区固定占编辑区高度的 40% */
@@ -865,100 +957,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
   margin-right: 4px;
 }
 
-/* 片段选择弹窗：左列表 / 右预览 */
-.snippet {
-  display: flex;
-  gap: 14px;
-  min-height: 380px;
-}
-
-.snippet__list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex: 0 0 300px;
-}
-
-.snippet__cats {
-  flex: 0 0 auto;
-}
-
-.snippet__items {
-  flex: 1;
-  margin: 0;
-  padding: 4px;
-  list-style: none;
-  overflow: auto;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-}
-
-.snippet__item {
-  padding: 7px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: var(--app-font-size);
-}
-
-.snippet__item:hover {
-  background: var(--hover-bg);
-}
-
-.snippet__item.is-active {
-  background: var(--active-bg);
-}
-
-.snippet__preview {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.snippet__title {
-  margin: 0;
-  font-size: var(--app-font-size-lg);
-}
-
-.snippet__desc {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--app-font-size-sm);
-  line-height: 1.6;
-}
-
-.snippet__block-label {
-  margin-bottom: 4px;
-  color: var(--text-muted);
-  font-size: var(--app-font-size-xs);
-}
-
-.snippet__code {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--surface-color);
-  color: var(--text-color);
-  font-family: var(--font-mono);
-  font-size: var(--app-font-size-sm);
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.snippet__code--example {
-  color: var(--text-muted);
-}
-
-.snippet__tip {
-  margin: 4px 0 0;
-  color: var(--text-muted);
-  font-size: var(--app-font-size-xs);
-  line-height: 1.6;
-}
-
 .tpl-mgr__sql-label code,
 .tpl-mgr__hint code {
   padding: 1px 4px;
@@ -972,7 +970,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
   height: 100% !important;
 }
 
-.tpl-mgr__sql > :last-child {
+.tpl-mgr__sql> :last-child {
   flex: 1;
   min-height: 0;
 }

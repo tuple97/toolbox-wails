@@ -37,16 +37,21 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // ECharts 与 CodeMirror 体积偏大，提高警告阈值避免噪音
+    // CodeMirror 全家桶体积偏大，提高警告阈值避免噪音（已单独拆包，见下）
     chunkSizeWarningLimit: 1500,
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
       },
       output: {
-        // 把体积大的依赖拆包，避免单个 chunk 过大影响首屏
-        manualChunks: {
-          echarts: ['echarts'],
+        /*
+         * 代码编辑器（CodeMirror / Lezer）体积最大且几乎不变动，单独拆包：
+         * 首屏只加载业务包，编辑器包走浏览器缓存。
+         */
+        manualChunks: (id) => {
+          return /node_modules[\\/](@codemirror|codemirror|@lezer)[\\/]/.test(id)
+            ? 'codemirror'
+            : undefined
         },
       },
     },

@@ -1,9 +1,4 @@
-/**
- * 工具注册表。
- *
- * 左侧菜单、顶部标签栏的「新建」下拉、以及标签内容区的渲染都以本表为准，
- * 新增功能只需在这里补一项 + 在 Workbench 里补一条渲染分支。
- */
+/** 工具注册表（左侧菜单、新建下拉、标签内容区的渲染都以本表为准） */
 
 import type { ToolType } from '@/types'
 
@@ -11,12 +6,9 @@ export interface ToolDefinition {
   type: ToolType
   /** 菜单与标签上展示的名称 */
   label: string
-  /** 图标名（自绘图标库 utils/icons.ts；由 `<Icon :name="..." />` 渲染） */
+  /** 图标名（自绘图标库 utils/icons.ts） */
   icon: string
-  /**
-   * 是否多例：多例工具可同时打开多个标签（如 SQL 查询），
-   * 单例工具全局只有一个标签，再次打开只会跳转过去。
-   */
+  /** 是否多例：多例工具可同时打开多个标签，单例工具全局只有一个 */
   multi: boolean
   /** 单行说明，用于菜单悬浮提示 */
   description: string
@@ -54,7 +46,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     type: 'command-executor',
     label: 'SQL 执行',
-    // 图标名必须存在于自绘图标库（utils/icons.ts）：拼错会渲染成问号并在开发期告警
+    // 图标名必须存在于自绘图标库（utils/icons.ts）
     icon: 'terminal',
     multi: true,
     description: '自由编写并执行 SQL，支持取消与智能补全',
@@ -86,15 +78,10 @@ export const TOOL_GROUPS: ToolGroup[] = [
   { label: '本地记录', tools: ['dictionary'] },
 ]
 
-/**
- * 顶级（不分组）工具。
- *
- * 顺序即渲染顺序；其中 `PINNED_TOP_TOOLS` 里的会排在分组菜单**之上**，
- * 其余顶级工具贴在分组菜单之下（如设置）。
- */
+/** 顶级（不分组）工具，顺序即渲染顺序 */
 export const TOP_LEVEL_TOOLS: ToolType[] = ['home', 'settings']
 
-/** 置顶渲染的顶级工具（首页）：侧边栏最上面一项，先看见它再看见各分组 */
+/** 置顶渲染的顶级工具（首页） */
 export const PINNED_TOP_TOOLS: ToolType[] = ['home']
 
 /** 按类型取工具定义 */

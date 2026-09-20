@@ -6,7 +6,7 @@ import (
 
 // 词典（dictionaries / dictionary_items 表）的读写。
 
-// ListDictionaries 返回全部词典。
+// ListDictionaries 返回全部词典
 func (r *Repository) ListDictionaries() ([]Dictionary, error) {
 	rows, err := r.db.conn.Query(`
 		SELECT id, name, COALESCE(description, '') FROM dictionaries ORDER BY id ASC`)
@@ -26,7 +26,7 @@ func (r *Repository) ListDictionaries() ([]Dictionary, error) {
 	return list, rows.Err()
 }
 
-// SaveDictionary 新增或更新词典，返回记录 ID。
+// SaveDictionary 新增或更新词典，返回记录 ID
 func (r *Repository) SaveDictionary(d Dictionary) (int64, error) {
 	if d.ID > 0 {
 		_, err := r.db.conn.Exec(
@@ -47,7 +47,7 @@ func (r *Repository) SaveDictionary(d Dictionary) (int64, error) {
 	return res.LastInsertId()
 }
 
-// DeleteDictionary 删除词典，其下词典项随外键级联删除。
+// DeleteDictionary 删除词典，其下词典项级联删除
 func (r *Repository) DeleteDictionary(id int64) error {
 	if _, err := r.db.conn.Exec(`DELETE FROM dictionaries WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("删除词典失败: %w", err)
@@ -55,7 +55,7 @@ func (r *Repository) DeleteDictionary(id int64) error {
 	return nil
 }
 
-// ListDictionaryItems 返回指定词典的全部项。
+// ListDictionaryItems 返回指定词典的全部项
 func (r *Repository) ListDictionaryItems(dictionaryID int64) ([]DictionaryItem, error) {
 	rows, err := r.db.conn.Query(`
 		SELECT id, dictionary_id, value, meaning, COALESCE(description, ''), sort_order
@@ -79,7 +79,7 @@ func (r *Repository) ListDictionaryItems(dictionaryID int64) ([]DictionaryItem, 
 	return list, rows.Err()
 }
 
-// SaveDictionaryItems 以整体覆盖方式保存某词典下的全部项。
+// SaveDictionaryItems 整体覆盖保存某词典下的全部项
 func (r *Repository) SaveDictionaryItems(dictionaryID int64, items []DictionaryItem) error {
 	tx, err := r.db.conn.Begin()
 	if err != nil {

@@ -5,13 +5,9 @@ import (
 	"fmt"
 )
 
-/*
- * 数据库连接（db_connections 表）的读写与行扫描。
- *
- * 密码字段存的是密文（加解密在 services 层完成），这里只做透明存取。
- */
+// db_connections 表读写与行扫描（密码字段为密文，加解密在 services 层）
 
-// ListConnections 返回全部数据库连接。
+// ListConnections 返回全部数据库连接
 func (r *Repository) ListConnections() ([]DBConnection, error) {
 	rows, err := r.db.conn.Query(`
 		SELECT ` + connectionColumns + `
@@ -50,7 +46,7 @@ func (r *Repository) GetConnection(id int64) (*DBConnection, error) {
 
 // SaveConnection 新增或更新连接，返回记录 ID。
 func (r *Repository) SaveConnection(c DBConnection) (int64, error) {
-	// 环境标识入库前先归一，保证「本地 / 测试 / 生产」三者互斥
+	// 入库前归一环境标识，保证三者互斥
 	c.normalizeEnvMark()
 
 	if c.ID > 0 {
@@ -93,11 +89,7 @@ func (r *Repository) SaveConnection(c DBConnection) (int64, error) {
 	return res.LastInsertId()
 }
 
-// normalizeEnvMark 保证环境标识互斥。
-//
-// 界面上三者是单选式的勾选，正常情况下不会同时为真；
-// 这里再兜一道，避免脏数据导致列表同时挂出多个环境标签。
-// 优先级：生产 > 测试 > 本地（越危险的环境越应保留提示）。
+// normalizeEnvMark 保证环境标识互斥（优先级 生产 > 测试 > 本地）
 func (c *DBConnection) normalizeEnvMark() {
 	if c.IsProduction {
 		c.IsLocal = false
@@ -109,7 +101,7 @@ func (c *DBConnection) normalizeEnvMark() {
 	}
 }
 
-// DeleteConnection 删除连接。
+// DeleteConnection 删除连接
 func (r *Repository) DeleteConnection(id int64) error {
 	if _, err := r.db.conn.Exec(`DELETE FROM db_connections WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("删除连接失败: %w", err)
@@ -117,15 +109,15 @@ func (r *Repository) DeleteConnection(id int64) error {
 	return nil
 }
 
-// rowScanner 抽象 *sql.Row 与 *sql.Rows 的公共 Scan 行为。
+// rowScanner 抽象 *sql.Row 与 *sql.Rows 的 Scan
 type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-// scanConnection 从一行结果解析连接信息。
+// scanConnection 从一行结果解析连接信息
 func scanConnection(s rowScanner) (DBConnection, error) {
 	var c DBConnection
-	// 允许为 NULL 的列统一用 Null* 承接，避免老库缺列时扫描失败
+	// 可为 NULL 的列用 Null* 承接
 	var host, database, username, password, extra sql.NullString
 	var note, color, charset, defaultSchema sql.NullString
 	var sslMode, sslCa, sslCert, sslKey, urlParams sql.NullString
@@ -171,7 +163,7 @@ func scanConnection(s rowScanner) (DBConnection, error) {
 	return c, nil
 }
 
-// connectionColumns 是连接表在所有查询里统一使用的列清单（顺序与 scanConnection 一致）。
+// connectionColumns 连接表统一使用的列清单（顺序与 scanConnection 一致）
 const connectionColumns = `id, name, db_type, host, port, database, username, password, extra,
 	note, color, charset, default_schema,
 	connect_timeout_secs, query_timeout_secs, keepalive_secs,

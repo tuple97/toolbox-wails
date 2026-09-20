@@ -1,15 +1,6 @@
-/**
- * EXPLAIN 结果的优化建议（纯规则，不发任何请求）。
- *
- * 覆盖两种形态：
- *  - MySQL：列式结果（id / select_type / table / type / possible_keys / key / rows / filtered / Extra）
- *  - PostgreSQL：文本结果（QUERY PLAN 一行一段）
- *
- * 建议按「行」给出：执行计划里每行是一个参与步骤，问题按步骤定位才有意义，
- * 所以悬停某一行任意值时给出的是这一行涉及的全部建议。
- */
+/** EXPLAIN 结果的优化建议（纯规则，不发请求）；MySQL 列式与 PostgreSQL 文本式都覆盖 */
 
-/** 一条优化建议：`source` 标注依据（列名或 PG 的匹配片段），`text` 是建议本身 */
+/** 一条优化建议：source 标注依据，text 是建议本身 */
 export interface ExplainSuggestion {
   source: string
   text: string
@@ -50,7 +41,7 @@ const MYSQL_EXTRA_RULES: Array<{ match: string, text: string }> = [
   { match: 'Impossible WHERE', text: 'WHERE 条件恒为假，检查条件拼写与类型' },
 ]
 
-/** 单行建议上限：避免长计划把气泡撑爆 */
+/** 单行建议上限 */
 const MAX_SUGGESTIONS = 6
 
 /** MySQL 列式 EXPLAIN：单行建议 */
@@ -130,7 +121,7 @@ function suggestionsForPostgresRow(row: Record<string, unknown>, index: number):
   }
 
   if (!out.length && index === 0) {
-    // 计划第一行通常是整体形态，给一句兜底说明，避免「悬停没反应」
+    // 计划第一行给一句兜底说明
     push('QUERY PLAN', '未发现常见问题信号；如需更细的耗时信息可改用 EXPLAIN (ANALYZE, BUFFERS) 实际执行一次')
   }
   return out

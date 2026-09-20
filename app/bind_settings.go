@@ -6,8 +6,7 @@ import (
 
 // ---------------------------------------------------------------- 全局配置
 
-// GetAllSettings 返回全部应用配置。
-// 首次调用会写入默认值，保证前端总能拿到完整配置。
+// GetAllSettings 返回全部应用配置
 func (a *App) GetAllSettings() ([]database.Setting, error) {
 	if err := a.ready(); err != nil {
 		return nil, err

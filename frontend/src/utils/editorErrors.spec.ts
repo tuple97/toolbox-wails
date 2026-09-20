@@ -1,9 +1,4 @@
-/**
- * 编辑器错误标记的换算用例（波浪线位置）。
- *
- * 只测 `errorRangeOf` 这一个纯函数：装饰集与 StateField 需要真实视图，
- * 价值主要在「行列 → 文档坐标」这一步。
- */
+/** 编辑器错误标记的换算用例（波浪线位置） */
 import { EditorState } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
 import { errorRangeOf } from '@/utils/editorErrors'

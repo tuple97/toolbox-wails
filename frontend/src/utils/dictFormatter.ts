@@ -4,7 +4,7 @@ import type { ColumnMeta, DictionaryItem, FieldMapping } from '@/types'
 export interface CellRenderResult {
   /** 最终展示文本 */
   text: string
-  /** 悬浮提示，通常为词典项的描述 */
+  /** 悬浮提示 */
   tooltip: string
   /** 是否命中词典 */
   matched: boolean
@@ -17,18 +17,7 @@ const VALUE_TOKEN = /\{\{\s*value\s*\}\}/g
 const MEANING_TOKEN = /\{\{\s*meaning\s*\}\}/g
 const DESC_TOKEN = /\{\{\s*description\s*\}\}/g
 
-/**
- * 把原始值转为展示文本。
- *
- * 渲染优先级：
- *   1. 命中词典 → 按模板渲染（默认使用 meaning）
- *   2. 未命中词典 → 展示原始值
- *   3. 值为空 → 展示占位符 '-'
- *
- * @param value       单元格原始值
- * @param mapping     该列的映射配置
- * @param lookupFn    词典查询函数，由 dictStore 提供
- */
+/** 把原始值转为展示文本（命中词典按模板渲染，空值给 '-'） */
 export function formatCell(
   value: unknown,
   mapping: FieldMapping | undefined,
@@ -47,7 +36,6 @@ export function formatCell(
 
   const item = lookupFn(dictionaryId, value)
   if (!item) {
-    // 未命中时保留原始值，便于用户发现词典遗漏的取值
     return { text: raw, tooltip: '未在词典中找到该值', matched: false, raw }
   }
 
@@ -70,10 +58,7 @@ export function formatCell(
   }
 }
 
-/**
- * 渲染展示模板。
- * 支持 {{value}}、{{meaning}}、{{description}} 三种占位符。
- */
+/** 渲染展示模板（支持 {{value}} / {{meaning}} / {{description}}） */
 export function renderTemplate(
   template: string,
   context: { value: string, meaning: string, description: string },
@@ -84,13 +69,7 @@ export function renderTemplate(
     .replace(DESC_TOKEN, context.description)
 }
 
-/**
- * 生成结果表格的列定义。
- *
- * 依据映射配置决定列顺序、别名、宽度与对齐；
- * 未被映射的列追加在后面，保证结果集不会丢列。
- * 类型 / 注释 / 来源表一并带出，供表头展示与悬停提示（都来自数据库元信息）。
- */
+/** 生成结果表格的列定义（映射列在前，未映射列按结果集顺序追加） */
 export function buildColumns(
   columns: ColumnMeta[],
   mappings: FieldMapping[],
@@ -117,7 +96,7 @@ export function buildColumns(
     table: string
   }> = []
 
-  // 已配置映射的列，按配置顺序优先展示
+  // 已配置映射的列
   for (const mapping of mappings) {
     if (!names.includes(mapping.column)) {
       continue
@@ -133,7 +112,7 @@ export function buildColumns(
     })
   }
 
-  // 未配置映射的列，按结果集原始顺序补充
+  // 未配置映射的列
   for (const name of names) {
     if (mapped.has(name)) {
       continue
@@ -151,10 +130,7 @@ export function buildColumns(
   return result
 }
 
-/**
- * 创建按列查询映射配置的辅助函数，
- * 避免在表格渲染时对每行每列重复遍历数组。
- */
+/** 创建按列查询映射配置的辅助函数 */
 export function createMappingLookup(
   mappings: FieldMapping[],
 ): (column: string) => FieldMapping | undefined {

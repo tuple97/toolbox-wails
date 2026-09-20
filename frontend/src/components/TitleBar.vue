@@ -9,9 +9,9 @@ import Icon from '@/components/ui/Icon.vue'
 import logoUrl from '@/assets/images/logo.png'
 
 withDefaults(defineProps<{
-  /** 工具栏左侧显示的应用名称 */
+  /** 工具栏左侧的应用名称 */
   title?: string
-  /** 是否显示设置按钮；独立工具窗口（如 SQL 模板管理）可关闭 */
+  /** 是否显示设置按钮 */
   showSettings?: boolean
 }>(), {
   title: 'Toolbox',
@@ -19,32 +19,18 @@ withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
-  /**
-   * 点击关闭按钮。
-   * 关闭行为由宿主窗口决定：主窗口为退出应用，
-   * 独立工具窗口通常只关闭自身（runtime Window.Close）。
-   */
+  /** 点击关闭按钮 */
   (e: 'close'): void
   /** 点击设置按钮 */
   (e: 'settings'): void
-  /**
-   * 在标题栏空白区域触发右键。
-   * 系统菜单仅在此事件中弹出，其余区域不响应。
-   */
+  /** 标题栏空白区域右键 */
   (e: 'context-menu', payload: { x: number, y: number }): void
 }>()
 
-/** 当前窗口是否最大化，用于切换按钮图标 */
+/** 当前窗口是否最大化 */
 const maximised = ref(false)
 
-/**
- * 处理工具栏双击：切换最大化。
- *
- * 拖动交由 Wails 原生 CSS 拖动机制完成：
- * 工具栏上的 `--wails-draggable: drag` 会在 mousedown 时直接让系统接管拖动，
- * 且内置的 dragTest 在 e.detail !== 1（双击）时会跳过拖动，
- * 因此这里只需处理双击本身。
- */
+/** 双击空白区域切换最大化 */
 function handleDoubleClick(event: MouseEvent) {
   if (!isBlankArea(event.target)) {
     return
@@ -64,10 +50,7 @@ async function syncMaximised() {
   }
 }
 
-/**
- * 判断事件目标是否为工具栏空白区域。
- * 系统右键菜单与拖动都只在标题栏空白处生效。
- */
+/** 事件目标是否在工具栏空白区域 */
 function isBlankArea(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false
@@ -75,10 +58,7 @@ function isBlankArea(target: EventTarget | null): boolean {
   return !target.closest('[data-no-drag]')
 }
 
-/**
- * 标题栏右键：弹出自定义系统菜单。
- * 仅当右击空白区域时响应，避免在按钮上误触发。
- */
+/** 标题栏右键：弹出自定义系统菜单 */
 function handleContextMenu(event: MouseEvent) {
   if (!isBlankArea(event.target)) {
     return
@@ -109,20 +89,19 @@ onBeforeUnmount(() => {
     @dblclick="handleDoubleClick"
     @contextmenu="handleContextMenu"
   >
-    <!-- 应用标识：图标 + 名称 -->
+    <!-- 应用标识 -->
     <div class="titlebar__brand">
       <img class="titlebar__logo" :src="logoUrl" alt="">
       <span class="titlebar__title">{{ title }}</span>
     </div>
 
-    <!-- 中间可放置自定义内容（如标签页、工具按钮） -->
+    <!-- 中间插槽 -->
     <div class="titlebar__slot">
       <slot name="center" />
     </div>
 
     <!-- 窗口控制按钮 -->
     <div class="titlebar__controls" data-no-drag>
-      <!-- 设置 -->
       <button
         v-if="showSettings"
         class="titlebar__btn"
@@ -192,11 +171,7 @@ onBeforeUnmount(() => {
   user-select: none;
   -webkit-user-select: none;
 
-  /*
-   * 交给 Wails 原生机制处理拖动。
-   * 这里刻意不声明 cursor：Wails 的边缘缩放把指针样式写在 html 的内联 style 上，
-   * 任何针对标题栏的 cursor 声明都会覆盖它。
-   */
+  /* 交给 Wails 原生机制处理拖动；刻意不声明 cursor */
   --wails-draggable: drag;
 }
 
@@ -237,7 +212,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: stretch;
   height: 100%;
-  /* 按钮区域不参与拖动；同样不声明 cursor，保持边缘缩放指针可用 */
+  /* 按钮区域不参与拖动 */
   --wails-draggable: no-drag;
 }
 
@@ -245,7 +220,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* 只有宽度是控件尺寸；高度撑满标题栏（容器高度不随控件大小变） */
+  /* 宽度随控件缩放，高度撑满标题栏 */
   width: calc(46px * var(--app-control-scale));
   height: 100%;
   padding: 0;
@@ -257,11 +232,7 @@ onBeforeUnmount(() => {
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-/*
- * 窗口控制按钮使用内联 svg，统一线宽与尺寸。
- * 排除 `.app-icon`：那是自绘图标组件（设置按钮用），尺寸归它自己按字号算；
- * 不排除的话这条规则会把它压成 12px 的窗口控制按钮大小。
- */
+/* 窗口控制按钮的内联 svg 统一尺寸；排除自绘图标 .app-icon */
 .titlebar__btn > svg:not(.app-icon) {
   width: calc(12px * var(--app-control-scale));
   height: calc(12px * var(--app-control-scale));
@@ -270,7 +241,7 @@ onBeforeUnmount(() => {
   stroke-width: 1.1;
 }
 
-/* 自绘图标按钮（设置）保持字号大小 */
+/* 自绘图标按钮保持字号大小 */
 .titlebar__btn > .app-icon {
   font-size: var(--app-font-size-xl);
 }

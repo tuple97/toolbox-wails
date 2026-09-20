@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyRowSelection } from '@/utils/rowSelection'
 
-/** 只有 clicked 是必填的，其余给默认值，让用例只写它关心的一两个字段 */
+/** 其余字段给默认值，用例只写关心的字段 */
 function select(overrides: Partial<Parameters<typeof applyRowSelection>[0]> = {}) {
   return applyRowSelection({
     current: [],
@@ -39,10 +39,10 @@ describe('行选择规则', () => {
   it('Shift 覆盖原选择但保留锚点 —— 连续 Shift 能来回调整范围', () => {
     const first = select({ shift: true, anchor: 2, clicked: 5 })
     expect(first.selected).toEqual([2, 3, 4, 5])
-    // 锚点仍是 2：再点 3 收窄成 [2,3]（而不是从 5 往回数到 3）
+    // 锚点仍是 2：再点 3 收窄成 [2,3]
     const second = select({ current: first.selected, shift: true, anchor: first.anchor, clicked: 3 })
     expect(second.selected).toEqual([2, 3])
-    // 再点 5 又扩回 [2..5]：同一个锚点，来回调整
+    // 再点 5 又扩回 [2..5]
     const third = select({ current: second.selected, shift: true, anchor: second.anchor, clicked: 5 })
     expect(third.selected).toEqual([2, 3, 4, 5])
   })
@@ -57,11 +57,11 @@ describe('行选择规则', () => {
   })
 
   it('选择顺序：区间一律升序，Ctrl 加选保持加选先后', () => {
-    // 先 Ctrl 选了第 5 行，再从第 0 行 Shift 到第 2 行 → 区间覆盖，顺序自上而下
+    // 区间覆盖，顺序自上而下
     const ranged = select({ current: [5], shift: true, anchor: 0, clicked: 2 })
     expect(ranged.selected).toEqual([0, 1, 2])
 
-    // 连续 Ctrl 加选：按加选顺序排列（批量 SQL 的顺序与用户点选顺序一致）
+    // 连续 Ctrl 加选：按加选顺序排列
     const first = select({ clicked: 5, toggle: true })
     const second = select({ current: first.selected, clicked: 1, toggle: true })
     const third = select({ current: second.selected, clicked: 3, toggle: true })

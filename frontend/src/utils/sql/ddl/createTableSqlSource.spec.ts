@@ -1,10 +1,4 @@
-/**
- * 建表语句来源选择的用例。
- *
- * 重点：**原生 DDL 优先、拿不到就回退**，而且回退路径一条都不能断 ——
- * 后端报错、返回空、方言不支持（PostgreSQL）时都必须给出本地生成的那份，
- * 否则用户点「复制建表语句」会拿到空内容。
- */
+/** 建表语句来源选择的用例 */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ fetchCreateTableSql: vi.fn() }))

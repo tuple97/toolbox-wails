@@ -9,16 +9,7 @@ import { useConfigStore } from '@/stores/configStore'
 import type { ToolDefinition } from '@/utils/tools'
 import type { ToolType } from '@/types'
 
-/**
- * 新建标签弹窗（3×3 网格）。
- *
- * 入口：标签栏左侧的 + 按钮。**只列多例工具**——单例工具（首页、连接管理、
- * SQL 模板、词典、设置）不进标签栏，由侧边菜单直接切换视图，所以这里不出现。
- *
- * 选择后新建一个实例标签并自动命名（如「SQL 查询 2」）。
- * 左下角「编辑」进入编辑态：拖动卡片排序、卡片右上角眼睛控制显示，
- * 点「完成」落盘到 settings.picker_config（独立于侧边菜单的 sidebar_config）。
- */
+/** 新建标签弹窗（3×3 网格），入口为标签栏左侧的 + 按钮 */
 
 const props = defineProps<{
   visible: boolean
@@ -36,17 +27,14 @@ const dialogVisible = computed({
   set: (value: boolean) => emit('update:visible', value),
 })
 
-/** 工具图标名（注册表里没有对应工具时给问号图标，模板里就不必到处判空） */
+/** 工具图标名 */
 function iconOf(type: string): string {
   return toolOf(type)?.icon ?? 'question'
 }
 
 // ------------------------------------------------------------ 配置（排序 / 显示）
 
-/**
- * 弹窗自己的配置，持久化在 settings.picker_config（JSON）。
- * 与侧边菜单的 sidebar_config 相互独立，互不影响。
- */
+/** 弹窗自己的配置，持久化在 settings.picker_config */
 interface PickerConfig {
   /** 全部工具的展示顺序 */
   order: ToolType[]
@@ -54,10 +42,10 @@ interface PickerConfig {
   hidden: ToolType[]
 }
 
-/** 可选工具 = 多例工具（单例不走标签，不在这里出现） */
+/** 可选工具 = 多例工具 */
 const DEFAULT_ORDER: ToolType[] = TOOLS.filter(tool => tool.multi).map(tool => tool.type)
 
-/** 解析并校正：未知工具剔除，缺失的按默认顺序补齐 */
+/** 解析并校正持久化配置 */
 function parsePickerConfig(raw: string | undefined): PickerConfig {
   const config: PickerConfig = { order: [...DEFAULT_ORDER], hidden: [] }
   try {
@@ -83,7 +71,7 @@ function serializePickerConfig(config: PickerConfig): string {
 /** 持久化配置，普通态渲染依据 */
 const pickerConfig = computed(() => parsePickerConfig(configStore.values.picker_config))
 
-/** 普通态展示的卡片：按配置顺序、剔除隐藏项 */
+/** 普通态展示的卡片 */
 const visibleTools = computed<ToolDefinition[]>(() => {
   const tools: ToolDefinition[] = []
   for (const type of pickerConfig.value.order) {
@@ -101,7 +89,7 @@ const visibleTools = computed<ToolDefinition[]>(() => {
 // ------------------------------------------------------------ 编辑态
 
 const editing = ref(false)
-/** 编辑草稿：点「完成」才落盘，避免拖一半就把半成品配置持久化 */
+/** 编辑草稿：点「完成」才落盘 */
 const draftOrder = ref<ToolType[]>([])
 const draftHidden = ref<ToolType[]>([])
 
@@ -112,7 +100,7 @@ function enterEdit() {
   editing.value = true
 }
 
-/** 草稿恢复为默认：默认顺序 + 全部显示 */
+/** 草稿恢复为默认 */
 function resetDraft() {
   draftOrder.value = [...DEFAULT_ORDER]
   draftHidden.value = []
@@ -126,7 +114,6 @@ function finishEdit() {
   }))
 }
 
-/** 编辑态切换某工具的显示 / 隐藏 */
 function toggleDraftHidden(type: ToolType) {
   draftHidden.value = draftHidden.value.includes(type)
     ? draftHidden.value.filter(item => item !== type)
@@ -145,7 +132,6 @@ watch(dialogVisible, (visible) => {
 })
 
 function handlePick(type: ToolType) {
-  // 编辑态点卡片不选择，防误触
   if (editing.value) {
     return
   }
@@ -156,14 +142,11 @@ function handlePick(type: ToolType) {
 
 <template>
   <Dialog v-model="dialogVisible" title="新建标签" :width="680">
-    <p class="tool-picker__hint">
-      每次选择都会新建一个实例标签；首页、连接管理、词典等单例功能由左侧菜单直接切换，不出现在这里。
-      <span v-if="editing" class="tool-picker__hint-editing">
-        编辑中：拖动卡片排序，右上角眼睛控制是否显示。
-      </span>
+    <p v-if="editing" class="tool-picker__hint">
+      拖动卡片排序，右上角眼睛控制显示
     </p>
 
-    <!-- 编辑态：可拖动排序的草稿网格 -->
+    <!-- 编辑态：拖动排序 -->
     <VueDraggable
       v-if="editing"
       v-model="draftOrder"
@@ -191,7 +174,6 @@ function handlePick(type: ToolType) {
       </div>
     </VueDraggable>
 
-    <!-- 普通态：按配置顺序渲染可见工具 -->
     <div v-else class="tool-picker__grid">
       <button
         v-for="tool in visibleTools"
@@ -246,11 +228,7 @@ function handlePick(type: ToolType) {
   line-height: 1.6;
 }
 
-.tool-picker__hint-editing {
-  color: var(--brand-color);
-}
-
-/* 3×3 网格：三列，行数随工具数量自适应 */
+/* 三列网格 */
 .tool-picker__grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -284,7 +262,6 @@ function handlePick(type: ToolType) {
 }
 
 .tool-picker__icon {
-  /* 图标属于控件，跟随「控件大小」缩放 */
   font-size: calc(20px * var(--app-control-scale));
   color: var(--brand-color);
 }
@@ -308,12 +285,7 @@ function handlePick(type: ToolType) {
 /* 编辑态整卡可拖 */
 .tool-picker__card.is-editing {
   cursor: grab;
-  /*
-   * 不能保留 transform 过渡：Sortable 的排序动画是
-   * 「inline transform 瞬移回旧位置 → inline transition 滑向新位置」，
-   * 若 transform 在过渡列表里，瞬移会先变成动画、随后又被重定向，
-   * 两次相互抵消，排序动画看起来就是完全没有效果。
-   */
+  /* transform 不参与过渡，交给 Sortable 的排序动画 */
   transition:
     border-color 0.15s ease,
     background-color 0.15s ease,
@@ -355,7 +327,7 @@ function handlePick(type: ToolType) {
   color: var(--text-color);
 }
 
-/* 底部操作区：左编辑、右关闭 */
+/* 底部操作区 */
 .tool-picker__footer {
   display: flex;
   align-items: center;

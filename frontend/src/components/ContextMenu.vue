@@ -5,9 +5,9 @@ import type { ContextMenuAction } from '@/types'
 const props = withDefaults(defineProps<{
   /** 是否显示 */
   visible: boolean
-  /** 触发位置（clientX / clientY） */
+  /** 触发点 X */
   x?: number
-  /** 触发位置（clientY） */
+  /** 触发点 Y */
   y?: number
   /** 菜单项 */
   items?: ContextMenuAction[]
@@ -24,16 +24,16 @@ const emit = defineEmits<{
 
 const menuRef = ref<HTMLElement | null>(null)
 const submenuRef = ref<HTMLElement | null>(null)
-/** 修正后的定位，避免菜单溢出视口 */
+/** 修正后的菜单定位 */
 const position = ref({ left: 0, top: 0 })
-/** 子菜单定位（相对视口） */
+/** 子菜单定位 */
 const submenuPosition = ref({ left: 0, top: 0 })
-/** 当前高亮的菜单项索引，支持键盘操作 */
+/** 当前高亮的菜单项索引 */
 const activeIndex = ref(-1)
 /** 已展开子菜单的父项索引；-1 表示未展开 */
 const submenuIndex = ref(-1)
 
-/** 可视菜单项（过滤空配置） */
+/** 可视菜单项 */
 const menuItems = computed(() => props.items.filter(item => item && item.key))
 
 /** 当前展开的子菜单项 */
@@ -53,10 +53,7 @@ function hasChildren(item: ContextMenuAction): boolean {
   return Boolean(item.children?.length)
 }
 
-/**
- * 根据触发点计算菜单位置：
- * 若右侧/下方空间不足，则向内翻转，保证菜单完整可见。
- */
+/** 计算菜单位置，空间不足时向内翻转 */
 async function updatePosition() {
   await nextTick()
   const menu = menuRef.value
@@ -79,12 +76,7 @@ async function updatePosition() {
   position.value = { left, top }
 }
 
-/**
- * 展开某一项的子菜单。
- *
- * 子菜单是独立浮层（不是嵌套在父菜单里），因为父菜单有自己的定位与滚动上下文，
- * 嵌套容易被裁切；这里按父项的位置把它贴到右侧，右侧放不下则翻到左侧。
- */
+/** 展开子菜单：贴到父项右侧，放不下则翻到左侧 */
 async function openSubmenu(index: number) {
   submenuIndex.value = index
   await nextTick()
@@ -115,7 +107,7 @@ async function openSubmenu(index: number) {
   submenuPosition.value = { left, top }
 }
 
-/** 鼠标进入某一项：更新高亮；带子菜单则展开，否则收起已展开的子菜单 */
+/** 鼠标进入：更新高亮并切换子菜单 */
 function handleItemEnter(index: number, item: ContextMenuAction) {
   activeIndex.value = index
   if (hasChildren(item)) {
@@ -151,7 +143,7 @@ function selectItem(item: ContextMenuAction) {
   close()
 }
 
-/** 全局按下鼠标：点击菜单外部即关闭 */
+/** 点击菜单外部即关闭 */
 function handleGlobalPointerDown(event: MouseEvent) {
   if (!props.visible) {
     return
@@ -201,7 +193,7 @@ function handleKeydown(event: KeyboardEvent) {
   }
 }
 
-/** 右键菜单由业务统一接管，阻止浏览器默认菜单 */
+/** 阻止浏览器默认右键菜单 */
 function handleGlobalContextMenu(event: MouseEvent) {
   if (!props.visible) {
     return
@@ -272,7 +264,7 @@ onBeforeUnmount(() => {
       </div>
     </Transition>
 
-    <!-- 子菜单：独立浮层，贴在被展开项的右侧（空间不足时翻到左侧） -->
+    <!-- 子菜单：独立浮层 -->
     <Transition name="context-menu">
       <div
         v-if="visible && submenuItem"
@@ -309,7 +301,6 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background: var(--menu-bg);
-  /* 底色不透明，靠阴影区分层级即可 */
   box-shadow: 0 20px 45px rgba(2, 6, 23, 0.55);
   user-select: none;
   -webkit-user-select: none;

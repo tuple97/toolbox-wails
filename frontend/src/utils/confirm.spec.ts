@@ -3,7 +3,7 @@ import { askConfirm, pendingConfirm, settleConfirm } from '@/utils/confirm'
 
 describe('确认框（替代 ElMessageBox.confirm）', () => {
   beforeEach(() => {
-    // 结算掉上一个用例可能留下的请求，保证初始状态干净
+    // 结算掉上一个用例可能留下的请求
     settleConfirm(false)
   })
 

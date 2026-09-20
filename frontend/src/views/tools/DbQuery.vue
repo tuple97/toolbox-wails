@@ -5,6 +5,7 @@ import Combobox from '@/components/ui/Combobox.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import TabGroup from '@/components/ui/TabGroup.vue'
+import Tag from '@/components/ui/Tag.vue'
 import { notify } from '@/utils/notify'
 import DynamicForm from '@/components/DynamicForm.vue'
 import ResultTable from '@/components/ResultTable.vue'
@@ -12,12 +13,21 @@ import ResultPagination from '@/components/ResultPagination.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import ConnectionSelect from '@/components/ConnectionSelect.vue'
-import { copyRowsSql, kindOfMenuItem, rowSqlMenuItems } from '@/utils/sql/rowSql'
+import {
+  copyRowsByExportTemplate,
+  copyRowsSql,
+  dialectOf,
+  exportTemplateOfMenuItem,
+  kindOfMenuItem,
+  rowSqlMenuItems,
+} from '@/utils/sql/rowSql'
 import type { ResultSourceContext } from '@/utils/sql/rowSql'
 import { DEFAULT_PAGE_SIZE, executeTemplateQuery, fetchTemplate, fetchTemplateList } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
 import { fetchDatabases } from '@/api/executor'
 import { EventsOn } from '@/api/runtime'
+import { filterDatabaseInfos, parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
+import { useConfigStore } from '@/stores/configStore'
 import { useLogStore } from '@/stores/logStore'
 import { useTabStore } from '@/stores/tabStore'
 import type {
@@ -25,6 +35,7 @@ import type {
   DatabaseInfo,
   DBConnection,
   DbQueryPayload,
+  ExportTemplate,
   FieldMapping,
   QueryResult,
   TemplateListItem,
@@ -47,6 +58,7 @@ const emit = defineEmits<{
 
 const logStore = useLogStore()
 const tabStore = useTabStore()
+const configStore = useConfigStore()
 
 /** 跳转到单例功能标签页（连接管理 / SQL 模板） */
 function openTool(type: ToolType) {
@@ -61,9 +73,11 @@ const connections = ref<DBConnection[]>([])
 const templateId = ref<number | null>(null)
 const connId = ref<number | null>(null)
 
-/** 当前模板解析出的变量配置；由模板决定，查询页只读 */
+/** 当前模板解析出的变量配置与字段映射；由模板决定，查询页只读 */
 const variableConfigs = ref<VariableConfig[]>([])
 const fieldMappings = ref<FieldMapping[]>([])
+/** 当前模板配置的导出模板：结果行右键「复制为…」里作为自定义选项列出 */
+const exportTemplates = ref<ExportTemplate[]>([])
 
 /** 变量值 */
 const variableValues = ref<Record<string, unknown>>({})
@@ -112,9 +126,17 @@ const templateSelection = computed({
   },
 })
 
-/** 模板下拉选项 */
+/**
+ * 模板下拉选项。
+ *
+ * 停用的模板仍然列出（配置还在，直接藏起来会让人以为模板丢了），
+ * 只在名字上标注出来；选中后执行会被拦住并说明原因。
+ */
 const templateOptions = computed(() =>
-  templates.value.map(tpl => ({ label: tpl.name, value: String(tpl.id) })))
+  templates.value.map(tpl => ({
+    label: tpl.enabled ? tpl.name : `${tpl.name}（已停用）`,
+    value: String(tpl.id),
+  })))
 
 /** 日志页签组件引用：切到该页签时把日志滚到底部 */
 const logRef = ref<InstanceType<typeof ExecutionLog> | null>(null)
@@ -151,8 +173,9 @@ const rowMenuX = ref(0)
 const rowMenuY = ref(0)
 const rowMenuRows = ref<Record<string, unknown>[]>([])
 
-/** 菜单项：多选时标签带上行数（「批量复制为…（3 行）」） */
-const rowMenuItems = computed(() => rowSqlMenuItems(Math.max(1, rowMenuRows.value.length)))
+/** 菜单项：内置 INSERT / UPDATE / DELETE，加上当前模板配置的导出模板 */
+const rowMenuItems = computed(() =>
+  rowSqlMenuItems(Math.max(1, rowMenuRows.value.length), exportTemplates.value))
 
 /** 打开结果行右键菜单（内容为「复制为 INSERT / UPDATE / DELETE」） */
 function openRowMenu(payload: {
@@ -167,12 +190,23 @@ function openRowMenu(payload: {
   rowMenuVisible.value = true
 }
 
-/** 处理「复制为…」：UPDATE / DELETE 以主键为条件，生成的 SQL 带库名 */
+/** 处理「复制为…」：内置项按行生成 SQL，导出模板按模板逐行渲染 */
 async function handleRowMenuSelect(item: ContextMenuAction) {
-  const kind = kindOfMenuItem(item.key)
   const rows = rowMenuRows.value
   const data = result.value
-  if (!kind || !rows.length || !data) {
+  if (!rows.length || !data) {
+    return
+  }
+
+  // 自定义导出模板：入参就是结果行，由后端按模板渲染（与内置三项并列）
+  const exportTemplate = exportTemplateOfMenuItem(item.key, exportTemplates.value)
+  if (exportTemplate) {
+    await copyRowsByExportTemplate(exportTemplate, rows)
+    return
+  }
+
+  const kind = kindOfMenuItem(item.key)
+  if (!kind) {
     return
   }
   // 选中的每一行共用同一套上下文，只有 row 不同（表名与主键在生成时只解析一次）
@@ -196,13 +230,27 @@ const currentConnection = computed(
  * 「不静默改变选择」的约定与执行器一致：每个连接记住上一次用过的库，
  * 切回来按它恢复；库列表加载失败或不含已选库时**保留选择**，绝不悄悄回落。
  */
+/** 库列表：后端返回的原始列表（含系统库），是否展示由设置决定 */
 const databases = ref<DatabaseInfo[]>([])
 const database = ref('')
 const lastDatabaseByConn = new Map<number, string>()
 
+/**
+ * 「展示系统库」设置。
+ *
+ * 与命令执行器 / 元数据弹窗 / 补全候选同一套策略（utils/sql/sqlVisibility）：
+ * 后端总是返回全部库并只打「系统库」标记，隐藏与否是前端展示层的事。
+ */
+const showSystemDatabases = computed(() =>
+  parseShowSystemDatabases(configStore.values.sql_show_system_databases))
+
+/** 过滤后的库列表：与其它页面口径一致，关闭设置后不再列出系统库 */
+const visibleDatabases = computed(() =>
+  filterDatabaseInfos(databases.value, dialectOf(currentConnection.value?.dbType ?? 'mysql'), showSystemDatabases.value))
+
 /** 库下拉选项 */
 const databaseOptions = computed(() =>
-  databases.value.map(info => ({ label: info.name, value: info.name })))
+  visibleDatabases.value.map(info => ({ label: info.name, value: info.name })))
 
 const databaseSelection = computed({
   get: () => database.value,
@@ -257,12 +305,15 @@ async function loadConnections() {
 
 /**
  * 载入模板配置。
- * 变量表单由模板中的变量配置驱动，因此需要拉取模板完整内容。
+ *
+ * 变量表单由模板中的变量配置驱动，因此需要拉取模板完整内容；
+ * 同时把模板自带的连接与库带过来作为默认选中项。
  */
 async function loadTemplateConfig(id: number | null) {
   if (!id) {
     variableConfigs.value = []
     fieldMappings.value = []
+    exportTemplates.value = []
     pageSize.value = DEFAULT_PAGE_SIZE
     return
   }
@@ -271,16 +322,32 @@ async function loadTemplateConfig(id: number | null) {
     const tpl = await fetchTemplate(id)
     variableConfigs.value = parseJSON<VariableConfig[]>(tpl.variables, [])
     fieldMappings.value = parseJSON<FieldMapping[]>(tpl.fieldMappings, [])
+    exportTemplates.value = parseJSON<ExportTemplate[]>(tpl.exportTemplates, [])
 
     // 连接未显式选择时，跟随模板配置
     if (!connId.value && tpl.connId) {
       connId.value = tpl.connId
+    }
+
+    /*
+     * 库：模板配了自带库就以它为准（换模板即默认选中该模板的库）；
+     * 模板没配库时**保持查询页当前的选择**，不做「清空成连接默认库」这种静默改变。
+     *
+     * 同时要把它记进 lastDatabaseByConn：connId 的 watcher 是按这张记忆表恢复库的，
+     * 上面「从模板取连接」的那一步会触发它 —— 不记的话刚设好的库会被覆盖回空。
+     */
+    if (tpl.database) {
+      database.value = tpl.database
+      if (connId.value) {
+        lastDatabaseByConn.set(connId.value, tpl.database)
+      }
     }
   }
   catch (e) {
     notify.error(e instanceof Error ? e.message : String(e))
     variableConfigs.value = []
     fieldMappings.value = []
+    exportTemplates.value = []
     pageSize.value = DEFAULT_PAGE_SIZE
   }
 }
@@ -311,6 +378,14 @@ function parseJSON<T>(raw: string, fallback: T): T {
 async function handleRun(targetPage = 1, reuseTotal = false) {
   if (!templateId.value) {
     notify.warning('请先选择 SQL 模板')
+    return
+  }
+  /*
+   * 停用的模板不允许执行。后端也会拦（见 DBService.ExecuteTemplateQuery），
+   * 这里先就地说明原因，省掉一次必然失败的请求。
+   */
+  if (currentTemplate.value && !currentTemplate.value.enabled) {
+    notify.warning(`模板「${currentTemplate.value.name}」已停用，请先在 SQL 模板管理中启用`)
     return
   }
   if (!connId.value) {
@@ -515,31 +590,14 @@ onMounted(async () => {
     <!-- 顶部操作栏：选模板 → 选连接 → 执行 -->
     <header class="db-query__toolbar">
       <div class="db-query__toolbar-left">
-        <Combobox
-          v-model="templateSelection"
-          :options="templateOptions"
-          placeholder="选择 SQL 模板"
-          search-placeholder="搜索模板…"
-          clearable
-          class="w-[240px]"
-        />
+        <Combobox v-model="templateSelection" :options="templateOptions" placeholder="选择 SQL 模板"
+          search-placeholder="搜索模板…" clearable class="w-[240px]" />
 
-        <ConnectionSelect
-          v-model="connId"
-          :connections="connections"
-          clearable
-          width="200px"
-        />
+        <ConnectionSelect v-model="connId" :connections="connections" clearable width="200px" />
 
         <!-- 库：空 = 连接默认库；描述 / 来源表反查与生成 SQL 的库名都跟随它 -->
-        <Combobox
-          v-model="databaseSelection"
-          :options="databaseOptions"
-          :placeholder="databasePlaceholder"
-          search-placeholder="搜索数据库…"
-          clearable
-          width="160px"
-        />
+        <Combobox v-model="databaseSelection" :options="databaseOptions" :placeholder="databasePlaceholder"
+          search-placeholder="搜索数据库…" clearable width="160px" />
 
         <!-- 图标按钮：跳转到对应的单例标签页 -->
         <Button variant="secondary" size="icon" title="连接管理" @click="openTool('connections')">
@@ -565,9 +623,9 @@ onMounted(async () => {
         <div class="db-query__section-title">
           <span class="db-query__section-bar" aria-hidden="true" />
           <span>查询条件</span>
-          <small v-if="currentTemplate">
-            来自模板「{{ currentTemplate.name }}」
-          </small>
+          <Tag v-if="currentTemplate && !currentTemplate.enabled" size="sm" tone="warning" effect="plain">
+            已停用
+          </Tag>
           <small v-if="templateId && variableConfigs.length">
             共 {{ variableConfigs.length }} 项
           </small>
@@ -575,16 +633,8 @@ onMounted(async () => {
 
         <EmptyState v-if="!templateId" description="请选择 SQL 模板后填写变量" />
 
-        <DynamicForm
-          v-else
-          ref="formRef"
-          :key="templateId"
-          :configs="variableConfigs"
-          :conn-id="connId"
-          inline
-          @change="notifyChange"
-          @submit="handleRun()"
-        />
+        <DynamicForm v-else ref="formRef" :key="templateId" :configs="variableConfigs" :conn-id="connId" inline
+          @change="notifyChange" @submit="handleRun()" />
       </section>
 
       <!-- 结果区：执行日志固定页签在最前，查询结果在后 -->
@@ -596,42 +646,23 @@ onMounted(async () => {
 
           <template #panel-result>
             <div class="flex h-full min-h-0 flex-col">
-              <ResultTable
-                v-if="result"
-                :result="result"
-                :mappings="fieldMappings"
-                :source="resultSource"
-                @row-contextmenu="openRowMenu"
-              />
+              <ResultTable v-if="result" :result="result" :mappings="fieldMappings" :source="resultSource"
+                @row-contextmenu="openRowMenu" />
               <EmptyState v-else description="尚未执行查询" />
 
               <!-- 分页常驻：页大小填 0 即不分页；语句不支持分页时由 supported 提示 -->
-              <ResultPagination
-                v-if="result"
-                :page="page"
-                :page-size="pageSize"
-                :total="result.total"
-                :page-count="result.pageCount"
-                :supported="result.pageSize > 0 || pageSize === 0"
-                :elapsed-ms="result.elapsedMs"
-                :loading="running"
-                @change="changePage"
-                @size-change="changePageSize"
-              />
+              <ResultPagination v-if="result" :page="page" :page-size="pageSize" :total="result.total"
+                :page-count="result.pageCount" :supported="result.pageSize > 0 || pageSize === 0"
+                :elapsed-ms="result.elapsedMs" :loading="running" @change="changePage" @size-change="changePageSize" />
             </div>
           </template>
         </TabGroup>
       </section>
     </div>
 
-    <!-- 结果行右键菜单：复制为 INSERT / UPDATE / DELETE -->
-    <ContextMenu
-      v-model:visible="rowMenuVisible"
-      :x="rowMenuX"
-      :y="rowMenuY"
-      :items="rowMenuItems"
-      @select="handleRowMenuSelect"
-    />
+    <!-- 结果行右键菜单：复制为 INSERT / UPDATE / DELETE + 当前模板配置的导出模板 -->
+    <ContextMenu v-model:visible="rowMenuVisible" :x="rowMenuX" :y="rowMenuY" :items="rowMenuItems"
+      @select="handleRowMenuSelect" />
   </div>
 </template>
 

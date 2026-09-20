@@ -1,19 +1,6 @@
-/**
- * 自绘图标库（替代 `@element-plus/icons-vue`）。
- *
- * 只留应用真正用到的那几十个，每个都是一段 SVG 内部内容（24×24 视图）。
- * 组件侧见 `components/ui/Icon.vue`：默认描边、`currentColor`、尺寸 1em，
- * 于是**跟着字号走** —— 与旧的 `<el-icon>` 行为一致，旧样式里那些
- * `font-size` 驱动的图标大小不用改一行。
- *
- * 约定：
- *  - 需要实心的图形（播放 / 暂停的三角与竖条）在元素上写 `fill="currentColor" stroke="none"`；
- *  - 名字用短横线小写（`chevrons-left`），不用 Element Plus 的帕斯卡名（`Fold`）——
- *    这是自绘语汇，不迁就旧命名；
- *  - 找不到的名字会渲染成一个问号并在开发期告警（拼错名字当场可见，而不是「图标没了」）。
- */
+/** 自绘图标库（替代 `@element-plus/icons-vue`），每个都是一段 SVG 内部内容（24×24 视图） */
 
-/** 一个图标：`body` 是 SVG 的内部内容（可含多个元素） */
+/** 一个图标：`body` 是 SVG 内部内容 */
 export interface IconDefinition {
   /** 中文名，供无障碍标签与调试用 */
   label: string
@@ -176,9 +163,43 @@ export const ICONS: Record<string, IconDefinition> = {
     body: '<circle cx="12" cy="12" r="9"/>'
       + '<path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.5v.2"/><path d="M12 17h.01"/>',
   },
+  // ---- 模板片段分类 ----
+  branch: {
+    label: '条件分支',
+    body: '<circle cx="6.5" cy="5.5" r="2.2"/><circle cx="6.5" cy="18.5" r="2.2"/>'
+      + '<circle cx="17.5" cy="9.5" r="2.2"/><path d="M6.5 7.7v8.6"/>'
+      + '<path d="M17.5 11.7c0 3.2-2.6 4.2-5.4 4.7"/>',
+  },
+  repeat: {
+    label: '循环',
+    body: '<path d="M17 3.5 20 6.5l-3 3"/><path d="M4 12V10a3.5 3.5 0 0 1 3.5-3.5H20"/>'
+      + '<path d="M7 20.5 4 17.5l3-3"/><path d="M20 12v2a3.5 3.5 0 0 1-3.5 3.5H4"/>',
+  },
+  braces: {
+    label: '变量占位',
+    body: '<path d="M9 3.5H7.5a2 2 0 0 0-2 2v3A2.5 2.5 0 0 1 3 11v2a2.5 2.5 0 0 1 2.5 2.5v3a2 2 0 0 0 2 2H9"/>'
+      + '<path d="M15 3.5h1.5a2 2 0 0 1 2 2v3A2.5 2.5 0 0 0 21 11v2a2.5 2.5 0 0 0-2.5 2.5v3'
+      + 'a2 2 0 0 1-2 2H15"/>',
+  },
+  function: {
+    label: '自定义函数',
+    body: '<path d="M14 4h-1.5A3 3 0 0 0 9.5 7v13"/><path d="M6 11h7"/>'
+      + '<path d="m15.5 11.5 5 6"/><path d="m20.5 11.5-5 6"/>',
+  },
+  box: {
+    label: '内置函数',
+    body: '<path d="m12 3 8.5 4.7v8.6L12 21 3.5 16.3V7.7z"/><path d="m3.5 7.7 8.5 4.8 8.5-4.8"/>'
+      + '<path d="M12 21v-8.5"/>',
+  },
+  more: {
+    label: '其他',
+    body: '<circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none"/>'
+      + '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>'
+      + '<circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>',
+  },
 }
 
-/** 拼错名字时的兜底（并提示） */
+/** 拼错名字时的兜底 */
 const FALLBACK = 'question'
 
 /** 取一段图标的 SVG 内容；名字不存在时返回兜底图形 */
@@ -193,7 +214,7 @@ export function iconBody(name: string): string {
   return ICONS[FALLBACK].body
 }
 
-/** 图标是否存在（用例与调试用；也避免在模板里靠猜名字） */
+/** 图标是否存在 */
 export function hasIcon(name: string): boolean {
   return Object.hasOwn(ICONS, name)
 }

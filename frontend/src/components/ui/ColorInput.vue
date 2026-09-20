@@ -1,13 +1,7 @@
 <script setup lang="ts">
-/**
- * 颜色选择（替代 `el-color-picker`）。
- *
- * 直接用原生 `<input type="color">`：它唤起的是系统取色器，取色精度与习惯都好过
- * 自绘面板，而且不需要为「点击外部关闭 / 拖拽调和 / 键盘操作」再写一套浮层逻辑。
- * 应用这边只负责外观（方形色块 + 十六进制值），并让取色器弹窗里的色板贴合圆角。
- *
- * 值格式就是 `#rrggbb`（小写），与配置里存的格式一致。
- */
+/** 颜色选择；空串表示「未标记」 */
+import { computed } from 'vue'
+import Icon from '@/components/ui/Icon.vue'
 import { cn } from '@/lib/utils'
 
 const props = withDefaults(defineProps<{
@@ -15,26 +9,56 @@ const props = withDefaults(defineProps<{
   class?: string
 }>(), {})
 
-const model = defineModel<string>({ default: '#000000' })
+const model = defineModel<string>({ default: '' })
+
+/** 未标记时的兜底色（原生控件不接受空值） */
+const FALLBACK_COLOR = '#409eff'
+
+/** 取色器显示的颜色 */
+const pickerColor = computed(() => model.value || FALLBACK_COLOR)
+
+/** 取色：写回模型 */
+function handlePick(event: Event) {
+  model.value = (event.target as HTMLInputElement).value
+}
+
+/** 清除标记 */
+function clear() {
+  model.value = ''
+}
 </script>
 
 <template>
-  <label
+  <div
     :class="cn('inline-flex items-center gap-2', disabled && 'cursor-not-allowed opacity-50', props.class)"
   >
+    <!-- 不能用 label 包住 -->
     <input
-      v-model="model"
+      :value="pickerColor"
       type="color"
       :disabled="disabled"
       class="size-[calc(28px*var(--app-control-scale))] shrink-0 cursor-pointer rounded-md
         border border-border bg-surface p-0.5"
+      @input="handlePick"
     >
-    <code class="text-xs text-muted">{{ model }}</code>
-  </label>
+    <code class="text-xs text-muted">{{ model || '未标记' }}</code>
+
+    <button
+      v-if="model && !disabled"
+      type="button"
+      class="inline-flex size-[calc(18px*var(--app-control-scale))] items-center justify-center
+        rounded text-xs text-muted transition-colors hover:text-danger"
+      title="清除颜色标记"
+      aria-label="清除颜色标记"
+      @click="clear"
+    >
+      <Icon name="close" />
+    </button>
+  </div>
 </template>
 
 <style scoped>
-/* 原生色块自带内边距与直角，跟应用里的圆角控件对不上，这里抹平 */
+/* 抹平原生色块的内边距与直角 */
 input[type='color']::-webkit-color-swatch-wrapper {
   padding: 0;
 }

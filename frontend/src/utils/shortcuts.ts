@@ -1,4 +1,4 @@
-/** 可配置快捷键的统一目录；页面只需按 action id 读取，不再各自硬编码组合键。 */
+/** 可配置快捷键的统一目录；页面按 action id 读取 */
 export interface ShortcutDefinition {
   id: string
   group: string
@@ -35,7 +35,7 @@ export function shortcutOf(id: string, raw: string | undefined): string {
   return parseShortcutConfig(raw)[id] || SHORTCUTS.find(item => item.id === id)?.defaultKey || ''
 }
 
-/** 用标准显示格式保存，避免 Ctrl + s / control-s 这类不可比较的写法。 */
+/** 用标准显示格式保存 */
 export function normalizeShortcut(value: string): string {
   const tokens = value.split(/[+\-\s]+/).filter(Boolean).map(item => item.toLowerCase())
   const modifier = (names: string[]) => names.some(name => tokens.includes(name))
@@ -46,7 +46,7 @@ export function normalizeShortcut(value: string): string {
   return [...parts, normalizedKey].join('+')
 }
 
-/** 将用户实际按下的按键转成配置的标准写法，供设置页“按键录入”使用。 */
+/** 按下按键 → 配置的标准写法（设置页按键录入用） */
 export function shortcutFromEvent(event: KeyboardEvent): string {
   const key = event.key === ' ' ? 'Space' : event.key === ',' ? ',' : event.key
   return normalizeShortcut([
@@ -62,7 +62,7 @@ export function matchesShortcut(event: KeyboardEvent, value: string): boolean {
   if (!normalized) return false
   const parts = normalized.split('+')
   const key = parts.at(-1)!
-  // “Ctrl” 在配置里同时代表 macOS 的 Command，和现有编辑器快捷键口径一致。
+  // “Ctrl” 同时代表 macOS 的 Command
   return (event.ctrlKey || event.metaKey) === parts.includes('Ctrl')
     && event.altKey === parts.includes('Alt')
     && event.shiftKey === parts.includes('Shift')

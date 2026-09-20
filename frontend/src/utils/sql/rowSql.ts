@@ -1,19 +1,15 @@
 /**
- * 结果行 → SQL 语句（结果表格右键「复制为…」→ INSERT / UPDATE / DELETE）。
+ * 结果行 → SQL 语句（结果表格右键「复制为…」→ INSERT / UPDATE / DELETE）
  *
- * 约定：
- *  - **UPDATE / DELETE 一律以主键为条件**。主键从 information_schema 读取；
- *    读不到主键、或结果集里不含主键列时直接放弃生成（绝不生成没有条件的语句）。
- *  - 表名优先取「产生该结果的 SQL」里的限定名（如 `mydb`.`user` → 库名 mydb），
- *    取不到再回退到当前库，保证生成的语句带上库名。
- *  - 标识符与字符串按方言转义：MySQL 用反引号、反斜杠转义；PostgreSQL 用双引号。
+ * 约定：UPDATE / DELETE 一律以主键为条件，主键查不到就不生成
  */
 
 import { executeStatement } from '@/api/executor'
+import { renderExportTemplate } from '@/api/templates'
 import { copyText } from '@/utils/clipboard'
 import { notify } from '@/utils/notify'
 import { IDENT_SOURCE } from './sqlLexemes'
-import type { ContextMenuAction } from '@/types'
+import type { ContextMenuAction, ExportTemplate } from '@/types'
 
 /** SQL 方言 */
 export type SqlDialect = 'mysql' | 'postgres'
@@ -21,17 +17,11 @@ export type SqlDialect = 'mysql' | 'postgres'
 /** 复制类型 */
 export type RowSqlKind = 'insert' | 'update' | 'delete'
 
-/**
- * 结果来源上下文：识别表名与查主键只需要这些。
- *
- * 单独抽出来是因为两个用途各取所需：生成行 SQL 要 `columns` / `row`（那是
- * `RowSqlContext`），而**表头标记主键**只需要「这条结果是哪个连接、哪个库、
- * 由哪条 SQL 产生的」。
- */
+/** 结果来源上下文：识别表名与查主键只需要这些 */
 export interface ResultSourceContext {
-  /** 连接 ID，用于查主键；没有连接时查不了（调用方给它的可能为 null） */
+  /** 连接 ID，用于查主键 */
   connId: number | null
-  /** 当前库（未显式选择时为空串，此时用连接默认库） */
+  /** 当前库（未显式选择时为空串） */
   database: string
   /** 连接类型（DBConnection.dbType） */
   dbType: string
@@ -39,7 +29,7 @@ export interface ResultSourceContext {
   sql: string
 }
 
-/** 生成语句所需的上下文（由调用方从当前视图状态提供） */
+/** 生成语句所需的上下文 */
 export interface RowSqlContext extends ResultSourceContext {
   /** 结果列名（按展示顺序） */
   columns: string[]
@@ -47,26 +37,75 @@ export interface RowSqlContext extends ResultSourceContext {
   row: Record<string, unknown>
 }
 
-/**
- * 结果表格右键菜单项：两级结构「复制为… → INSERT / UPDATE / DELETE」。
- *
- * `rowCount > 1` 时标签带上行数（「批量复制为…（3 行）」）——
- * 批量操作最怕「不知道会作用于几行」，把数字写在菜单上是最省事的确认。
- */
-export function rowSqlMenuItems(rowCount = 1): ContextMenuAction[] {
+/** 「复制为…」里自定义导出模板项的 key 前缀：`export:<模板 id>` */
+const EXPORT_TEMPLATE_PREFIX = 'export:'
+
+/** 结果表格右键菜单项：两级结构「复制为… → INSERT / UPDATE / DELETE / 导出模板」 */
+export function rowSqlMenuItems(
+  rowCount = 1,
+  exportTemplates: ExportTemplate[] = [],
+): ContextMenuAction[] {
   const batch = rowCount > 1
   const suffix = batch ? `（${rowCount} 行）` : ''
+  const children: ContextMenuAction[] = [
+    { key: 'copy-insert', label: `INSERT${suffix}` },
+    { key: 'copy-update', label: `UPDATE（按主键）${suffix}` },
+    { key: 'copy-delete', label: `DELETE（按主键）${suffix}` },
+  ]
+
+  // 自定义导出模板接在内置三项之后，停用的不进菜单
+  for (const item of exportTemplates) {
+    if (item.enabled === false) {
+      continue
+    }
+    children.push({ key: `${EXPORT_TEMPLATE_PREFIX}${item.id}`, label: `${item.name}${suffix}` })
+  }
+
   return [
     {
       key: 'copy-as',
       label: batch ? `批量复制为…（${rowCount} 行）` : '复制为…',
-      children: [
-        { key: 'copy-insert', label: `INSERT${suffix}` },
-        { key: 'copy-update', label: `UPDATE（按主键）${suffix}` },
-        { key: 'copy-delete', label: `DELETE（按主键）${suffix}` },
-      ],
+      children,
     },
   ]
+}
+
+/** 菜单项 key 对应的导出模板；不是导出模板项（或模板已不存在）时返回 null */
+export function exportTemplateOfMenuItem(
+  key: string,
+  templates: ExportTemplate[],
+): ExportTemplate | null {
+  if (!key.startsWith(EXPORT_TEMPLATE_PREFIX)) {
+    return null
+  }
+  const id = key.slice(EXPORT_TEMPLATE_PREFIX.length)
+  return templates.find(item => item.id === id) ?? null
+}
+
+/** 按导出模板渲染并复制若干结果行（渲染在后端，整批一次） */
+export async function copyRowsByExportTemplate(
+  template: ExportTemplate,
+  rows: Array<Record<string, unknown>>,
+): Promise<void> {
+  if (!rows.length) {
+    return
+  }
+  try {
+    const rendered = await renderExportTemplate(template.content, rows)
+    const text = rendered.filter(item => item !== '').join('\n')
+    if (!text.trim()) {
+      notify.warning(`导出模板「${template.name}」渲染结果为空`)
+      return
+    }
+
+    await copyText(text)
+    notify.success(rows.length > 1
+      ? `已按「${template.name}」复制 ${rows.length} 行`
+      : `已按「${template.name}」复制`)
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+  }
 }
 
 /** 把菜单项的 key 映射成复制类型；非本菜单的项返回 null */
@@ -99,13 +138,7 @@ interface TableRef {
   table: string
 }
 
-/**
- * 从 SQL 中解析出表限定名。
- *
- * 只取第一个 FROM / UPDATE / INSERT INTO / DELETE FROM 后面的名字，
- * 支持 `db`.`table`、db.table、"db"."table"、[db].[table] 三种写法。
- * 解析失败返回 null（比如结果来自函数或复杂子查询）。
- */
+/** 从 SQL 中解析出表限定名（第一个 FROM / UPDATE / INSERT INTO / DELETE FROM 之后）；解析失败返回 null */
 export function parseTableRef(sql: string): TableRef | null {
   const pattern = new RegExp(
     `(?:\\bfrom\\b|\\bupdate\\b|\\binsert\\s+into\\b|\\bdelete\\s+from\\b)`
@@ -127,13 +160,7 @@ export function parseTableRef(sql: string): TableRef | null {
   return { schema: parts[0], table: parts[1] }
 }
 
-/**
- * 解析表名。
- *
- * SQL 里写明了限定名就用它；没写时按方言回退到「当前库」——
- * MySQL 的库名直接可用；PostgreSQL 不允许跨库限定名，限定的是 schema，
- * 与后端元数据查询的约定一致（默认 public）。
- */
+/** 解析表名；SQL 里没写限定名时按方言回退到当前库 / public */
 function resolveTable(ctx: ResultSourceContext, dialect: SqlDialect): TableRef | null {
   const parsed = parseTableRef(ctx.sql)
   if (!parsed) {
@@ -160,9 +187,7 @@ function escapeString(text: string, dialect: SqlDialect): string {
   return dialect === 'mysql' ? escaped.replace(/\\/g, '\\\\') : escaped
 }
 
-/**
- * 值 → SQL 字面量（结果行 SQL 与补全的比较值共用一份转义规则）。
- */
+/** 值 → SQL 字面量（结果行 SQL 与补全的比较值共用一份转义规则） */
 export function formatSqlValue(value: unknown, dialect: SqlDialect): string {
   return formatValue(value, dialect)
 }
@@ -234,13 +259,7 @@ export async function fetchPrimaryKeys(
   return keys
 }
 
-/**
- * 结果集对应表的主键列名（表头给主键列加标识用）。
- *
- * 与「复制为 UPDATE / DELETE」那条路径的要求**相反**：那边拿不到主键必须明说，
- * 因为生成的语句会误伤全表；这里是**装饰性**信息 —— 没有标识不影响看数据，
- * 所以「识别不出表 / 没有连接 / 查询报错」一律安静地返回空数组，不弹提示。
- */
+/** 结果集对应表的主键列名（表头标识用）；识别不出时安静返回空数组 */
 export async function primaryKeysOfResult(ctx: ResultSourceContext): Promise<string[]> {
   if (!ctx.connId) {
     return []
@@ -259,7 +278,7 @@ export async function primaryKeysOfResult(ctx: ResultSourceContext): Promise<str
   }
 }
 
-/** 生成语句所需的表与主键信息（多行共用一次解析结果） */
+/** 生成语句所需的表与主键信息 */
 export interface RowSqlTarget {
   dialect: SqlDialect
   /** 已带库名的表限定名 */
@@ -268,14 +287,7 @@ export interface RowSqlTarget {
   keys: string[]
 }
 
-/**
- * 解析表名与主键。
- *
- * 批量复制时**只解析一次**：主键要走一趟 information_schema，
- * 一行为一次的话，选 50 行就要查 50 次（而且结果完全一样）。
- *
- * 失败时返回原因文案，由调用方决定怎么提示（单行 / 批量提示的位置不同）。
- */
+/** 解析表名与主键（批量复制只解析一次）；失败时返回原因文案 */
 async function prepareRowSql(
   kind: RowSqlKind,
   ctx: RowSqlContext,
@@ -291,7 +303,7 @@ async function prepareRowSql(
     return { ok: true, value: { dialect, target, keys: [] } }
   }
 
-  // UPDATE / DELETE：必须拿到主键，否则不生成（避免误伤全表）
+  // UPDATE / DELETE 必须拿到主键才生成
   const label = kind.toUpperCase()
   const allKeys = await fetchPrimaryKeys(ctx, ref, dialect)
   if (!allKeys.length) {
@@ -310,13 +322,7 @@ async function prepareRowSql(
   return { ok: true, value: { dialect, target, keys } }
 }
 
-/**
- * 为**一行**生成 SQL（纯函数：解析结果由调用方传入，便于用例覆盖）。
- *
- * 返回 `null` 表示这一行不能安全生成，目前只有一种情况：**主键值缺失**。
- * 那时 WHERE 会写成 `id = NULL` —— 永远不成立，拿去执行等于
- * 「看起来执行了、其实什么都没改」，比不生成更糟。
- */
+/** 为一行生成 SQL（纯函数）；主键值缺失时返回 null */
 export function buildRowSqlStatement(
   kind: RowSqlKind,
   ctx: RowSqlContext,
@@ -351,22 +357,12 @@ export function buildRowSqlStatement(
   return `UPDATE ${table} SET ${sets.join(', ')} WHERE ${where};`
 }
 
-/**
- * 生成并复制某一行的 SQL（单行入口）。
- *
- * 失败（表名 / 主键识别不了、剪贴板不可用）时自行提示，不抛错，
- * 便于直接当菜单回调使用。
- */
+/** 生成并复制某一行的 SQL（单行入口） */
 export async function copyRowSql(kind: RowSqlKind, ctx: RowSqlContext): Promise<void> {
   await copyRowsSql(kind, [ctx])
 }
 
-/**
- * 生成并复制若干行的 SQL（结果表格 Ctrl / Shift 多选后的「批量复制为…」）。
- *
- * 多行共用一次表名与主键解析；语句按**选择顺序**用换行拼接，
- * 方便直接贴进 SQL 客户端逐条执行。不能安全生成的行会被跳过，并在提示里说明。
- */
+/** 生成并复制若干行的 SQL（批量复制为…）；不能安全生成的行会跳过 */
 export async function copyRowsSql(kind: RowSqlKind, contexts: RowSqlContext[]): Promise<void> {
   if (!contexts.length) {
     return

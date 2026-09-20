@@ -1,13 +1,4 @@
-/**
- * 槽位（Slot）与候选资格（Eligibility）的 Golden Tests。
- *
- * 这组用例回答文档里的核心问题：
- *
- * > 「为什么 SELECT 后不能出现 WHERE？」
- * > 「因为它被识别成 select-item-start，而 WHERE 不在这个槽位的允许集合里。」
- *
- * 而不是「因为 WHERE 的 boost 更低」—— 资格与排序必须分家。
- */
+/** 槽位与候选资格的 Golden Tests */
 import { EditorState } from '@codemirror/state'
 import { MySQL, sql } from '@codemirror/lang-sql'
 import { describe, expect, it } from 'vitest'
@@ -52,7 +43,7 @@ function at(docWithCursor: string) {
       tight: intent.clause.tight,
       column: intent.column,
     }),
-    // 「正在输入的词」以光标层为准（列意图只在 SELECT 列表里才有值）
+    // 「正在输入的词」以光标层为准
     prefix: analyzeHybridCursor(state, pos, { mode: 'sql' }).prefix,
     labels: (bundle?.options ?? []).map(option => option.label),
   }

@@ -52,8 +52,7 @@ func (a *App) SaveDictionaryItems(dictionaryID int64, items []database.Dictionar
 	return a.dicts.SaveItems(dictionaryID, items)
 }
 
-// LoadDictionaryCache 一次性加载全部词典与词典项，供前端本地翻译使用。
-// 词典数据量小且读多写少，一次拉取可避免每格查询带来的延迟。
+// LoadDictionaryCache 一次性加载全部词典与词典项，供前端本地翻译使用
 func (a *App) LoadDictionaryCache() (map[int64][]database.DictionaryItem, error) {
 	if err := a.ready(); err != nil {
 		return nil, err

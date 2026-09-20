@@ -1,18 +1,4 @@
-/**
- * 列补全模式（单选 / 多选）的集成用例。
- *
- * 这些用例走的是**真实链路**：`collectCompletions` → 真实候选 → 检查候选上的
- * `columnMode` / `columnInsert` → 勾选 → apply → 断言最终文档。
- *
- * 核心断言只有一条判据：**复选框与空格键都由光标意图决定，而不是「候选恰好是列」**。
- *
- * | 光标                | columnMode | 复选框 | 归谁      |
- * | ------------------- | ---------- | ------ | --------- |
- * | `SELECT t.`         | multi      | 是     | 多选列    |
- * | `SELECT t.user_id,` | single     | 否     | 普通单选  |
- * | `SELECT t.user_id, `| multi      | 是     | 多选列    |
- * | `SELECT t.em`       | single     | 否     | 普通单选  |
- */
+/** 列补全模式（单选 / 多选）的集成用例，走真实链路 collectCompletions → 候选 → apply */
 import { EditorState } from '@codemirror/state'
 import { MySQL, sql } from '@codemirror/lang-sql'
 import { describe, expect, it } from 'vitest'
@@ -62,7 +48,7 @@ function fakeView(doc: string) {
   return { view: view as unknown as Parameters<typeof toggleColumnMark>[0], changes, textOf: () => text }
 }
 
-/** 光标状态 + 本次补全的 bundle + 光标意图（两者同源，断言它们一致） */
+/** 光标状态 + 补全 bundle + 光标意图（两者同源） */
 function completionAt(docWithCursor: string) {
   const pos = docWithCursor.indexOf('|')
   const doc = docWithCursor.replace('|', '')
@@ -91,8 +77,6 @@ describe('列补全模式：光标意图', () => {
     expect(intent.isColumnList).toBe(true)
     expect(intent.qualifier).toBe('t')
     expect(intent.prefix).toBe('')
-    // 替换范围只覆盖「词」（这里是空的）：`t.` 留在文档里，
-    // 由候选自带的前缀写回，不能扩到限定符上（编辑器拿范围文本做匹配）
     expect(bundle?.from).toBe(9)
     expect(bundle?.to).toBe(9)
     expect(doc.slice(bundle!.from, bundle!.to)).toBe('')
@@ -147,7 +131,6 @@ describe('列补全模式：候选标记', () => {
   })
 
   it('限定符解析成功时不再混入表别名候选', () => {
-    // `t.` 已经是「某个来源的列」，别名 / 表名 / 关键字都不该出现
     const { bundle } = completionAt('SELECT t.| FROM users t')
     expect((bundle?.options ?? []).every(item => item.type === 'field')).toBe(true)
   })
@@ -175,7 +158,7 @@ describe('列补全模式：空格与多选插入', () => {
     const picked = single.find(item => item.label === 'email')
     expect(picked).toBeTruthy()
     const { view, textOf } = fakeView('SELECT t.user_id,')
-    // 先勾两个（模拟之前在别的弹层里勾过），再应用单选候选
+    // 先勾两个，再应用单选候选
     toggleColumnMark(view, 'users@t.id', 't.id')
     toggleColumnMark(view, 'users@t.username', 't.username')
 
@@ -198,12 +181,11 @@ describe('列补全模式：空格与多选插入', () => {
       toggleColumnMark(view, item!.columnKey ?? name, item!.columnInsert ?? name)
     }
 
-    // 应用任意一个候选：勾选项会一次性插入（apply 只消费 columnInsert）
+    // 应用任意一个候选，勾选项一次性插入
     const first = fields.find(entry => entry.label === 'id')
     const apply = first?.apply
     expect(typeof apply).toBe('function')
     if (typeof apply === 'function') {
-      // 真实链路给的范围是「词」（这里为空，光标紧贴 `t.`）
       apply(view as never, first as Completion, 9, 9)
     }
 
@@ -241,7 +223,7 @@ describe('列补全模式：边界（不能误入多选）', () => {
     const { intent, bundle } = completionAt(sqlText)
     expect(intent.isColumnList).toBe(true)
     expect(intent.mode).toBe('multi')
-    // 外层来源只有 users t：orders 独有的列不能出现
+    // 外层来源只有 users t
     const labels = fieldItems(bundle).map(item => item.label)
     expect(labels).toContain('username')
     expect(labels).not.toContain('total_amount')
@@ -249,15 +231,8 @@ describe('列补全模式：边界（不能误入多选）', () => {
 })
 
 describe('列补全模式：来源解析不了就不给候选（不猜）', () => {
-  it('`SELECT t.|` 单独一句（FROM 还没写）拿不到列 —— 这是有意的', () => {
-    /*
-     * 别名 `t` 不在任何作用域里时，能给出的只有「猜」：
-     * 猜一张同名的表，或者猜上一句的别名。项目原则是不猜，于是这里给空。
-     * 用户把 FROM 写上（同一语句内即可，FROM 写在光标之后也算）就有候选。
-     *
-     * 另一个真实触发点是**列元数据还在后台拉取**：解析到的来源在、列还没到，
-     * 同样拿不到候选；再触发一次补全（Ctrl+Space）即可。
-     */
+  it('`SELECT t.|` 单独一句（FROM 还没写）拿不到列', () => {
+    // 别名不在作用域、或列元数据还没拉到时不猜，给空
     const alone = completionAt('SELECT t.|')
     expect(fieldItems(alone.bundle)).toHaveLength(0)
 

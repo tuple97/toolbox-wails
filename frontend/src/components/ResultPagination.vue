@@ -14,15 +14,11 @@ const props = withDefaults(defineProps<{
   total: number
   /** 总页数 */
   pageCount: number
-  /**
-   * 后端是否真的按分页执行了本次查询。
-   * 有些语句（SHOW / DESCRIBE / EXPLAIN 等）无法拼 LIMIT / OFFSET，
-   * 此时保持用户设定的页大小，但翻页按钮不可用，并给出说明。
-   */
+  /** 后端是否真的按分页执行了本次查询 */
   supported?: boolean
-  /** 本次查询耗时（ms），显示在左侧信息最前面 */
+  /** 本次查询耗时（ms） */
   elapsedMs?: number
-  /** 是否正在查询，用于禁用按钮避免重复提交 */
+  /** 是否正在查询 */
   loading?: boolean
 }>(), {
   supported: true,
@@ -35,30 +31,22 @@ const emit = defineEmits<{
   (e: 'size-change', pageSize: number): void
 }>()
 
-/** 可选的每页条数（下拉里还会额外提供「不分页」，见 sizeOptions） */
+/** 可选的每页条数 */
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200, 500, 1000]
 
-/**
- * 每页条数上限，与后端 maxPageSize 保持一致。
- * 上限外的输入在这里就收紧，避免「填了 5000 实际按 1000 查」的静默差异。
- */
+/** 每页条数上限，与后端 maxPageSize 一致 */
 const MAX_PAGE_SIZE = 1000
 
 /** 跳转输入框的临时页码 */
 const jumpPage = ref(props.page)
 
-/**
- * 每页条数下拉项。
- *
- * 值的类型是字符串（Combobox 统一用 string 做 v-model），
- * 但**语义上都是数字**：提交时由 handleSizeChange 统一转成 number。
- */
+/** 每页条数下拉项，值统一为字符串 */
 const sizeOptions = computed(() => [
   { label: '不分页', value: '0' },
   ...PAGE_SIZE_OPTIONS.map(size => ({ label: `${size} 条/页`, value: String(size) })),
 ])
 
-/** 结果变化后同步跳转框，避免停留在已失效的页码 */
+/** 页码变化后同步跳转框 */
 watch(() => props.page, value => {
   jumpPage.value = value
 })
@@ -73,12 +61,7 @@ function go(target: number) {
   emit('change', next)
 }
 
-/**
- * 页大小变化：下拉预设与手动输入共用。
- *
- * 下拉支持直接输入数字（Combobox 的 allow-create 会原样给出字符串），
- * 0 表示不分页；非法输入与超上限的值在这里拦下。
- */
+/** 页大小变化：下拉预设与手动输入共用 */
 function handleSizeChange(value: unknown) {
   let size = Math.trunc(Number(value))
   if (!Number.isFinite(size) || size < 0) {
@@ -97,16 +80,12 @@ function handleSizeChange(value: unknown) {
 </script>
 
 <template>
-  <!--
-    分页条：左侧统计、右侧翻页与页大小。
-    一律用 flex + gap 排版（旧样式要靠 `:deep(.el-button + .el-button)` 抵消
-    Element Plus 给相邻按钮加的外边距，那种「先加 12px 再减掉」的规则没有存在的必要了）。
-  -->
+  <!-- 分页条：左侧统计、右侧翻页与页大小 -->
   <div
     class="result-pagination flex flex-wrap items-center justify-between gap-3 border-t border-border
       px-4 pb-2.5 pt-2"
   >
-    <!-- 左侧信息：耗时在最前，其次是总量与分页状态 -->
+    <!-- 左侧信息 -->
     <span class="flex items-center gap-1.5 text-sm text-muted">
       <span v-if="elapsedMs > 0" class="font-semibold text-text">
         耗时 {{ elapsedMs }} ms
@@ -156,7 +135,7 @@ function handleSizeChange(value: unknown) {
         </Button>
       </template>
 
-      <!-- 页大小：预设可选、也能手输数字，0 表示不分页 -->
+      <!-- 页大小：可选预设或手输，0 表示不分页 -->
       <Combobox
         :model-value="String(pageSize)"
         :options="sizeOptions"

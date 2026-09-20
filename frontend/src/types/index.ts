@@ -10,32 +10,28 @@ export interface ContextMenuAction {
   key: string
   /** 显示文案 */
   label: string
-  /** 可选的快捷键提示，仅用于展示 */
+  /** 快捷键提示，仅用于展示 */
   shortcut?: string
   /** 是否禁用 */
   disabled?: boolean
-  /** 是否为危险操作（如删除、退出） */
+  /** 是否为危险操作 */
   danger?: boolean
   /** 该项之后插入分割线 */
   divided?: boolean
-  /** 子菜单项：有值时该项变为「悬浮展开子菜单」的父项 */
+  /** 子菜单项：有值时该项变为父项 */
   children?: ContextMenuAction[]
 }
 
-/**
- * 已实现的工具类型。
- * 注意：后端 database.Tab.ToolType 为 string，
- * 因此 WorkbenchTab.toolType 保持 string，此联合类型仅用于工具选择处的约束。
- */
+/** 已实现的工具类型；后端 database.Tab.ToolType 为 string，此联合类型仅用于工具选择处的约束 */
 export type ToolType =
-  // 尚未绑定工具的空白标签（历史数据兼容）
+  // 尚未绑定工具的空白标签
   | 'placeholder'
   // SQL 查询（多例）
   | 'db-query'
-  // 命令执行器（SQL 执行，多例）
+  // SQL 执行（多例）
   | 'command-executor'
   // 以下均为单例标签
-  // 工作台首页（欢迎语 / 快捷入口 / 系统监控）
+  // 工作台首页
   | 'home'
   | 'connections'
   | 'sql-template'
@@ -44,14 +40,7 @@ export type ToolType =
 
 /** 工作台 Tab，与后端 database.Tab 对应 */
 export interface WorkbenchTab {
-  /**
-   * 会话内稳定标识，不落库。
-   *
-   * 新建标签先用负数 id 占位，首次落盘时后端会重新分配 id；
-   * 若组件层用 id 做渲染 key，保存回来后 key 变化会导致组件销毁重建
-   * （表现为打开新标签约 1s 后闪一下、状态丢失）。
-   * 因此渲染 key 与按标签的缓存一律用 uid，id 只负责持久化。
-   */
+  /** 会话内稳定标识，不落库；渲染 key 与按标签的缓存一律用它，id 只负责持久化 */
   uid: string
   id: number
   name: string
@@ -76,13 +65,13 @@ export interface DBConnection {
   username: string
   password: string
   extra: string
-  /** 备注（连接列表悬停展示） */
+  /** 备注 */
   note: string
-  /** 颜色标记（列表与标签着色，空表示不标记） */
+  /** 颜色标记，空表示不标记 */
   color: string
   /** MySQL 字符集，空表示 utf8mb4 */
   charset: string
-  /** PostgreSQL 默认 schema（MySQL 留空，库由 database 决定） */
+  /** PostgreSQL 默认 schema（MySQL 留空） */
   defaultSchema: string
   /** 建立连接超时（秒），0 表示默认 10 */
   connectTimeoutSecs: number
@@ -119,33 +108,29 @@ export interface SQLTemplate {
   connId: number
   name: string
   sqlText: string
+  /** 模板自带的库 / 模式；空表示用连接配置里的默认库 */
+  database: string
   /** JSON: 变量 UI 配置 */
   variables: string
   /** JSON: 字段映射配置 */
   fieldMappings: string
+  /** JSON: 导出模板配置 */
+  exportTemplates: string
   preScript: string
   postScript: string
-  /** 每页条数保留字段：实际页大小由每个标签页的翻页控件决定 */
+  /** 是否启用：停用后保留配置但不允许执行 */
+  enabled: boolean
+  /** 每页条数（保留字段） */
   pageSize?: number
 }
 
-/**
- * 库列表项，与后端 services.DatabaseInfo 对应。
- *
- * `isSystem` 由后端按方言判定（MySQL 与 PostgreSQL 的自带对象完全不同）：
- * 前端只按设置项过滤，不自己维护一份方言表（见 utils/sql/sqlVisibility.ts）。
- */
+/** 库列表项，与后端 services.DatabaseInfo 对应 */
 export interface DatabaseInfo {
   name: string
   isSystem: boolean
 }
 
-/**
- * 表的外键约束，与后端 services.ForeignKey 对应。
- *
- * 智能补全的关联条件优先用它生成 `ON a.x = b.y`；
- * `utils/sql/sqlCompletionJoin.ts` 的 `ForeignKeyInfo` 与它结构一致。
- */
+/** 表的外键约束，与后端 services.ForeignKey 对应 */
 export interface TableForeignKey {
   /** 本表的列名 */
   column: string
@@ -170,9 +155,9 @@ export interface ExecutorPayload {
   database: string
   /** 编辑器中的 SQL */
   sql: string
-  /** SQL 编辑器高度（px），拖动分栏调整后持久化 */
+  /** SQL 编辑器高度（px） */
   editorHeight?: number
-  /** 每页条数（0 表示不分页），翻页控件调整后持久化 */
+  /** 每页条数（0 表示不分页） */
   pageSize?: number
 }
 
@@ -184,16 +169,13 @@ export interface ExecutorRequest {
   limit: number
   /** 页码，从 1 开始；小于等于 0 表示不分页 */
   page?: number
-  /** 每页条数；小于等于 0 且页码大于 0 时取后端默认值 */
+  /** 每页条数 */
   pageSize?: number
-  /** 上一次返回的总数；翻页时带回可跳过重新统计 */
+  /** 上一次的总数 */
   total?: number
   /** 是否重新统计总数 */
   countTotal?: boolean
-  /**
-   * 生产库上的写操作确认标记。
-   * 前端的确认弹窗只是交互，后端也会校验这个标记，避免被绕过。
-   */
+  /** 生产库写操作的确认标记，后端也会校验 */
   allowProductionWrite?: boolean
 }
 
@@ -205,12 +187,7 @@ export interface ExecutorColumn {
   comment: string
 }
 
-/**
- * 「执行全部」时单条语句的执行记录（摘要页签用）。
- *
- * 多条语句必须逐条发送给驱动（拼在一起会报语法错误），
- * 因此每条都单独计时、单独记录成败。
- */
+/** 「执行全部」时单条语句的执行记录（摘要页签用） */
 export interface StatementRunRecord {
   /** 语句序号，从 1 开始 */
   index: number
@@ -256,7 +233,7 @@ export interface ExecutorResult {
   columns: ColumnMeta[]
   rows: Record<string, unknown>[]
   sql: string
-  /** 实际生效的库 / 模式（后端在会话上钉住的那个），结果区展示用于核对 */
+  /** 实际生效的库 / 模式 */
   database: string
   elapsedMs: number
   rowCount: number
@@ -286,9 +263,9 @@ export interface DictionaryItem {
 export interface ColumnMeta {
   name: string
   type: string
-  /** 字段注释（后端从数据字典反查；表达式列 / 别名列 / 非 MySQL 方言为空） */
+  /** 字段注释 */
   comment: string
-  /** 来源表（注释反查时一并带出；表达式列 / 别名列 / 非 MySQL 方言为空） */
+  /** 来源表 */
   table?: string
 }
 
@@ -297,7 +274,7 @@ export interface QueryResult {
   columns: ColumnMeta[]
   rows: Record<string, unknown>[]
   sql: string
-  /** 实际生效的库 / 模式（会话上钉住的那个）；行 SQL 生成与展示据此核对 */
+  /** 实际生效的库 / 模式 */
   database?: string
   elapsedMs: number
   rowCount: number
@@ -310,7 +287,7 @@ export interface QueryResult {
   pageSize: number
   /** 总页数；未分页时为 1 */
   pageCount: number
-  /** 是否为 EXPLAIN 分析结果（结果表格据此给出悬停优化建议） */
+  /** 是否为 EXPLAIN 分析结果 */
   analysis?: boolean
 }
 
@@ -321,11 +298,13 @@ export interface ExecuteRequest {
   variables: Record<string, unknown>
   preScript: string
   postScript: string
+  /** 库 / 模式；空表示用连接配置里的默认库 */
+  database?: string
   /** 页码，从 1 开始；小于等于 0 表示不分页 */
   page?: number
   /** 每页条数；小于等于 0 时取后端默认值 */
   pageSize?: number
-  /** 上一次的总数；翻页时带回可跳过重新统计 */
+  /** 上一次的总数 */
   total?: number
   /** 是否重新统计总数 */
   countTotal?: boolean
@@ -336,15 +315,15 @@ export interface TemplateExecuteRequest {
   templateId: number
   connId: number
   variables: Record<string, unknown>
-  /** 库 / 模式；空表示用连接配置里的默认库（后端会钉在会话上） */
+  /** 库 / 模式；空表示用连接配置里的默认库 */
   database?: string
   /** 页码，从 1 开始；小于等于 0 表示本次不分页 */
   page?: number
   /** 每页条数；小于等于 0 时取后端默认值 */
   pageSize?: number
-  /** 上一次返回的总数；翻页时带回可跳过重新统计 */
+  /** 上一次返回的总数 */
   total?: number
-  /** 是否重新统计总数；翻页时为 false，重新执行时为 true */
+  /** 是否重新统计总数 */
   countTotal?: boolean
 }
 
@@ -356,6 +335,8 @@ export interface TemplateListItem {
   name: string
   connId: number
   sqlText: string
+  /** 是否启用：停用的模板拒绝执行 */
+  enabled: boolean
 }
 
 /** 应用配置项，与后端 database.Setting 对应 */
@@ -368,9 +349,9 @@ export interface Setting {
 /** 全局配置的键名 */
 export type SettingKey =
   | 'theme'
-  /** 界面缩放比例（百分比；基准字号 13px 由它放大缩小） */
+  /** 界面缩放比例（百分比） */
   | 'ui_scale'
-  /** 历史项：字号 / 控件大小 / 代码字号已由「缩放比例」统一承担，保留以兼容旧配置 */
+  /** 历史项：字号 / 控件大小 / 代码字号已由缩放比例承担，保留以兼容旧配置 */
   | 'font_size'
   | 'control_size'
   | 'editor_font_size'
@@ -387,11 +368,7 @@ export type SettingKey =
   | 'template_placeholder_tab'
   | 'shortcut_config'
 
-/**
- * 主题标识。
- * dark：深蓝（默认）；midnight：极夜黑；idea：IDEA Darcula 风格；light：亮色。
- * 除 light 外都属于暗色族，编辑器等处按暗色处理。
- */
+/** 主题标识：dark（默认）/ midnight / idea 为暗色，light 为亮色 */
 export type ThemeMode = 'dark' | 'midnight' | 'idea' | 'light'
 
 /** Element Plus 控件尺寸 */
@@ -462,20 +439,23 @@ export interface FieldMapping {
   align?: 'left' | 'center' | 'right'
   /** 绑定的词典 ID，用于翻译单元格值 */
   dictionaryId?: number
-  /**
-   * 展示模板，支持 {{value}} 与 {{meaning}} 占位符。
-   * 例：{{value}} - {{meaning}}
-   */
+  /** 展示模板，支持 {{value}} 与 {{meaning}} 占位符 */
   template?: string
 }
 
-/**
- * 数据库查询工具在 Tab payload 中保存的状态。
- *
- * 说明：SQL、变量配置、字段映射、脚本等均已归属到「SQL 模板」，
- * 查询 Tab 只保存「引用哪个模板」与「用哪个连接」，执行时由后端取模板渲染。
- * 这样模板更新后引用它的 Tab 无需同步即可生效。
- */
+/** 导出模板：把结果行渲染成一段文本，供「复制为…」直接复制 */
+export interface ExportTemplate {
+  /** 模板内唯一标识，用于右键菜单项的 key */
+  id: string
+  /** 名称，显示在「复制为…」子菜单里 */
+  name: string
+  /** 模板内容，用 {{ 列名 }} 引用结果行的列 */
+  content: string
+  /** 是否启用（默认启用） */
+  enabled?: boolean
+}
+
+/** 数据库查询工具在 Tab payload 中保存的状态（只保存引用哪个模板与用哪个连接） */
 export interface DbQueryPayload {
   /** 引用的模板 ID */
   templateId: number | null

@@ -9,32 +9,29 @@ import { parseSidebarView, serializeSidebarView } from '@/utils/sidebarView'
 import type { ToolType } from '@/types'
 
 defineProps<{
-  /** 是否收起（收起后由标签栏的按钮展开） */
+  /** 是否收起 */
   collapsed: boolean
 }>()
 
 const tabStore = useTabStore()
 const configStore = useConfigStore()
 
-/** 工具图标名（注册表里没有对应工具时给问号图标，模板里就不必到处判空） */
+/** 工具图标名 */
 function iconOf(type: string): string {
   return toolOf(type)?.icon ?? 'question'
 }
 
 // ------------------------------------------------------------ 菜单配置（排序 / 显示）
 
-/**
- * 菜单配置，持久化在 settings.sidebar_config（JSON）。
- * 只存「组内顺序」与「隐藏列表」；工具属于哪个分组由 utils/tools.ts 决定，不可改。
- */
+/** 菜单配置，持久化在 settings.sidebar_config */
 interface SidebarConfig {
-  /** 分组 label → 组内工具顺序 */
+  /** 组 label → 工具顺序 */
   order: Record<string, ToolType[]>
   /** 被隐藏的工具 */
   hidden: ToolType[]
 }
 
-/** 解析并校正持久化配置：未知工具/分组剔除，缺失的按默认顺序补齐 */
+/** 解析并校正持久化配置 */
 function parseSidebarConfig(raw: string | undefined): SidebarConfig {
   const config: SidebarConfig = { order: {}, hidden: [] }
   try {
@@ -65,22 +62,17 @@ function serializeSidebarConfig(config: SidebarConfig): string {
 /** 持久化的菜单配置 */
 const sidebarConfig = computed(() => parseSidebarConfig(configStore.values.sidebar_config))
 
-/** 普通态分组实际显示的工具：按配置顺序、剔除隐藏项 */
+/** 分组实际显示的工具 */
 function visibleGroupTools(group: { label: string, tools: ToolType[] }): ToolType[] {
   const order = sidebarConfig.value.order[group.label] ?? [...group.tools]
   return order.filter(type => !sidebarConfig.value.hidden.includes(type))
 }
 
-/** 组内菜单全部隐藏时整组不显示 */
 function isGroupVisible(group: { label: string, tools: ToolType[] }): boolean {
   return visibleGroupTools(group).length > 0
 }
 
-/**
- * 顶级工具按「置顶 / 贴底」分成两段渲染：
- * 首页在分组菜单之上（一眼可见），设置之类的留在分组菜单之下（贴底）。
- * 编辑态要展示全部（含已隐藏，带眼睛图标），所以可见性单独再过滤一层。
- */
+/** 顶级工具分置顶 / 贴底两段渲染 */
 const pinnedTopTools = computed(() =>
   TOP_LEVEL_TOOLS.filter(type => PINNED_TOP_TOOLS.includes(type)),
 )
@@ -97,7 +89,7 @@ const visibleBottomTopTools = computed(() =>
 // ------------------------------------------------------------ 编辑态
 
 const editing = ref(false)
-/** 编辑草稿：点「完成」才落盘，避免拖一半就把半成品配置持久化 */
+/** 编辑草稿：点「完成」才落盘 */
 const draftOrder = ref<Record<string, ToolType[]>>({})
 const draftHidden = ref<ToolType[]>([])
 
@@ -112,7 +104,7 @@ function enterEdit() {
   editing.value = true
 }
 
-/** 草稿恢复为默认：默认顺序 + 全部显示 */
+/** 草稿恢复为默认 */
 function resetDraft() {
   for (const group of TOOL_GROUPS) {
     draftOrder.value[group.label] = [...group.tools]
@@ -128,17 +120,13 @@ function finishEdit() {
   }))
 }
 
-/** 编辑态切换某工具的显示 / 隐藏 */
 function toggleDraftHidden(type: ToolType) {
   draftHidden.value = draftHidden.value.includes(type)
     ? draftHidden.value.filter(item => item !== type)
     : [...draftHidden.value, type]
 }
 
-/**
- * 展开的分组标签，持久化在 settings.sidebar_view（见 utils/sidebarView.ts）。
- * 未记录在「已收起」列表里的分组一律视为展开，所以新增分组默认展开。
- */
+/** 展开的分组标签，持久化在 settings.sidebar_view */
 const expandedGroups = computed(() =>
   TOOL_GROUPS
     .map(group => group.label)
@@ -157,11 +145,7 @@ function toggleGroup(label: string) {
 /** 当前激活标签承载的工具类型 */
 const activeToolType = computed(() => tabStore.activeTab?.toolType ?? '')
 
-/**
- * 菜单项是否高亮。
- *  - 多例工具：有该类型的标签处于激活态（此时内容区展示的正是它）；
- *  - 单例工具：内容区当前展示的就是它的单例视图（单例不进标签栏）。
- */
+/** 菜单项是否高亮 */
 function isActive(type: ToolType): boolean {
   const definition = toolOf(type)
   if (definition && !definition.multi) {
@@ -170,10 +154,7 @@ function isActive(type: ToolType): boolean {
   return activeToolType.value === type
 }
 
-/**
- * 菜单项悬浮提示。
- * 多例工具补充「点击在实例间切换」的说明，方便发现轮转行为。
- */
+/** 菜单项悬浮提示 */
 function titleOf(type: ToolType): string {
   const definition = toolOf(type)
   if (!definition) {
@@ -184,17 +165,9 @@ function titleOf(type: ToolType): string {
     : definition.description
 }
 
-/**
- * 点击菜单项。
- *
- * 单例：跳转到已有标签（不存在则新建）。
- * 多例：在同类标签间轮转——
- *   - 还没有该类型的标签：新建一个；
- *   - 当前激活的不是该类型：选中第一个该类型标签；
- *   - 当前激活的正是该类型：选中下一个（到末尾回到第一个）。
- */
+/** 点击菜单项：单例跳转，多例在同类标签间轮转 */
 function handleSelect(type: ToolType) {
-  // 编辑态点击菜单项不跳转，防误触
+  // 编辑态点击不跳转
   if (editing.value) {
     return
   }
@@ -231,10 +204,6 @@ function handleNewInstance(type: ToolType) {
 <template>
   <aside class="app-sidebar" :class="{ 'app-sidebar--collapsed': collapsed }">
     <nav class="app-sidebar__nav">
-      <!--
-        置顶菜单（首页）：排在分组菜单之前，与分组菜单之间用一条分隔线区分。
-        对应 utils/tools.ts 的 PINNED_TOP_TOOLS。
-      -->
       <ul
         v-show="editing || visiblePinnedTopTools.length > 0"
         class="app-sidebar__items app-sidebar__items--pinned"
@@ -274,7 +243,6 @@ function handleNewInstance(type: ToolType) {
         </template>
       </ul>
 
-      <!-- 分组菜单 -->
       <section
         v-for="group in TOOL_GROUPS"
         :key="group.label"
@@ -294,7 +262,7 @@ function handleNewInstance(type: ToolType) {
           <span>{{ group.label }}</span>
         </button>
 
-        <!-- 编辑态：草稿列表，左侧拖动把手排序、右侧眼睛控制显示 -->
+        <!-- 编辑态：拖动排序 + 眼睛控制显示 -->
         <VueDraggable
           v-if="editing"
           v-model="draftOrder[group.label]"
@@ -324,7 +292,6 @@ function handleNewInstance(type: ToolType) {
           </li>
         </VueDraggable>
 
-        <!-- 普通态：按配置顺序渲染可见菜单 -->
         <ul
           v-else
           v-show="expandedGroups.includes(group.label)"
@@ -341,7 +308,7 @@ function handleNewInstance(type: ToolType) {
             <Icon class="app-sidebar__icon" :name="iconOf(type)" />
             <span class="app-sidebar__label">{{ toolOf(type)?.label }}</span>
 
-            <!-- 多例工具：右侧 + 新建实例 -->
+            <!-- 多例工具：新建实例 -->
             <button
               v-if="toolOf(type)?.multi"
               class="app-sidebar__add"
@@ -355,7 +322,7 @@ function handleNewInstance(type: ToolType) {
         </ul>
       </section>
 
-      <!-- 贴底的顶级菜单项（设置）：不可拖动排序，可隐藏 -->
+      <!-- 贴底的顶级菜单项 -->
       <ul
         v-show="editing || visibleBottomTopTools.length > 0"
         class="app-sidebar__items app-sidebar__items--top"
@@ -396,7 +363,7 @@ function handleNewInstance(type: ToolType) {
       </ul>
     </nav>
 
-    <!-- 底部操作区：编辑菜单排序与显示 -->
+    <!-- 底部操作区 -->
     <footer class="app-sidebar__footer">
       <template v-if="editing">
         <button class="app-sidebar__footer-btn" type="button" @click="resetDraft">
@@ -428,7 +395,6 @@ function handleNewInstance(type: ToolType) {
 .app-sidebar {
   display: flex;
   flex-direction: column;
-  /* 宽度取自全局 token（--sidebar-width: 240px / 收起 64px） */
   flex: 0 0 var(--sidebar-width);
   width: var(--sidebar-width);
   min-width: 0;
@@ -440,10 +406,6 @@ function handleNewInstance(type: ToolType) {
 
 /* ------------------------------------------------------------ 收起态（64px 图标栏） */
 
-/*
- * 收起后只保留图标：标签文字、新建按钮、编辑把手、分组标题全部隐藏，
- * 分组之间用分隔线区分；每个图标仍带 title 悬浮提示，功能不失可发现性。
- */
 .app-sidebar--collapsed {
   flex-basis: var(--sidebar-width-collapsed);
   width: var(--sidebar-width-collapsed);
@@ -540,7 +502,7 @@ function handleNewInstance(type: ToolType) {
   border-top: 1px solid var(--border-color);
 }
 
-/* 置顶段（首页）：排在分组菜单之上，用下边框与分组菜单分开 */
+/* 置顶段 */
 .app-sidebar__items--pinned {
   margin-bottom: 8px;
   padding-bottom: 8px;
@@ -588,7 +550,7 @@ function handleNewInstance(type: ToolType) {
   white-space: nowrap;
 }
 
-/* 多例工具的新建按钮：常驻但弱化，悬浮时强化，保证可发现性 */
+/* 多例工具的新建按钮 */
 .app-sidebar__add {
   display: inline-flex;
   align-items: center;
@@ -624,7 +586,7 @@ function handleNewInstance(type: ToolType) {
   cursor: grabbing;
 }
 
-/* 顶级项不可拖，占位保持与组内项对齐 */
+/* 顶级项不可拖，占位保持对齐 */
 .app-sidebar__handle.is-static {
   opacity: 0.2;
   cursor: default;
@@ -651,7 +613,7 @@ function handleNewInstance(type: ToolType) {
   color: var(--text-color);
 }
 
-/* 编辑态菜单项不响应跳转；隐藏项整体变淡 */
+/* 编辑态不响应跳转；隐藏项变淡 */
 .app-sidebar__item.is-editing {
   cursor: default;
 }

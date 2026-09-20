@@ -198,6 +198,19 @@ export function scanClause(prefix: string): ClauseScan {
     if (word) {
       const lower = word.text.toLowerCase()
       if (depth === 0) {
+        /*
+         * 紧贴光标的词，左边紧邻点号 ⇒ 它一定是限定名的一部分，不可能是关键字：
+         * `SELECT * FROM `test`.use|` 里的 `use` 是表名开头，不是 USE 语句关键字。
+         * 先按「正在输入的名字」让过它，再继续往左找真正的子句关键字 ——
+         * 不这样做的话 `use` / `order` / `as` 这类关键字开头的表名会整批没有候选。
+         */
+        if (index === prefix.length && prefix[index - 1] === '.') {
+          skippedName = true
+          skippedNameStart = word.start
+          previousKeyword = lower
+          index = word.start
+          continue
+        }
         // 括号里的列清单：INSERT INTO t (a, |) / CREATE TABLE t (a |)
         if (enteredParen && (lower === 'into' || lower === 'update' || lower === 'table')) {
           return result('column', lower)

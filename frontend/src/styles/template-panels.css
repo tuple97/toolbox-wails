@@ -84,6 +84,35 @@
   letter-spacing: 0.4px;
 }
 
+/* 分组标题行：标题在左、操作按钮在右（导出模板的「插入模板」入口） */
+.tpl-panel__group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.tpl-panel__group-head .tpl-panel__group-title {
+  margin-bottom: 0;
+}
+
+/* 分组内的说明文字：占位符写法用 code 强调 */
+.tpl-panel__hint {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+  line-height: 1.6;
+}
+
+.tpl-panel__hint code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--active-bg);
+  color: var(--brand-color);
+  font-family: var(--font-mono);
+}
+
 /* 自适应分列：宽度不足时自动并成单列 */
 .tpl-panel__grid {
   display: grid;
@@ -121,4 +150,29 @@
   display: flex;
   gap: 12px;
   margin: 2px 0 4px;
+}
+
+/*
+ * 开关类控件的外壳。
+ *
+ * 开关（20px 上下）比输入框矮，直接放进 Field 会让左侧标签与它错位；
+ * 这里按输入框高度撑开并垂直居中，于是「开关行」与同排的输入行严丝合缝。
+ */
+.tpl-panel__switch-row {
+  display: flex;
+  align-items: center;
+  min-height: calc(32px * var(--app-control-scale));
+}
+
+/*
+ * 代码编辑器的外壳。
+ *
+ * 编辑器自身背景透明（要融入所在容器），而面板卡片用的是带品牌色的淡底 ——
+ * 代码区铺一层浮层底色（亮色主题即白色、暗色主题是深底）后才像一块真正的编辑区。
+ */
+.tpl-panel__editor {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--overlay-bg);
+  overflow: hidden;
 }

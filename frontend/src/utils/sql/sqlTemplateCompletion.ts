@@ -34,7 +34,13 @@ import { analyzeTemplateCursor } from './template/templateParser'
 import { templateRegionAt } from './template/templateRegion'
 import { dotCandidates, scopeFromUnclosedBlocks, scopeSymbols } from './template/templateScope'
 import type { TemplateProperty, TemplateSymbol } from './template/templateScope'
-import { setTemplatePlaceholders } from './template/templatePlaceholder'
+import {
+  normalizePlaceholderGroups,
+  planTemplateInsert,
+  setTemplatePlaceholders,
+} from './template/templatePlaceholder'
+import { SQL_SNIPPETS } from './sqlSnippets'
+import type { SqlSnippet } from './sqlSnippets'
 
 /** 光标所在的模板片段 */
 export interface TemplateContext {
@@ -156,7 +162,13 @@ export function templateBundle(
     }
     case 'block-condition':
     case 'function-argument': {
-      options = [...variableOptions(symbols), ...variableOptions(locals, '局部变量')]
+      options = [
+        ...variableOptions(symbols),
+        ...variableOptions(locals, '局部变量'),
+        // 已经在打字时把片段候选也带上：`{{if` / `{{quote` 打到一半正是想要那个片段，
+        // 这时变量往往一个都匹配不上，不给片段列表的话整个候选会关掉
+        ...snippetOptions(context),
+      ]
       options = rankByExpectedType(options, cursor)
       break
     }
@@ -175,6 +187,7 @@ export function templateBundle(
         ...dotOption(scope.dot),
         ...functionOptions('all'),
         ...blockSnippetOptions(context),
+        ...snippetOptions(context),
         ...closingWordOptions(context.unclosedBlocks, blocks),
       ]
       break
@@ -303,12 +316,23 @@ const BLOCK_SNIPPETS: BlockSnippet[] = [
 ]
 
 /**
+ * 整段替换型候选：替换的是**整个** `{{ … }}`，与「正在输入的名字」无关。
+ *
+ * 因此它不参与「已输入前缀」的过滤（见 sqlCompletion 的 finalizeBundle）——
+ * 用户已经在片段里写了内容（`{{ 设备号| }}`）时，整段替换的入口不该整批消失。
+ */
+export interface FragmentActionCompletion extends Completion {
+  /** 忽略「已输入前缀」的过滤，始终留在候选里 */
+  alwaysOffered?: true
+}
+
+/**
  * 块片段候选：整段替换当前 `{{ … }}`，插入可用的成对骨架。
  *
  * 光标停在块头条件处，接着输入第一个字符就会拿到该块作用域内的变量候选
  * （触发与普通补全走同一条路，不额外制造时序耦合）。
  */
-function blockSnippetOptions(context: TemplateContext): Completion[] {
+function blockSnippetOptions(context: TemplateContext): FragmentActionCompletion[] {
   return BLOCK_SNIPPETS.map(snippet => ({
     label: snippet.label,
     type: 'text' as const,
@@ -317,6 +341,7 @@ function blockSnippetOptions(context: TemplateContext): Completion[] {
       ? '{{if 变量}} AND 条件 = {{变量}} {{end}}'
       : `{{${snippet.open} 变量}} … {{end}}`}`,
     apply: blockApply(context, snippet),
+    alwaysOffered: true,
   }))
 }
 
@@ -357,7 +382,52 @@ function blockApply(context: TemplateContext, snippet: BlockSnippet) {
     view.dispatch({
       changes: { from: start, to: end, insert },
       selection: { anchor: caret },
-      effects: setTemplatePlaceholders.of([caret, bodyCaret]),
+      // 条件位与块体行首都是「空位置」：没有名字，只作为 Tab / 回车的跳转目标
+      effects: setTemplatePlaceholders.of(normalizePlaceholderGroups([
+        { name: '', ranges: [{ from: caret, to: caret }] },
+        { name: '', ranges: [{ from: bodyCaret, to: bodyCaret }] },
+      ])),
+    })
+  }
+}
+
+// ---------------------------------------------------------------- 片段库候选
+
+/**
+ * 片段库候选（`SQL_SNIPPETS`）。
+ *
+ * 只在**已经开始打字**（prefix 非空）时给：空前缀下把整个片段库倒进列表会淹没
+ * 变量与函数候选。片段名本来就以触发词开头（`if 条件拼接`、`quote 安全加引号`），
+ * `{{if` / `{{quote` 会自然命中，因此不需要再维护一份「触发词」表 ——
+ * 片段库加一条，这里自动多一条候选。
+ */
+function snippetOptions(context: TemplateContext): Completion[] {
+  if (!context.cursor.prefix) {
+    return []
+  }
+  return SQL_SNIPPETS.map(snippet => ({
+    label: snippet.name,
+    type: 'text' as const,
+    detail: `片段 · ${snippet.category}`,
+    info: `${snippet.description}\n用法示例：${snippet.example}`,
+    apply: snippetApply(context, snippet),
+  }))
+}
+
+/**
+ * 片段插入：把光标所在的整个 `{{ … }}` 换成片段内容（片段自带 `{{ }}`），
+ * 并把片段里的占位变量做成多选、登记成占位链 —— 插入后直接改名，回车跳下一个变量。
+ */
+function snippetApply(context: TemplateContext, snippet: SqlSnippet) {
+  return (view: EditorView, _completion: Completion, from: number, to: number) => {
+    const start = context.openAt
+    const end = context.closeAt === null ? to : context.closeAt + 2
+    const plan = planTemplateInsert(snippet.code, start, end)
+    view.dispatch({
+      changes: plan.changes,
+      selection: plan.selection,
+      effects: plan.effects,
+      scrollIntoView: true,
     })
   }
 }

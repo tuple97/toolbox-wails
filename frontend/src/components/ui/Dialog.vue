@@ -1,22 +1,13 @@
 <script setup lang="ts">
-/**
- * 对话框（替代 `el-dialog`）。
- *
- * 只保留项目用得到的一档：居中弹窗 + 标题行 + 关闭按钮，内容与页脚走插槽。
- * 行为按项目已有的浮层约定收窄：
- *  - Teleport 到 body + 固定定位：不被父级的 overflow / transform 裁切；
- *  - Esc 与点击遮罩都关闭（Element Plus 的默认行为，不另立一套）；
- *  - 打开时锁住 body 滚动、关闭后还原（否则底下的长列表会跟着滚）；
- *  - 底色用 `--overlay-bg`、遮罩用 `--app-mask`：各主题自动跟随，不需要每个页面自己写。
- */
+/** 对话框：居中弹窗 + 标题行 + 关闭按钮，内容与页脚走插槽 */
 import { onBeforeUnmount, watch } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
 
 const props = withDefaults(defineProps<{
-  /** 是否显示（v-model） */
+  /** 是否显示 */
   modelValue: boolean
   title?: string
-  /** 面板宽度：数字按 px，字符串原样（如 '60vw'） */
+  /** 面板宽度：数字按 px，字符串原样 */
   width?: number | string
   /** 点遮罩是否关闭 */
   closeOnMask?: boolean
@@ -28,14 +19,14 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void }>()
 
-/** 关闭：只往上抛事件，状态仍由调用方的 v-model 持有（单一数据源） */
+/** 关闭：只抛事件，状态由调用方持有 */
 function close() {
   emit('update:modelValue', false)
 }
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
-    // 弹窗优先吃 Esc：不让它冒到全局快捷键（如执行器的「停止」）
+    // 弹窗优先吃 Esc
     event.stopPropagation()
     close()
   }
@@ -51,7 +42,7 @@ watch(() => props.modelValue, (open) => {
   document.body.style.overflow = ''
 }, { immediate: true })
 
-// 组件被卸载（如所在标签页关闭）时也要还原，否则 body 会永久锁滚动
+// 卸载时也要还原 body 滚动
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown)
   document.body.style.overflow = ''

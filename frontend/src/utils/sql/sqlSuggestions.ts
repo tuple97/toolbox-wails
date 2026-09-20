@@ -387,19 +387,16 @@ function indexOfJoinTarget(sides: JoinSide[], target: { table: string, alias: st
 }
 
 /**
- * 解析点号前的限定符。
+ * 限定符文本（含末尾点号）→ 各段名字（已去引号）；不以点号结尾返回 null。
  *
- * 支持 `u.`、`user.`、`` `mydb`. ``、`mydb.user.`、`"db"."t".` 等写法，
- * 返回已去引号的各段（最后一个就是紧邻点号的限定符）。
- * 光标前没有紧邻点号时返回 null。
+ * 支持 `u.`、`` `mydb`. ``、`` `mydb`.`t`. ``、`"db"."t".` 等写法。
+ *
+ * **补全链路的限定符一律走这里**：入参来自光标分析层的 `HybridCursor.qualifier`，
+ * 它是从「正在输入的词的首字符」往左回看的 —— 于是 `` `db`.u| ``（点号后已经开始
+ * 打前缀）也能解析出 `db`。早先只看「光标左边紧邻的是不是点号」，这种情况下
+ * 库名会整段丢掉，`db.u` 就再也补不出那个库的表（退化成当前库的表）。
  */
-export function readQualifierBeforeCursor(lineBefore: string): string[] | null {
-  let index = lineBefore.length
-  // 允许字母数字、_、$、点号与三种引号
-  while (index > 0 && /[A-Za-z0-9_$."`[\]]/.test(lineBefore[index - 1] ?? '')) {
-    index--
-  }
-  const raw = lineBefore.slice(index)
+export function qualifierSegments(raw: string): string[] | null {
   if (!raw.endsWith('.')) {
     return null
   }
@@ -409,6 +406,21 @@ export function readQualifierBeforeCursor(lineBefore: string): string[] | null {
     .map(part => part.trim().replace(/^[`"[]/, '').replace(/[`"\]]$/, ''))
     .filter(Boolean)
   return segments.length ? segments : null
+}
+
+/**
+ * 解析一行里光标前紧邻点号的限定符（保留给「只有一行文本」的调用方与用例）。
+ *
+ * 只看「光标左边是不是点号」：点号后已经打了前缀（`` `db`.u ``）时这里返回 null，
+ * 补全路径不使用它（改用 qualifierSegments + HybridCursor.qualifier）。
+ */
+export function readQualifierBeforeCursor(lineBefore: string): string[] | null {
+  let index = lineBefore.length
+  // 允许字母数字、_、$、点号与三种引号
+  while (index > 0 && /[A-Za-z0-9_$."`[\]]/.test(lineBefore[index - 1] ?? '')) {
+    index--
+  }
+  return qualifierSegments(lineBefore.slice(index))
 }
 
 /**

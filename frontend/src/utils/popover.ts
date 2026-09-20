@@ -1,13 +1,4 @@
-/**
- * 浮层定位（下拉 / 选择器的 Teleport 浮层用）。
- *
- * 抽成公共件的原因：`Combobox` 与 `MultiSelect` 的浮层行为必须**完全一致** ——
- * 位置算法、向上翻转、跟随滚动这些细节一旦两处各写一份，迟早出现
- * 「单选的下拉会翻上去、多选的不翻」这种说不清的差异。
- *
- * 做法（与 `ContextMenu.vue` 同一套）：以触发器矩形为基准 fixed 定位，
- * 下方放不下且上方更宽敞时向上翻转；宽度与触发器等宽。
- */
+/** 浮层定位（下拉 / 选择器的 Teleport 浮层用） */
 import { nextTick, ref } from 'vue'
 import type { Ref } from 'vue'
 
@@ -20,7 +11,7 @@ export interface PopoverPosition {
 export interface PopoverAnchorOptions {
   /** 浮层与触发器之间的间隙 */
   gap?: number
-  /** 浮层最大高度（用于判断「下方还放得下吗」，与样式里的 max-height 保持一致） */
+  /** 浮层最大高度（与样式里的 max-height 一致） */
   maxHeight?: number
 }
 
@@ -35,12 +26,7 @@ export function usePopoverAnchor(
   /** 浮层位置（配合 `position: fixed` 使用） */
   const position = ref<PopoverPosition>({ left: 0, top: 0, width: 0 })
 
-  /**
-   * 重新计算位置。
-   *
-   * `refine`：浮层高度要渲染后才量得到，首帧按最大高度估算，渲染完再修正一次
-   * （只修正一次，避免布局抖动时来回算）。
-   */
+  /** 重新计算位置；refine 时渲染完再修正一次 */
   async function update(refine = true) {
     const el = trigger.value
     if (!el) {
@@ -62,7 +48,7 @@ export function usePopoverAnchor(
     }
   }
 
-  /** 视口变化（含任意祖先容器滚动）时跟着挪：capture 才能收到内层滚动 */
+  /** 视口变化（含祖先容器滚动）时跟着挪：capture 才能收到内层滚动 */
   function handleViewportChange() {
     void update(false)
   }

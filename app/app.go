@@ -1,15 +1,4 @@
-// Package app 承载应用生命周期，并向前端暴露可绑定的方法。
-//
-// 本包作为 Wails v3 的 Service 绑定到前端：
-// 实现 application.ServiceStartup / ServiceShutdown 接口完成初始化与清理。
-//
-// 分层约定：
-//
-//	app/                绑定层，仅做参数校验与服务转发
-//	app/internal/database  本地 SQLite 与仓储
-//	app/internal/services  业务逻辑
-//	app/internal/script    goja 脚本引擎（前置/后置脚本）
-//	app/internal/utils     模板渲染与加解密等通用工具
+// Package app 承载应用生命周期，向前端暴露可绑定的方法
 package app
 
 import (
@@ -27,14 +16,9 @@ import (
 	"toolbox-wails/app/internal/utils"
 )
 
-// App 是绑定到前端的根结构体，所有导出方法都会生成前端可调用的绑定。
+// App 是绑定到前端的根结构体
 type App struct {
-	// wailsApp 为 Wails v3 应用实例，用于窗口操作与事件发送。
-	// 由 main 在创建应用后通过 Attach 注入。
-	wailsApp *application.App
-
-	// mainWindow 为主窗口引用，由 main 通过 AttachWindow 注入。
-	// 启动早期 Window.Current() 可能返回 nil，因此显式持有。
+	wailsApp   *application.App
 	mainWindow *application.WebviewWindow
 
 	// 基础设施
@@ -48,33 +32,27 @@ type App struct {
 	dicts     *services.DictService
 	dbService *services.DBService
 	settings  *services.SettingService
-	system    *services.SystemService
 }
 
-// NewApp 创建 App 实例。依赖在 ServiceStartup 中惰性初始化，
-// 以便失败时能通过事件告知前端，而不是直接 panic。
+// NewApp 创建 App 实例
 func NewApp() *App {
 	return &App{}
 }
 
-// Attach 注入 Wails 应用实例。
-// 必须在 application.New 之后、app.Run 之前调用。
+// Attach 注入 Wails 应用实例
 func (a *App) Attach(wailsApp *application.App) {
 	a.wailsApp = wailsApp
 }
 
-// AttachWindow 注入主窗口引用，供窗口背景材质等需要原生句柄的操作使用。
-// 必须在 app.Run 之前调用（与 Attach 一起）。
+// AttachWindow 注入主窗口引用
 func (a *App) AttachWindow(window *application.WebviewWindow) {
 	a.mainWindow = window
 }
 
-// ServiceStartup 实现 application.ServiceStartup 接口，在应用启动时被调用。
-// 该方法是 v2 中 OnStartup 回调的替代。
+// ServiceStartup 在应用启动时被调用
 func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) error {
 	if err := a.init(); err != nil {
 		slog.Error("应用初始化失败", "error", err)
-		// 通过事件让前端有机会提示用户，而不是静默失败
 		if a.wailsApp != nil {
 			a.wailsApp.Event.Emit("app:init-error", err.Error())
 		}
@@ -84,7 +62,7 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 	return nil
 }
 
-// ServiceShutdown 实现 application.ServiceShutdown 接口，在应用退出时被调用。
+// ServiceShutdown 在应用退出时被调用
 func (a *App) ServiceShutdown() error {
 	if a.db != nil {
 		if err := a.db.Close(); err != nil {
@@ -95,11 +73,7 @@ func (a *App) ServiceShutdown() error {
 	return nil
 }
 
-// NotifyBeforeQuit 通知前端立即保存当前状态。
-//
-// 前端配合方式：监听 "app:before-quit" 事件并调用 SaveTabs。
-// 这里只做通知不做阻塞等待——SQLite 写入是本地操作，通常毫秒级完成，
-// 而阻塞等待一旦异常会导致窗口无法关闭，体验更差。
+// NotifyBeforeQuit 通知前端保存当前状态
 func (a *App) NotifyBeforeQuit() {
 	if a.wailsApp == nil {
 		return
@@ -107,14 +81,13 @@ func (a *App) NotifyBeforeQuit() {
 	a.wailsApp.Event.Emit("app:before-quit")
 }
 
-// init 完成各项依赖的装配。
+// init 完成各项依赖的装配
 func (a *App) init() error {
 	dataDir, err := resolveDataDir()
 	if err != nil {
 		return err
 	}
 
-	// 密钥与数据库分开放：主密钥进系统凭证，回退目录也避开数据目录
 	cipher, err := utils.NewCipher(dataDir, resolveKeyDir())
 	if err != nil {
 		return fmt.Errorf("初始化加密器失败: %w", err)
@@ -136,13 +109,11 @@ func (a *App) init() error {
 	a.dicts = services.NewDictService(repo)
 	a.dbService = services.NewDBService(repo, cipher, engine)
 	a.settings = services.NewSettingService(repo)
-	a.system = services.NewSystemService()
 
 	return nil
 }
 
-// resolveDataDir 返回数据目录。
-// 优先使用系统用户配置目录，避免将数据写进安装目录（可能无写权限）。
+// resolveDataDir 返回数据目录
 func resolveDataDir() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
@@ -156,11 +127,7 @@ func resolveDataDir() (string, error) {
 	return filepath.Join(base, "Toolbox"), nil
 }
 
-// resolveKeyDir 返回主密钥的回退目录。
-//
-// 只有系统凭证不可用（Linux 无 Secret Service 等）时才会用到它。
-// 刻意与数据库目录（os.UserConfigDir）分开：两者同目录的话，
-// 拿到用户目录就等于同时拿到密钥和密文，加密就没有意义了。
+// resolveKeyDir 返回主密钥的回退目录
 func resolveKeyDir() string {
 	if base, err := os.UserCacheDir(); err == nil {
 		return filepath.Join(base, "Toolbox")
@@ -168,13 +135,13 @@ func resolveKeyDir() string {
 	return ""
 }
 
-// Greet 返回一句问候语，用于演示前后端调用链路。
+// Greet 返回一句问候语
 func (a *App) Greet(name string) string {
 	slog.Info("Greet 被调用", "name", name)
 	return fmt.Sprintf("Hello %s, It's show time!", name)
 }
 
-// ready 检查服务是否已初始化，未就绪时返回统一错误。
+// ready 检查服务是否已初始化
 func (a *App) ready() error {
 	if a.dbService == nil || a.tabs == nil || a.settings == nil {
 		return fmt.Errorf("应用尚未初始化完成，请稍后重试")

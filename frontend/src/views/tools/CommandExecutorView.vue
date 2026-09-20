@@ -19,6 +19,7 @@ import type { ResultSourceContext } from '@/utils/sql/rowSql'
 import { formatSql, minifySql as minifySqlText } from '@/utils/sql/sqlFormat'
 import { copyText } from '@/utils/clipboard'
 import { fetchConnections } from '@/api/db'
+import { EventsOn } from '@/api/runtime'
 import { useConfigStore } from '@/stores/configStore'
 import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
 import { filterDatabaseInfos, parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
@@ -518,7 +519,20 @@ onMounted(async () => {
   }
 })
 
+/**
+ * 连接管理页改动连接后刷新下拉与库列表。
+ *
+ * 本页是常驻标签页（切换时只切显隐，不重新挂载），只在 onMounted 拉一次连接，
+ * 不监听的话改名 / 换颜色 / 改默认库之后，数据源下拉里还是旧数据。
+ */
+const offConnectionsChanged = EventsOn('connections:changed', async () => {
+  await loadConnections()
+  // 默认库 / 可见库也可能一起变了：重拉库列表（已选的库仍按 loadDatabases 的约定保持不变）
+  await loadDatabases()
+})
+
 onBeforeUnmount(() => {
+  offConnectionsChanged()
   window.removeEventListener('resize', clampHeights)
   unregisterCompletionContext(editorView)
   editorView?.dom.removeEventListener('contextmenu', handleEditorContextMenu)
@@ -836,12 +850,10 @@ const formatAction = computed<'beautify' | 'minify'>(
   () => (formatTarget.value?.text.includes('\n') ? 'minify' : 'beautify'),
 )
 
-/** 按钮提示：说清这一下会做什么、作用于哪一段，以及快捷键 */
+/** 按钮提示：这一下会做什么 + 快捷键 */
 const formatButtonTitle = computed(() => {
-  const action = formatAction.value === 'minify'
-    ? '压缩：当前范围是多行，压成一行（去掉换行与注释）'
-    : '美化：当前范围是单行，展开为多行'
-  return `${action}（Alt+Shift+F）；有选中内容就作用于选中，否则作用于光标所在语句`
+  const action = formatAction.value === 'minify' ? '压缩为一行' : '展开为多行'
+  return `${action}（Alt+Shift+F）`
 })
 
 /** 格式化：方向由 formatAction 决定 */
@@ -1439,7 +1451,7 @@ watch([connId, database, sql, pageSize], notifyChange)
         <Button
           variant="secondary"
           size="icon"
-          title="刷新元数据（表 / 字段缓存）"
+          title="刷新元数据缓存"
           @click="refreshMeta"
         >
           <Icon name="refresh" />
@@ -1453,7 +1465,7 @@ watch([connId, database, sql, pageSize], notifyChange)
       <!-- 运行与终止共用一个按钮：执行中变成终止，不再并排显示两个 -->
       <Button
         v-if="!running"
-        title="执行：有选中内容就执行选中，否则执行光标所在语句（Ctrl+Enter）"
+        title="执行（Ctrl+Enter）"
         @click="runCurrent"
       >
         <Icon name="play" />
@@ -1472,7 +1484,7 @@ watch([connId, database, sql, pageSize], notifyChange)
         variant="secondary"
         size="icon"
         :disabled="running"
-        title="分析：用 EXPLAIN 查看当前语句的执行计划（有选中就分析选中，否则分析光标所在语句）"
+        title="EXPLAIN 分析"
         @click="analyzeSql"
       >
         <Icon name="chart" />

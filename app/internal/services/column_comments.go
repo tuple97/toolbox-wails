@@ -8,12 +8,14 @@ import (
 )
 
 /*
- * 结果列的「注释」与「来源表」补全。
+ * 结果列的「注释 / 来源表 / 完整类型」补全。
  *
- * database/sql 的 ColumnType 只提供类型名，拿不到注释；注释只存在数据库自己的
- * 数据字典里（MySQL 的 information_schema.columns.column_comment）。所以结果
- * 返回前用语句里出现的表名反查一次字典：列名能对上就填注释与来源表，对不上
- * （表达式列、别名列、聚合列）留空 —— 前端只在有值时展示。
+ * database/sql 的 ColumnType 只提供类型名（MySQL 下是 `VARCHAR` 这种不带长度的），
+ * 拿不到注释，也拿不到声明的长度；这些只存在数据库自己的数据字典里
+ * （MySQL 的 information_schema.columns）。所以结果返回前用语句里出现的表名
+ * 反查一次字典：列名能对上就填注释、来源表与**含长度的类型**
+ * （`varchar(255)` / `decimal(10,2)`），对不上（表达式列、别名列、聚合列）
+ * 留空 / 保留驱动给的类型 —— 前端只在有值时展示。
  *
  * 查询范围是**语句里实际出现的 schema 集合**（限定名 `mydb.users` 带出 mydb，
  * 裸表名回退到连接默认库）：连接没配默认库、模板里全用限定名时，只查
@@ -24,11 +26,11 @@ import (
  * 收益有限，暂不处理（那里的结果列注释恒为空）。
  */
 
-// annotateColumnComments 就地给结果列补注释与来源表。
+// annotateResultColumns 就地给结果列补注释、来源表与含长度的类型。
 //
-// 失败时静默跳过：注释只是展示增强，绝不能因为查字典失败而让整个查询失败。
+// 失败时静默跳过：这些都是展示增强，绝不能因为查字典失败而让整个查询失败。
 // 调用方应传入独立的短超时 ctx，避免与主查询抢时间。
-func annotateColumnComments(
+func annotateResultColumns(
 	ctx context.Context,
 	db rowQueryer,
 	dbType string,
@@ -72,7 +74,7 @@ func annotateColumnComments(
 	}
 
 	rows, err := db.QueryContext(ctx, `
-		SELECT table_name, column_name, column_comment
+		SELECT table_name, column_name, column_comment, column_type
 		FROM information_schema.columns
 		WHERE table_schema IN (`+placeholdersOf(schemas)+`)
 		  AND table_name IN (`+placeholdersOf(tables)+`)`,
@@ -89,14 +91,20 @@ func annotateColumnComments(
 	 */
 	comments := make(map[string]string, len(columns))
 	sources := make(map[string]string, len(columns))
+	types := make(map[string]string, len(columns))
 	for rows.Next() {
-		var table, name, comment sql.NullString
-		if err := rows.Scan(&table, &name, &comment); err != nil {
+		var table, name, comment, dataType sql.NullString
+		if err := rows.Scan(&table, &name, &comment, &dataType); err != nil {
 			return
 		}
 		key := strings.ToLower(name.String)
 		if _, exists := sources[key]; !exists && strings.TrimSpace(table.String) != "" {
 			sources[key] = strings.TrimSpace(table.String)
+		}
+		if display := displayTypeOf(dataType.String); display != "" {
+			if _, exists := types[key]; !exists {
+				types[key] = display
+			}
 		}
 		if strings.TrimSpace(comment.String) == "" {
 			continue
@@ -117,7 +125,47 @@ func annotateColumnComments(
 		if table, ok := sources[key]; ok {
 			columns[i].Table = table
 		}
+		// 字典里的类型是精确的（带长度 / 精度），覆盖驱动给的粗略类型名
+		if dataType, ok := types[key]; ok {
+			columns[i].Type = dataType
+		}
 	}
+}
+
+/*
+ * displayTypeOf 把 information_schema.columns.column_type 整理成展示用类型名。
+ *
+ * 括号**外**整体大写（类型名与修饰词：`int unsigned` → `INT UNSIGNED`），
+ * 括号**内**原样保留 —— `enum('a','B')` 的取值大小写是有意义的，
+ * 一起大写会改掉语义。这样与驱动给的类型名（`INT` / `VARCHAR`）大小写一致，
+ * 同一行表头里不会出现「有的全大写、有的全小写」。
+ */
+func displayTypeOf(raw string) string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(text))
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] != '(' {
+			continue
+		}
+		builder.WriteString(strings.ToUpper(text[start:i]))
+		end := strings.IndexByte(text[i:], ')')
+		if end < 0 {
+			// 括号没闭合（理论上不会有）：剩下的整体大写，别把内容吞掉
+			builder.WriteString(strings.ToUpper(text[i:]))
+			return builder.String()
+		}
+		builder.WriteString(text[i : i+end+1])
+		i += end
+		start = i + 1
+	}
+	builder.WriteString(strings.ToUpper(text[start:]))
+	return builder.String()
 }
 
 // 语句里的表来源：FROM / JOIN 之后。

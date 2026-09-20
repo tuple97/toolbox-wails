@@ -1,9 +1,4 @@
-/**
- * CREATE TABLE 生成器用例。
- *
- * 重点：**元数据里没有的信息一个字都不能出现**（不写 NOT NULL / DEFAULT /
- * ENGINE / 主键），列顺序与 schema 定义顺序一致，注释按方言落地。
- */
+/** CREATE TABLE 生成器用例 */
 import { describe, expect, it } from 'vitest'
 import { createTableModelOf, generateCreateTableSql } from '@/utils/sql/ddl/sqlCreateTable'
 import type { ExecutorColumn } from '@/types'

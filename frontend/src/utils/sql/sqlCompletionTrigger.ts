@@ -33,17 +33,17 @@ export const SQL_TRIGGER_MODE_OPTIONS: Array<{
   {
     value: 'positional',
     label: '位置感知（推荐）',
-    hint: '写表名 / 列名 / 表达式时才自动弹出，语句结构处不打扰',
+    hint: '只在表名 / 列名 / 表达式处弹出',
   },
   {
     value: 'require-prefix',
     label: '需要前缀',
-    hint: '必须先输入至少一个字符才会弹出',
+    hint: '先输入一个字符',
   },
   {
     value: 'manual',
     label: '仅手动',
-    hint: '只有按 Ctrl+Space 才弹出',
+    hint: '仅 Ctrl+Space',
   },
 ]
 

@@ -75,7 +75,7 @@ describe('表格列布局', () => {
       ...Array.from({ length: 12 }, (_, i) => ({ key: `c${i}`, label: `C${i}` })),
     )
     expect(tableMinWidthOf(many)).toBe(12 * DEFAULT_MIN_WIDTH)
-    // 远大于常见窗口宽度，于是必定出现横向滚动条
+    // 远大于常见窗口宽度
     expect(tableMinWidthOf(many)).toBeGreaterThan(1280)
   })
 
@@ -90,7 +90,7 @@ describe('表格列布局', () => {
     expect(cellTextOf({ v: null }, column)).toBe('')
     expect(cellTextOf({ v: undefined }, column)).toBe('')
     expect(cellTextOf({}, column)).toBe('')
-    // 这一条最容易写错：用 `value || ''` 会把 0 / false 也吞掉
+    // 用 `value || ''` 会把 0 / false 也吞掉
     expect(cellTextOf({ v: 0 }, column)).toBe('0')
     expect(cellTextOf({ v: false }, column)).toBe('false')
     expect(cellTextOf({ v: 'text' }, column)).toBe('text')
