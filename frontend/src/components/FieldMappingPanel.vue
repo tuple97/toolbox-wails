@@ -1,5 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import Combobox from '@/components/ui/Combobox.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import Field from '@/components/ui/Field.vue'
+import Input from '@/components/ui/Input.vue'
+import NumberInput from '@/components/ui/NumberInput.vue'
+import Tag from '@/components/ui/Tag.vue'
 import { useDictStore } from '@/stores/dictStore'
 import type { FieldMapping } from '@/types'
 
@@ -25,9 +31,21 @@ function selectMapping(column: string) {
   selectedName.value = column
 }
 
-/** el-select-v2 的选项数据（纯数据传入，避免每行渲染完整选项节点树） */
+/** 对齐下拉选项 */
+const ALIGN_OPTIONS = [
+  { label: '左对齐', value: 'left' },
+  { label: '居中', value: 'center' },
+  { label: '右对齐', value: 'right' },
+]
+
+/**
+ * 词典选项。
+ *
+ * 下拉的值统一用**字符串**（Combobox 承载的是值本身），绑定回模型时再转回数字 ——
+ * 转换只发生在 setDictionary 一处。
+ */
 const dictOptions = computed(() =>
-  dictStore.dictionaries.map(dict => ({ label: dict.name, value: dict.id })),
+  dictStore.dictionaries.map(dict => ({ label: dict.name, value: String(dict.id) })),
 )
 
 /** 更新某一列的映射 */
@@ -36,6 +54,26 @@ function update(index: number, patch: Partial<FieldMapping>) {
     i === index ? { ...item, ...patch } : item,
   )
   emit('update:modelValue', next)
+}
+
+/** 词典 id → 下拉值（空串 = 不翻译） */
+function dictValueOf(mapping: FieldMapping): string {
+  return mapping.dictionaryId === undefined || mapping.dictionaryId === null
+    ? ''
+    : String(mapping.dictionaryId)
+}
+
+function setDictionary(index: number, value: string) {
+  update(index, { dictionaryId: value === '' ? undefined : Number(value) })
+}
+
+function setAlign(index: number, value: string) {
+  update(index, { align: value as FieldMapping['align'] })
+}
+
+/** 列宽：0 表示自适应（不写宽度），与「不设置」等价 */
+function setWidth(index: number, value: number) {
+  update(index, { width: value > 0 ? value : undefined })
 }
 
 onMounted(() => {
@@ -48,11 +86,7 @@ onMounted(() => {
 
 <template>
   <div class="tpl-panel-list">
-    <el-empty
-      v-if="!modelValue.length"
-      description="执行查询后会自动列出结果列"
-      :image-size="60"
-    />
+    <EmptyState v-if="!modelValue.length" description="执行查询后会自动列出结果列" />
 
     <div v-else class="tpl-master">
       <aside class="tpl-master__list" aria-label="字段列表">
@@ -65,7 +99,7 @@ onMounted(() => {
           @click="selectMapping(mapping.column)"
         >
           <code>{{ mapping.column }}</code>
-          <el-tag v-if="mapping.dictionaryId" size="small" type="info" effect="plain">词典</el-tag>
+          <Tag v-if="mapping.dictionaryId" size="sm" tone="info" effect="plain">词典</Tag>
           <span>{{ mapping.label || '未设置别名' }}</span>
         </button>
       </aside>
@@ -80,41 +114,35 @@ onMounted(() => {
           v-if="mapping.column === selectedName"
           v-memo="[mapping, dictOptions]"
         >
-          <el-form class="tpl-panel__form" label-position="left" label-width="76px" size="small">
+          <div class="tpl-panel__form">
             <!-- 列信息与展示 -->
             <section class="tpl-panel__group">
               <div class="tpl-panel__group-title">展示设置</div>
               <div class="tpl-panel__grid">
-                <el-form-item label="展示别名">
-                  <el-input
+                <Field label="展示别名" label-width="76px">
+                  <Input
                     :model-value="mapping.label"
                     placeholder="表格列标题，留空用列名"
                     @update:model-value="update(index, { label: $event })"
                   />
-                </el-form-item>
+                </Field>
 
-                <el-form-item label="列宽">
-                  <el-input-number
-                    :model-value="mapping.width"
+                <Field label="列宽" label-width="76px">
+                  <NumberInput
+                    :model-value="mapping.width ?? 0"
                     :min="0"
-                    controls-position="right"
                     placeholder="自适应"
-                    style="width: 100%"
-                    @update:model-value="update(index, { width: $event ?? undefined })"
+                    @update:model-value="setWidth(index, $event)"
                   />
-                </el-form-item>
+                </Field>
 
-                <el-form-item label="对齐">
-                  <el-select
+                <Field label="对齐" label-width="76px">
+                  <Combobox
                     :model-value="mapping.align ?? 'left'"
-                    style="width: 100%"
-                    @update:model-value="update(index, { align: $event as FieldMapping['align'] })"
-                  >
-                    <el-option label="左对齐" value="left" />
-                    <el-option label="居中" value="center" />
-                    <el-option label="右对齐" value="right" />
-                  </el-select>
-                </el-form-item>
+                    :options="ALIGN_OPTIONS"
+                    @update:model-value="setAlign(index, $event)"
+                  />
+                </Field>
               </div>
             </section>
 
@@ -122,29 +150,27 @@ onMounted(() => {
             <section class="tpl-panel__group">
               <div class="tpl-panel__group-title">词典翻译</div>
               <div class="tpl-panel__grid">
-                <el-form-item label="绑定词典">
-                  <!-- 虚拟滚动下拉：词典多时不会为每行渲染完整选项列表 -->
-                  <el-select-v2
-                    :model-value="mapping.dictionaryId"
+                <Field label="绑定词典" label-width="76px">
+                  <Combobox
+                    :model-value="dictValueOf(mapping)"
                     :options="dictOptions"
                     placeholder="不翻译"
                     clearable
-                    filterable
-                    style="width: 100%"
-                    @update:model-value="update(index, { dictionaryId: $event ?? undefined })"
+                    search-placeholder="搜索词典…"
+                    @update:model-value="setDictionary(index, $event)"
                   />
-                </el-form-item>
+                </Field>
 
-                <el-form-item v-if="mapping.dictionaryId" label="展示模板">
-                  <el-input
+                <Field v-if="mapping.dictionaryId" label="展示模板" label-width="76px">
+                  <Input
                     :model-value="mapping.template ?? ''"
                     placeholder="留空显示释义，例：&#123;&#123;value&#125;&#125; - &#123;&#123;meaning&#125;&#125;"
                     @update:model-value="update(index, { template: $event })"
                   />
-                </el-form-item>
+                </Field>
               </div>
             </section>
-          </el-form>
+          </div>
         </div>
       </div>
       </div>
@@ -156,10 +182,6 @@ onMounted(() => {
 /* 具体排版规范见 styles/template-panels.css，这里只保留面板级微调 */
 .tpl-panel-list {
   padding: 2px 0;
-}
-
-.tpl-panel-list :deep(.el-collapse-item__header) {
-  font-size: var(--app-font-size);
 }
 
 .tpl-master { display: grid; grid-template-columns: minmax(180px, 26%) minmax(0, 1fr); min-height: 300px; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: color-mix(in srgb, var(--bg-color) 88%, var(--brand-color)); }

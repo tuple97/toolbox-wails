@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import Combobox from '@/components/ui/Combobox.vue'
 import ConnectionOption from '@/components/ConnectionOption.vue'
 import { connectionOptionLabel } from '@/utils/connectionDisplay'
 import type { DBConnection } from '@/types'
@@ -8,14 +9,16 @@ import type { DBConnection } from '@/types'
  * 数据源（数据库连接）下拉。
  *
  * 下拉项与**选中项**共用 `ConnectionOption` 渲染，样式完全一致：
- * 选中项走 Element Plus 的 `label` 插槽（2.7.4+，本项目 2.14.5 可用），
- * 否则选中后只会显示纯文本 label，与下拉里的色点/标签对不上。
+ * 选完之后看到的就是列表里的那一行（色点 + 名称 + 环境标签 + 只读标签），
+ * 而不是只剩一句纯文本。
  *
  * 各处需要「选连接」时都用它，避免每个页面各写一套下拉。
+ *
+ * 值在组件内部是**字符串**（Combobox 承载的是「值」，统一用 string 做 v-model），
+ * 对外仍是 `number | null` —— 转换只在这一处，调用方不受影响。
  */
-
 const props = withDefaults(defineProps<{
-  /** 选中的连接 ID */
+  /** 选中的连接 ID；null 表示未选择 */
   modelValue: number | null
   /** 可选连接列表 */
   connections: DBConnection[]
@@ -37,38 +40,49 @@ const emit = defineEmits<{
   (e: 'update:modelValue', value: number | null): void
 }>()
 
-/** 双向绑定；清空时统一归为 null */
+/** 双向绑定：空串 ↔ null，其余按数字传出去 */
 const selected = computed({
-  get: () => props.modelValue,
-  set: (value: number | null | undefined) => emit('update:modelValue', value ?? null),
+  get: () => (props.modelValue === null ? '' : String(props.modelValue)),
+  set: (value: string) => emit('update:modelValue', value === '' ? null : Number(value)),
 })
 
-/** 选中项对应的连接对象；据此渲染与下拉一致的选中样式 */
-const selectedConnection = computed(
-  () => props.connections.find(item => item.id === selected.value) ?? null,
-)
+/** 选项：值为连接 id，label 供搜索匹配（列表里显示的是 ConnectionOption 那一行） */
+const options = computed(() => props.connections.map(conn => ({
+  label: connectionOptionLabel(conn),
+  value: String(conn.id),
+})))
+
+/** 按选项值取连接对象（`#option` / `#value` 插槽据此渲染） */
+function connectionOf(value: string): DBConnection | null {
+  return props.connections.find(conn => String(conn.id) === value) ?? null
+}
 </script>
 
 <template>
-  <el-select
+  <Combobox
     v-model="selected"
+    :options="options"
     :placeholder="placeholder"
     :clearable="clearable"
     :filterable="filterable"
+    search-placeholder="搜索连接…"
     :style="width ? { width } : undefined"
   >
-    <!-- 选中项：与下拉项同样的色点 + 环境标签 + 只读标签 -->
-    <template #label>
-      <ConnectionOption v-if="selectedConnection" :connection="selectedConnection" />
+    <!-- 选中项：与下拉项同样的色点 + 环境标签 + 只读标签（w-full 让「类型」贴到最右） -->
+    <template #value="{ option }">
+      <ConnectionOption
+        v-if="connectionOf(option.value)"
+        class="w-full"
+        :connection="connectionOf(option.value) as DBConnection"
+      />
     </template>
 
-    <el-option
-      v-for="conn in connections"
-      :key="conn.id"
-      :label="connectionOptionLabel(conn)"
-      :value="conn.id"
-    >
-      <ConnectionOption :connection="conn" />
-    </el-option>
-  </el-select>
+    <template #option="{ option }">
+      <ConnectionOption
+        v-if="connectionOf(option.value)"
+        class="w-full"
+        :connection="connectionOf(option.value) as DBConnection"
+      />
+    </template>
+  </Combobox>
 </template>

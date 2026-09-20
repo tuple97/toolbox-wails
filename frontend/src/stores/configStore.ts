@@ -17,6 +17,13 @@ const APP_THEME_STORAGE_KEY = 'toolbox-theme'
 /** 配置项默认值，与后端 defaultSettings 保持一致 */
 const DEFAULTS: Record<SettingKey, string> = {
   theme: 'dark',
+  // 界面缩放比例（百分比，100 = 100%）：基准字号 13px 由它放大/缩小
+  ui_scale: '100',
+  /*
+   * 历史配置项：这几个不再作为设置页里的独立选项 —— 字号、控件高度、代码字号
+   * 都已由「缩放比例」统一承担。保留默认值与运行时读取路径（applyControlScale、
+   * CodeEditor 的字号 calc），于是磁盘上已有的自定义值仍然生效。
+   */
   font_size: '13',
   control_size: 'default',
   editor_font_size: '13',
@@ -47,10 +54,19 @@ export const useConfigStore = defineStore('config', () => {
     return raw === 'light' || raw === 'midnight' || raw === 'idea' ? raw : 'dark'
   })
 
-  /** 全局字体大小（px） */
-  const fontSize = computed(() => toNumber(values.value.font_size, 13))
+  /**
+   * 界面缩放比例（1 = 100%）。
+   *
+   * 兜住脏值：设置面板只给 80%~150%，手改配置也不该把界面搞成不可用。
+   * 它是个**乘数**：根字号（13px × 它）、Tailwind 的字号 / 间距阶梯，
+   * 以及自绘控件的高度都从它算出来。
+   */
+  const uiScale = computed(() => {
+    const raw = toNumber(values.value.ui_scale, 100)
+    return Math.min(Math.max(raw, 60), 200) / 100
+  })
 
-  /** Element Plus 控件尺寸 */
+  /** 控件大小：历史配置项（设置页已不再提供，仅保留取值路径以兼容旧数据） */
   const controlSize = computed<ControlSize>(() => {
     const size = values.value.control_size
     return size === 'large' || size === 'small' ? size : 'default'
@@ -126,8 +142,8 @@ export const useConfigStore = defineStore('config', () => {
       case 'theme':
         applyTheme()
         break
-      case 'font_size':
-        applyFontSize()
+      case 'ui_scale':
+        applyUiScale()
         break
       case 'control_size':
         applyControlScale()
@@ -173,7 +189,7 @@ export const useConfigStore = defineStore('config', () => {
     finally {
       loaded.value = true
       applyTheme()
-      applyFontSize()
+      applyUiScale()
       applyControlScale()
       applyFontFamily()
     }
@@ -206,17 +222,22 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
-  /** 应用全局字体大小：写入根节点 CSS 变量，供各处引用 */
-  function applyFontSize() {
-    document.documentElement.style.setProperty('--app-font-size', `${fontSize.value}px`)
+  /**
+   * 应用缩放比例：只写一个 `--app-scale` 乘数。
+   *
+   * 根字号（13px × 它）、字号阶梯、Tailwind 的 rem 类（字号 / 间距 / 圆角）
+   * 都由它算出来，所以不需要在这里逐个改字号 ——
+   * 漏掉一个就会出现「一半大一半没变」。
+   */
+  function applyUiScale() {
+    document.documentElement.style.setProperty('--app-scale', String(uiScale.value))
   }
 
   /**
    * 应用控件大小：写入倍率变量。
    *
-   * 全局 CSS（global.css）用它缩放 Element Plus 的三档控件高度，
-   * 这样即使组件上写死了 size="small" 也会跟着一起变；
-   * `<ElConfigProvider :size>` 则负责让组件选中对应档位的变量。
+   * 自绘组件（`components/ui/*`）在控件高度上乘 `--app-control-scale`，
+   * 所以写一个变量就能让所有控件一起变；字号仍由缩放比例统一承担。
    */
   function applyControlScale() {
     const scale = controlSize.value === 'small' ? 0.9 : controlSize.value === 'large' ? 1.1 : 1
@@ -235,7 +256,7 @@ export const useConfigStore = defineStore('config', () => {
     error,
     // getters
     theme,
-    fontSize,
+    uiScale,
     controlSize,
     editorFontSize,
     editorFontFamily,
@@ -249,7 +270,7 @@ export const useConfigStore = defineStore('config', () => {
     resetAll,
     load,
     applyTheme,
-    applyFontSize,
+    applyUiScale,
     applyControlScale,
     applyFontFamily,
   }

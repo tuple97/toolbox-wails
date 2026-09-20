@@ -11,6 +11,7 @@
  * （这样系统提示不会再弹出），延时后显示 `#app-tip`；指针离开时恢复 title，
  * 保证语义与无障碍信息不丢。样式见 styles/global.css 的 `#app-tip`。
  */
+import { buildColumnHoverCard } from '@/utils/sql/columnHoverCard'
 
 /** 显示延时（毫秒）：太短会划过就闪，太长会显得迟钝 */
 const SHOW_DELAY = 400
@@ -18,6 +19,15 @@ const SHOW_DELAY = 400
 const TIP_ID = 'app-tip'
 /** 暂存原生提示文案的属性名 */
 const STASH_ATTR = 'data-app-tip'
+/**
+ * 富卡片模式：元素带 `data-col-name` 时显示「列悬停卡片」（列名 / 类型 /
+ * 来源表 / 描述，见 utils/sql/columnHoverCard.ts），其余数据用
+ * `data-col-type` / `data-col-table` / `data-col-comment` 带上。
+ * 结果表头用它 —— 纯文本 title 表达不了「列名大、其余小、图标带色」的层次。
+ */
+const CARD_ATTR = 'data-col-name'
+/** 富卡片模式下加在小提示容器上的类（让出表面，卡片自带） */
+const CARD_CLASS = 'app-tip--card'
 
 let tip: HTMLDivElement | null = null
 let timer: number | null = null
@@ -51,6 +61,7 @@ function hide() {
     }
     current = null
   }
+  tip?.classList.remove(CARD_CLASS)
   tip?.setAttribute('hidden', '')
 }
 
@@ -87,6 +98,31 @@ function show(el: HTMLElement) {
   })
 }
 
+/** 显示列悬停卡片（富卡片模式；数据来自元素上的 data-col-* 属性） */
+function showCard(el: HTMLElement) {
+  const node = ensureTip()
+  const name = el.dataset.colName
+  if (!name) {
+    return
+  }
+  node.classList.add(CARD_CLASS)
+  node.replaceChildren(
+    buildColumnHoverCard({
+      name,
+      dataType: el.dataset.colType || undefined,
+      table: el.dataset.colTable || undefined,
+      comment: el.dataset.colComment || undefined,
+    }, { surface: true }),
+  )
+  node.hidden = false
+  place(el)
+  requestAnimationFrame(() => {
+    if (current === el) {
+      place(el)
+    }
+  })
+}
+
 /**
  * 安装全局代理（在应用挂载后调用一次即可）。
  *
@@ -100,8 +136,23 @@ export function installTitleTooltip() {
       return
     }
 
-    const el = target.closest<HTMLElement>('[title]')
+    /*
+     * 两种提示取**离目标最近**的那个：卡片区域里嵌着带 title 的小元素时
+     * （如主键图标的「主键」），就近的 title 赢，不至于被卡片盖掉。
+     */
+    const el = target.closest<HTMLElement>(`[${CARD_ATTR}], [title]`)
     if (!el || el === current) {
+      return
+    }
+
+    if (el.hasAttribute(CARD_ATTR)) {
+      hide()
+      current = el
+      timer = window.setTimeout(() => {
+        if (current === el) {
+          showCard(el)
+        }
+      }, SHOW_DELAY)
       return
     }
 
@@ -128,7 +179,7 @@ export function installTitleTooltip() {
       return
     }
 
-    const el = target.closest<HTMLElement>(`[${STASH_ATTR}]`)
+    const el = target.closest<HTMLElement>(`[${STASH_ATTR}],[${CARD_ATTR}]`)
     if (!el || el !== current) {
       return
     }

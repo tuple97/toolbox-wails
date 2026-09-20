@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import Button from '@/components/ui/Button.vue'
+import DataTable from '@/components/ui/DataTable.vue'
+import Dialog from '@/components/ui/Dialog.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import Field from '@/components/ui/Field.vue'
+import Icon from '@/components/ui/Icon.vue'
+import Input from '@/components/ui/Input.vue'
+import { askConfirm } from '@/utils/confirm'
+import { notify } from '@/utils/notify'
+import type { TableColumn } from '@/utils/tableLayout'
 import {
   fetchDictionaries,
   fetchDictionaryItems,
@@ -73,7 +82,7 @@ async function loadDictionaries(keepSelection = true) {
     }
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
   finally {
     loading.value = false
@@ -91,7 +100,7 @@ async function loadItems() {
     draftItems.value = await fetchDictionaryItems(selectedId.value)
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
     draftItems.value = []
   }
   finally {
@@ -122,13 +131,13 @@ function openEditDictionary(dict: Dictionary) {
 
 async function handleSaveDictionary() {
   if (!dictForm.name.trim()) {
-    ElMessage.warning('请输入词典名称')
+    notify.warning('请输入词典名称')
     return
   }
   saving.value = true
   try {
     const id = await persistDictionary({ ...dictForm })
-    ElMessage.success('词典已保存')
+    notify.success('词典已保存')
     dictDialogVisible.value = false
     // 新建的词典自动选中
     if (!dictForm.id && id) {
@@ -139,7 +148,7 @@ async function handleSaveDictionary() {
     await refreshCache()
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
   finally {
     saving.value = false
@@ -147,31 +156,55 @@ async function handleSaveDictionary() {
 }
 
 async function handleDeleteDictionary(dict: Dictionary) {
+  /*
+   * 取消是正常分支：旧写法用 `catch (e) { if (e !== 'cancel') ... }`
+   * 靠魔法字符串区分「用户取消」与「真出错」，写错一个字就会把真错误吞掉。
+   */
+  const confirmed = await askConfirm({
+    message: `确定删除词典「${dict.name}」及其全部条目吗？已绑定该词典的字段映射会失效。`,
+    title: '删除词典',
+    confirmText: '删除',
+    tone: 'danger',
+  })
+  if (!confirmed) {
+    return
+  }
+
   try {
-    await ElMessageBox.confirm(
-      `确定删除词典「${dict.name}」及其全部条目吗？已绑定该词典的字段映射会失效。`,
-      '删除词典',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-    )
     await removeDictionary(dict.id)
-    ElMessage.success('已删除')
+    notify.success('已删除')
     await loadDictionaries(false)
     await loadItems()
     await refreshCache()
   }
   catch (e) {
-    if (e !== 'cancel') {
-      ElMessage.error(e instanceof Error ? e.message : String(e))
-    }
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
 // ------------------------------------------------------------ 条目编辑
 
+/**
+ * 条目表列。
+ *
+ * 三个字段都是「可编辑单元格」（插槽里放输入框），操作列固定 80px 放删除按钮；
+ * 其余按 150 : 150 : 180 的比例分剩余空间 —— 备注最长，给的权重最大。
+ */
+const ITEM_COLUMNS: TableColumn[] = [
+  { key: 'value', label: '原始值', minWidth: 150 },
+  { key: 'meaning', label: '显示文本', minWidth: 150 },
+  { key: 'description', label: '备注', minWidth: 180 },
+  { key: 'actions', label: '操作', width: 80, align: 'center' },
+]
+
+/** 条目表空态：把「正在读取」与「一条都没有」分开说（旧代码是一层加载遮罩） */
+const itemsEmptyText = computed(() =>
+  itemsLoading.value ? '正在读取条目…' : '暂无条目，点击「添加条目」')
+
 /** 新增一行空条目 */
 function addItem() {
   if (!selectedId.value) {
-    ElMessage.warning('请先选择或新建词典')
+    notify.warning('请先选择或新建词典')
     return
   }
   draftItems.value.push({
@@ -196,19 +229,19 @@ async function handleSaveItems() {
   }
   const invalid = draftItems.value.some(item => !item.value.trim())
   if (invalid) {
-    ElMessage.warning('存在「原始值」为空的条目，请填写或删除')
+    notify.warning('存在「原始值」为空的条目，请填写或删除')
     return
   }
 
   saving.value = true
   try {
     await persistDictionaryItems(selectedId.value, draftItems.value)
-    ElMessage.success('条目已保存')
+    notify.success('条目已保存')
     await loadItems()
     await refreshCache()
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
   finally {
     saving.value = false
@@ -244,16 +277,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
         <small>把查询结果中的原始值翻译成可读文本，供字段映射绑定</small>
       </div>
 
-      <el-button type="primary" @click="openCreateDictionary">
-        <el-icon><Plus /></el-icon>
+      <Button @click="openCreateDictionary">
+        <Icon name="plus" />
         <span>新建词典</span>
-      </el-button>
+      </Button>
     </header>
 
     <div class="dict-view__body">
       <!-- 左：词典列表 -->
       <aside class="dict-view__list">
-        <ul v-loading="loading" class="dict-view__items">
+        <ul class="dict-view__items">
           <li
             v-for="dict in dictionaries"
             :key="dict.id"
@@ -265,24 +298,22 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
               <span class="dict-view__item-name">{{ dict.name }}</span>
               <span class="dict-view__item-desc">{{ dict.description || '无描述' }}</span>
             </div>
-            <el-icon
+            <Icon
+              name="pencil"
               class="dict-view__item-edit"
               title="编辑"
               @click.stop="openEditDictionary(dict)"
-            >
-              <Edit />
-            </el-icon>
-            <el-icon
+            />
+            <Icon
+              name="trash"
               class="dict-view__item-del"
               title="删除"
               @click.stop="handleDeleteDictionary(dict)"
-            >
-              <Delete />
-            </el-icon>
+            />
           </li>
 
-          <li v-if="!dictionaries.length && !loading" class="dict-view__empty">
-            暂无词典，点击右上角新建
+          <li v-if="!dictionaries.length" class="dict-view__empty">
+            {{ loading ? '正在读取词典…' : '暂无词典，点击右上角新建' }}
           </li>
         </ul>
       </aside>
@@ -295,84 +326,72 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
             <small>{{ draftItems.length }} 条</small>
 
             <div class="dict-view__detail-actions">
-              <el-button size="small" @click="addItem">
-                <el-icon><Plus /></el-icon>
+              <Button size="sm" variant="secondary" @click="addItem">
+                <Icon name="plus" />
                 <span>添加条目</span>
-              </el-button>
-              <el-button
-                size="small"
-                type="primary"
-                :loading="saving"
-                @click="handleSaveItems"
-              >
+              </Button>
+              <Button size="sm" :loading="saving" @click="handleSaveItems">
                 保存条目
-              </el-button>
+              </Button>
             </div>
           </div>
 
-          <el-table
-            v-loading="itemsLoading"
-            :data="draftItems"
-            size="small"
-            height="100%"
-            empty-text="暂无条目，点击「添加条目」"
+          <!-- 可编辑表格：单元格里直接放输入框，改完点「保存条目」一起提交 -->
+          <DataTable
+            :columns="ITEM_COLUMNS"
+            :rows="draftItems"
+            size="sm"
+            class="min-h-0 flex-1"
+            :empty-text="itemsEmptyText"
           >
-            <el-table-column label="原始值" min-width="150">
-              <template #default="{ row }">
-                <el-input v-model="row.value" size="small" placeholder="如 1" />
-              </template>
-            </el-table-column>
-            <el-table-column label="显示文本" min-width="150">
-              <template #default="{ row }">
-                <el-input v-model="row.meaning" size="small" placeholder="如 启用" />
-              </template>
-            </el-table-column>
-            <el-table-column label="备注" min-width="180">
-              <template #default="{ row }">
-                <el-input v-model="row.description" size="small" placeholder="可选" />
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="80" fixed="right">
-              <template #default="{ $index }">
-                <el-button link type="danger" @click="removeItem($index)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
+            <template #cell-value="{ row }">
+              <Input v-model="row.value" size="sm" placeholder="如 1" />
+            </template>
+            <template #cell-meaning="{ row }">
+              <Input v-model="row.meaning" size="sm" placeholder="如 启用" />
+            </template>
+            <template #cell-description="{ row }">
+              <Input v-model="row.description" size="sm" placeholder="可选" />
+            </template>
+            <template #cell-actions="{ index }">
+              <Button variant="ghost" size="sm" class="text-danger" @click="removeItem(index)">
+                删除
+              </Button>
+            </template>
+          </DataTable>
         </template>
 
-        <el-empty v-else description="请在左侧选择或新建词典" />
+        <EmptyState v-else description="请在左侧选择或新建词典" />
       </section>
     </div>
 
     <!-- 词典编辑弹窗 -->
-    <el-dialog
+    <Dialog
       v-model="dictDialogVisible"
       :title="dictForm.id ? '编辑词典' : '新建词典'"
-      width="460px"
-      align-center
-      append-to-body
+      :width="460"
     >
-      <el-form label-width="80px" label-position="right">
-        <el-form-item label="名称" required>
-          <el-input v-model="dictForm.name" placeholder="如：设备状态" />
-        </el-form-item>
-        <el-form-item label="描述">
-          <el-input
+      <div class="flex flex-col gap-1">
+        <Field label="名称" required label-width="80px">
+          <Input v-model="dictForm.name" placeholder="如：设备状态" />
+        </Field>
+        <Field label="描述" label-width="80px">
+          <Input
             v-model="dictForm.description"
             type="textarea"
             :rows="2"
             placeholder="用途说明，可选"
           />
-        </el-form-item>
-      </el-form>
+        </Field>
+      </div>
 
       <template #footer>
-        <el-button @click="dictDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSaveDictionary">
+        <Button variant="secondary" size="sm" @click="dictDialogVisible = false">取消</Button>
+        <Button size="sm" :loading="saving" @click="handleSaveDictionary">
           保存
-        </el-button>
+        </Button>
       </template>
-    </el-dialog>
+    </Dialog>
   </div>
 </template>
 
@@ -549,17 +568,5 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
   margin-left: auto;
 }
 
-/*
- * Element Plus 会给「相邻按钮」加 margin-left: 12px（.el-button + .el-button），
- * 与这里的 gap 叠加后变成 20px（比同一行其它内容的 8px 宽）。
- * 本项目按钮行一律用 flex + gap 排版，所以清掉默认外边距。
- */
-.dict-view__detail-actions :deep(.el-button + .el-button) {
-  margin-left: 0;
-}
-
-.dict-view__detail :deep(.el-table) {
-  flex: 1;
-  min-height: 0;
-}
+/* 条目表的尺寸由 DataTable 自己的 flex 布局承担（不再需要撑高的 EP 覆盖） */
 </style>

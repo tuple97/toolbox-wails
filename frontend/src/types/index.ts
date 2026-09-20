@@ -288,6 +288,8 @@ export interface ColumnMeta {
   type: string
   /** 字段注释（后端从数据字典反查；表达式列 / 别名列 / 非 MySQL 方言为空） */
   comment: string
+  /** 来源表（注释反查时一并带出；表达式列 / 别名列 / 非 MySQL 方言为空） */
+  table?: string
 }
 
 /** 查询结果，与后端 services.QueryResult 对应 */
@@ -295,6 +297,8 @@ export interface QueryResult {
   columns: ColumnMeta[]
   rows: Record<string, unknown>[]
   sql: string
+  /** 实际生效的库 / 模式（会话上钉住的那个）；行 SQL 生成与展示据此核对 */
+  database?: string
   elapsedMs: number
   rowCount: number
   truncated: boolean
@@ -332,6 +336,8 @@ export interface TemplateExecuteRequest {
   templateId: number
   connId: number
   variables: Record<string, unknown>
+  /** 库 / 模式；空表示用连接配置里的默认库（后端会钉在会话上） */
+  database?: string
   /** 页码，从 1 开始；小于等于 0 表示本次不分页 */
   page?: number
   /** 每页条数；小于等于 0 时取后端默认值 */
@@ -362,6 +368,9 @@ export interface Setting {
 /** 全局配置的键名 */
 export type SettingKey =
   | 'theme'
+  /** 界面缩放比例（百分比；基准字号 13px 由它放大缩小） */
+  | 'ui_scale'
+  /** 历史项：字号 / 控件大小 / 代码字号已由「缩放比例」统一承担，保留以兼容旧配置 */
   | 'font_size'
   | 'control_size'
   | 'editor_font_size'

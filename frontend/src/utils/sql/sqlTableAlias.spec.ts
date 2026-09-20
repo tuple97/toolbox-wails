@@ -116,8 +116,9 @@ describe('自动别名：推导规则', () => {
     expect(aliasForTable('')).toBe('')
   })
 
-  it('插入文本：表名带引用符、别名不带', () => {
-    expect(aliasedTableText('`users`', 'u')).toBe('`users` u')
+  it('插入文本：表名带引用符、别名不带、中间写 AS', () => {
+    expect(aliasedTableText('`users`', 'u')).toBe('`users` AS u')
+    // 推导不出别名时不能留下半截 ` AS `
     expect(aliasedTableText('`users`', '')).toBe('`users`')
   })
 })
@@ -128,42 +129,44 @@ describe('自动别名：开关与位置', () => {
     expect(applyOf('SELECT * FROM |', 'users')?.insert).toBe('`users`')
   })
 
-  it('开启后：带别名的候选排在前面，并给出「不加别名」的一条', () => {
+  it('开启后：每张表只给一条带别名的候选（不再重复一条不带的）', () => {
     const labels = labelsOf('SELECT * FROM |', ALIAS_ON)
-    expect(labels).toContain('users u')
-    expect(labels).toContain('order_items oi')
-    expect(labels).toContain('t_device_info di')
-    expect(labels).toContain('users')
+    expect(labels).toContain('users AS u')
+    expect(labels).toContain('order_items AS oi')
+    expect(labels).toContain('t_device_info AS di')
+    // 同一张表不该同时出现「带别名」与「不带别名」两条
+    expect(labels).not.toContain('users')
+    expect(labels).not.toContain('order_items')
 
     const items = itemsOf('SELECT * FROM |', ALIAS_ON)
-    const withAlias = items.find(item => item.label === 'users u')
-    const plain = items.find(item => item.label === 'users')
-    expect(withAlias?.boost).toBeGreaterThan(plain?.boost ?? 0)
-    expect(withAlias?.detail).toContain('自动别名 u')
+    expect(items.filter(item => item.label.startsWith('users')).map(item => item.label))
+      .toEqual(['users AS u'])
+    expect(items.find(item => item.label === 'users AS u')?.detail).toContain('自动别名 u')
   })
 
-  it('带别名的候选项一次插入表名与别名', () => {
-    expect(applyOf('SELECT * FROM |', 'users u', ALIAS_ON)?.insert).toBe('`users` u')
-    expect(applyOf('SELECT * FROM |', 'order_items oi', ALIAS_ON)?.insert).toBe('`order_items` oi')
+  it('带别名的候选项一次插入表名、AS 与别名', () => {
+    expect(applyOf('SELECT * FROM |', 'users AS u', ALIAS_ON)?.insert).toBe('`users` AS u')
+    expect(applyOf('SELECT * FROM |', 'order_items AS oi', ALIAS_ON)?.insert)
+      .toBe('`order_items` AS oi')
   })
 
   it('JOIN 之后同样给别名', () => {
     const labels = labelsOf('SELECT * FROM users u JOIN |', ALIAS_ON)
-    expect(labels).toContain('order_items oi')
+    expect(labels).toContain('order_items AS oi')
   })
 
   it('INSERT / UPDATE 之后不给别名（那里写别名是语法错误）', () => {
     const labels = labelsOf('INSERT INTO |', ALIAS_ON)
     expect(labels).toContain('users')
-    expect(labels).not.toContain('users u')
+    expect(labels).not.toContain('users AS u')
 
     const update = labelsOf('UPDATE |', ALIAS_ON)
     expect(update).toContain('users')
-    expect(update).not.toContain('users u')
+    expect(update).not.toContain('users AS u')
   })
 
   it('列位置不受影响（表候选本来就不在列位置给）', () => {
     const labels = labelsOf('SELECT * FROM users WHERE |', ALIAS_ON)
-    expect(labels).not.toContain('users u')
+    expect(labels).not.toContain('users AS u')
   })
 })

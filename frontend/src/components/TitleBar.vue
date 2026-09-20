@@ -5,6 +5,7 @@ import {
   minimiseWindow,
   toggleMaximiseWindow,
 } from '@/api/window'
+import Icon from '@/components/ui/Icon.vue'
 import logoUrl from '@/assets/images/logo.png'
 
 withDefaults(defineProps<{
@@ -130,7 +131,7 @@ onBeforeUnmount(() => {
         title="设置"
         @click="emit('settings')"
       >
-        <el-icon><Setting /></el-icon>
+        <Icon name="settings" />
       </button>
 
       <button
@@ -256,8 +257,12 @@ onBeforeUnmount(() => {
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-/* 窗口控制按钮使用内联 svg，统一线宽与尺寸 */
-.titlebar__btn > svg {
+/*
+ * 窗口控制按钮使用内联 svg，统一线宽与尺寸。
+ * 排除 `.app-icon`：那是自绘图标组件（设置按钮用），尺寸归它自己按字号算；
+ * 不排除的话这条规则会把它压成 12px 的窗口控制按钮大小。
+ */
+.titlebar__btn > svg:not(.app-icon) {
   width: calc(12px * var(--app-control-scale));
   height: calc(12px * var(--app-control-scale));
   fill: none;
@@ -265,8 +270,8 @@ onBeforeUnmount(() => {
   stroke-width: 1.1;
 }
 
-/* Element Plus 图标按钮（模板、设置）保持字号大小 */
-.titlebar__btn > .el-icon {
+/* 自绘图标按钮（设置）保持字号大小 */
+.titlebar__btn > .app-icon {
   font-size: var(--app-font-size-xl);
 }
 

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
+import Button from '@/components/ui/Button.vue'
+import Dialog from '@/components/ui/Dialog.vue'
+import Icon from '@/components/ui/Icon.vue'
 import { TOOLS, toolOf } from '@/utils/tools'
 import { useConfigStore } from '@/stores/configStore'
 import type { ToolDefinition } from '@/utils/tools'
@@ -32,6 +35,11 @@ const dialogVisible = computed({
   get: () => props.visible,
   set: (value: boolean) => emit('update:visible', value),
 })
+
+/** 工具图标名（注册表里没有对应工具时给问号图标，模板里就不必到处判空） */
+function iconOf(type: string): string {
+  return toolOf(type)?.icon ?? 'question'
+}
 
 // ------------------------------------------------------------ 配置（排序 / 显示）
 
@@ -147,13 +155,7 @@ function handlePick(type: ToolType) {
 </script>
 
 <template>
-  <el-dialog
-    v-model="dialogVisible"
-    title="新建标签"
-    width="680px"
-    align-center
-    class="tool-picker"
-  >
+  <Dialog v-model="dialogVisible" title="新建标签" :width="680">
     <p class="tool-picker__hint">
       每次选择都会新建一个实例标签；首页、连接管理、词典等单例功能由左侧菜单直接切换，不出现在这里。
       <span v-if="editing" class="tool-picker__hint-editing">
@@ -181,11 +183,9 @@ function handlePick(type: ToolType) {
           :title="isDraftHidden(type) ? '显示工具' : '隐藏工具'"
           @click.stop="toggleDraftHidden(type)"
         >
-          <el-icon><Hide v-if="isDraftHidden(type)" /><View v-else /></el-icon>
+          <Icon :name="isDraftHidden(type) ? 'eye-off' : 'eye'" />
         </button>
-        <el-icon class="tool-picker__icon">
-          <component :is="toolOf(type)?.icon" />
-        </el-icon>
+        <Icon class="tool-picker__icon" :name="iconOf(type)" />
         <span class="tool-picker__name">{{ toolOf(type)?.label }}</span>
         <span class="tool-picker__desc">{{ toolOf(type)?.description }}</span>
       </div>
@@ -200,9 +200,7 @@ function handlePick(type: ToolType) {
         type="button"
         @click="handlePick(tool.type)"
       >
-        <el-icon class="tool-picker__icon">
-          <component :is="tool.icon" />
-        </el-icon>
+        <Icon class="tool-picker__icon" :name="tool.icon" />
         <span class="tool-picker__name">{{ tool.label }}</span>
         <span class="tool-picker__desc">{{ tool.description }}</span>
       </button>
@@ -231,13 +229,13 @@ function handlePick(type: ToolType) {
             title="编辑工具排序与显示"
             @click="enterEdit"
           >
-            <el-icon><Edit /></el-icon>
+            <Icon name="pencil" />
           </button>
         </div>
-        <el-button @click="dialogVisible = false">关闭</el-button>
+        <Button variant="secondary" size="sm" @click="dialogVisible = false">关闭</Button>
       </div>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <style scoped>

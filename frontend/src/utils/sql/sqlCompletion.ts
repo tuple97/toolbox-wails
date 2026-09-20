@@ -98,7 +98,6 @@ import {
   renderIdent,
 } from './sqlCompletionInsert'
 import { MAX_OPTIONS, pooledColumnItems } from './sqlCompletionColumnPool'
-import { aliasForTable, aliasedTableText } from './sqlTableAlias'
 import {
   readTemplateContext,
   scriptBundle,

@@ -43,6 +43,8 @@ type ColumnMeta struct {
 	Type string `json:"type"`
 	// Comment 字段注释（从数据字典反查；表达式列 / 别名列 / 非 MySQL 方言为空）
 	Comment string `json:"comment"`
+	// Table 来源表（注释反查时一并带出；表达式列 / 别名列 / 非 MySQL 方言为空）
+	Table string `json:"table"`
 }
 
 // 分页参数的取值边界：与仓储层的落库约束保持一致。
@@ -76,6 +78,8 @@ type QueryResult struct {
 	PageSize int `json:"pageSize"`
 	// PageCount 总页数；未分页时为 1
 	PageCount int `json:"pageCount"`
+	// Database 实际生效的库 / 模式（会话上钉住的那个），前端展示与后续操作用于核对
+	Database string `json:"database"`
 }
 
 // ExecuteRequest 描述一次查询请求。
@@ -85,6 +89,9 @@ type ExecuteRequest struct {
 	Variables   map[string]any `json:"variables"`
 	PreScript   string         `json:"preScript"`
 	PostScript  string         `json:"postScript"`
+	// Database 本次查询使用的库 / 模式；空表示用连接配置里的默认库。
+	// 与执行器的语义一致：会把它「钉」在会话上，而不是只改 DSN。
+	Database string `json:"database"`
 	// Page 页码，从 1 开始；小于等于 0 表示不分页
 	Page int `json:"page"`
 	// PageSize 每页条数；小于等于 0 时取默认值
@@ -134,6 +141,22 @@ func (s *DBService) Execute(ctx context.Context, req ExecuteRequest) (*QueryResu
 	runCtx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
+	/*
+	 * 固定会话 + 钉库：前端选了库（或连接配了默认库）时，把它「钉」在会话上，
+	 * 而不是指望 DSN 的 dbname —— 语义与执行器完全一致（见 ExecuteStatement）。
+	 * 统计总数、取数、注释反查必须都在这条会话上，否则各自可能落在不同的库。
+	 */
+	session, err := db.Conn(runCtx)
+	if err != nil {
+		return nil, fmt.Errorf("获取数据库连接失败: %w", err)
+	}
+	defer session.Close()
+
+	effectiveDB, err := pinDatabase(runCtx, session, *conn, req.Database)
+	if err != nil {
+		return nil, err
+	}
+
 	// 3.1 分页：先确定总量，再按页取数。
 	//
 	// 分页判定与改写走共用的 preparePagination（哪些语句能分页、怎么拼都由它决定），
@@ -152,7 +175,7 @@ func (s *DBService) Execute(ctx context.Context, req ExecuteRequest) (*QueryResu
 	if pageSize > 0 {
 		page = req.Page
 		if req.CountTotal || req.Total <= 0 {
-			total, err = queryTotal(runCtx, db, countableSQL)
+			total, err = queryTotal(runCtx, session, countableSQL)
 			if err != nil {
 				return nil, err
 			}
@@ -164,18 +187,19 @@ func (s *DBService) Execute(ctx context.Context, req ExecuteRequest) (*QueryResu
 	// Total 保持「本次行数」由下面回填。
 
 	start := time.Now()
-	rows, columns, truncated, err := queryRows(runCtx, db, finalSQL)
+	rows, columns, truncated, err := queryRows(runCtx, session, finalSQL)
 	if err != nil {
 		return nil, err
 	}
 	elapsed := time.Since(start).Milliseconds()
 
 	/*
-	 * 结果列注释：查一次数据字典补上（独立短超时，失败静默跳过）。
-	 * 表名取「未加分页的原文」，与结果列同源。
+	 * 结果列注释与来源表：查一次数据字典补上（独立短超时，失败静默跳过）。
+	 * 表名取「未加分页的原文」，与结果列同源；库用**实际生效的库** ——
+	 * 用连接默认库的话，没配默认库的连接会查空（模板查询曾因此没有描述）。
 	 */
 	commentCtx, cancelComments := context.WithTimeout(ctx, metaTimeout)
-	annotateColumnComments(commentCtx, db, conn.DBType, conn.Database, countableSQL, columns)
+	annotateColumnComments(commentCtx, session, conn.DBType, effectiveDB, countableSQL, columns)
 	cancelComments()
 
 	// 4. 后置脚本：对结果集做加工
@@ -189,6 +213,7 @@ func (s *DBService) Execute(ctx context.Context, req ExecuteRequest) (*QueryResu
 		Columns:   columns,
 		Rows:      post.Rows,
 		SQL:       finalSQL,
+		Database:  effectiveDB,
 		ElapsedMs: elapsed,
 		RowCount:  rowCount,
 		Truncated: truncated,
@@ -281,6 +306,8 @@ type TemplateExecuteRequest struct {
 	TemplateID int64          `json:"templateId"`
 	ConnID     int64          `json:"connId"`
 	Variables  map[string]any `json:"variables"`
+	// Database 本次查询使用的库 / 模式；空表示用连接配置里的默认库
+	Database string `json:"database"`
 	// Page 请求的页码，从 1 开始；小于等于 0 表示本次不分页
 	Page int `json:"page"`
 	// PageSize 每页条数；小于等于 0 时取默认值
@@ -339,6 +366,7 @@ func (s *DBService) ExecuteTemplateQuery(
 		Variables:   req.Variables,
 		PreScript:   tpl.PreScript,
 		PostScript:  tpl.PostScript,
+		Database:    req.Database,
 		Page:        page,
 		PageSize:    pageSize,
 		Total:       req.Total,

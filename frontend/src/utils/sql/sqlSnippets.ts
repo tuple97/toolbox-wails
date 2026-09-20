@@ -21,7 +21,13 @@ export interface SqlSnippet {
   code: string
   /** 用法说明 */
   description: string
-  /** 真实场景示例 */
+  /**
+   * 示例。
+   *
+   * 表名 / 列名一律用 `table_name` / `column_name` / `value_list` 这类**占位名**，
+   * 不写具体业务名（`device` / `user` 那种）：示例的作用是演示模板语法，
+   * 带业务名会让人以为片段只适配那类表，也容易照抄出一段跑不通的 SQL。
+   */
   example: string
 }
 
@@ -43,7 +49,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'if 条件拼接',
     code: '{{if 变量}} AND 变量 = {{变量}} {{end}}',
     description: '变量为空时整段不拼接，是实现「可选查询条件」最常用的写法。',
-    example: '{{if device_no}} AND device_no = {{device_no}} {{end}}',
+    example: '{{if column_name}} AND column_name = {{column_name}} {{end}}',
   },
   {
     id: 'if-else',
@@ -51,7 +57,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'if / else 二选一',
     code: '{{if 变量}} AND status = {{变量}} {{else}} AND 1 = 1 {{end}}',
     description: '变量有值时走 if 分支，否则走 else 分支。',
-    example: '{{if status}} AND status = {{status}} {{else}} AND status IS NOT NULL {{end}}',
+    example: '{{if column_name}} AND column_name = {{column_name}} {{else}} AND column_name IS NOT NULL {{end}}',
   },
   {
     id: 'if-not',
@@ -59,7 +65,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'if not 取反',
     code: '{{if not 变量}} AND deleted = 0 {{end}}',
     description: '变量为空（假值）时才拼接。',
-    example: '{{if not show_deleted}} AND deleted = 0 {{end}}',
+    example: '{{if not include_deleted}} AND column_flag = 0 {{end}}',
   },
   {
     id: 'if-eq',
@@ -67,7 +73,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'if eq 相等判断',
     code: '{{if eq 变量 "值"}} AND type = {{变量}} {{end}}',
     description: '与指定字面量比较，相等才拼接。',
-    example: '{{if eq env "prod"}} AND env_type = 1 {{end}}',
+    example: '{{if eq column_name "值"}} AND column_type = 1 {{end}}',
   },
   {
     id: 'if-in',
@@ -75,7 +81,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'if in 多值命中',
     code: '{{if in "值1,值2" 变量}} AND type = {{变量}} {{end}}',
     description: '变量命中给定集合（逗号分隔）时拼接，用于多环境/多类型判断。',
-    example: '{{if in "prod,uat" env}} AND env_type = 1 {{end}}',
+    example: '{{if in "值1,值2" column_name}} AND column_type = 1 {{end}}',
   },
 
   // ---------------------------------------------------------- 循环
@@ -85,7 +91,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'range 遍历',
     code: '{{range 变量}}{{.}}{{end}}',
     description: '遍历数组变量，{{.}} 为当前元素。',
-    example: 'device_no in ({{range device_list}}\'{{.}}\',{{end}}\'\')',
+    example: 'column_name in ({{range value_list}}\'{{.}}\',{{end}}\'\')',
   },
   {
     id: 'range-index',
@@ -93,7 +99,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'range 带下标（逗号分隔）',
     code: '{{range $index, $item := 变量}}{{if $index}},{{end}}\'{{$item}}\'{{end}}',
     description: '带下标遍历，首个元素前不加逗号，适合拼 IN 列表。',
-    example: 'device_no in ({{range $i, $v := device_list}}{{if $i}},{{end}}{{quote $v}}{{end}})',
+    example: 'column_name in ({{range $i, $v := value_list}}{{if $i}},{{end}}{{quote $v}}{{end}})',
   },
 
   // ---------------------------------------------------------- 变量
@@ -103,7 +109,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: '变量插值',
     code: '{{ 变量 }}',
     description: '最基础的占位符，执行时用填入的值替换；未填值时渲染为空串。',
-    example: 'SELECT * FROM device WHERE device_no = {{ device_no }}',
+    example: 'SELECT * FROM table_name WHERE column_name = {{ column_name }}',
   },
   {
     id: 'comment',
@@ -121,7 +127,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'quote 安全加引号',
     code: '{{ quote 变量 }}',
     description: '按类型加 SQL 引号：字符串→\'值\'（内部单引号转义），数字/布尔原样输出，空值→NULL。写字符串条件时优先用它防注入。',
-    example: 'WHERE device_name = {{ quote device_name }}',
+    example: 'WHERE column_name = {{ quote column_name }}',
   },
   {
     id: 'fn-default',
@@ -153,7 +159,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'join 数组拼接',
     code: '{{ join "\',\'" 变量 }}',
     description: '把数组按分隔符合并成字符串；配合 quote 使用更安全。',
-    example: 'device_no in (\'{{ join "\',\'" device_list }}\')',
+    example: 'column_name in (\'{{ join "\',\'" value_list }}\')',
   },
   {
     id: 'fn-now',
@@ -187,7 +193,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'or 或',
     code: '{{if or 变量A 变量B}}...{{end}}',
     description: '任一条件为真即拼接。',
-    example: '{{if or keyword device_no}} AND 1 = 1 {{end}}',
+    example: '{{if or keyword column_name}} AND 1 = 1 {{end}}',
   },
   {
     id: 'fn-len',
@@ -195,7 +201,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'len 长度判断',
     code: '{{if gt (len 变量) 0}}...{{end}}',
     description: '判断数组/字符串非空，常用于列表类变量。',
-    example: '{{if gt (len device_list) 0}} AND device_no IN ({{join "," device_list}}) {{end}}',
+    example: '{{if gt (len value_list) 0}} AND column_name IN ({{join "," value_list}}) {{end}}',
   },
   {
     id: 'fn-ne',
@@ -203,7 +209,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'ne / lt / gt 比较',
     code: '{{if ne 变量 "值"}}...{{end}}',
     description: '不等（ne）、小于（lt）、大于（gt）等比较函数，写法一致。',
-    example: '{{if gt (len device_list) 0}} AND 1 = 1 {{end}}',
+    example: '{{if gt (len value_list) 0}} AND 1 = 1 {{end}}',
   },
   {
     id: 'fn-printf',
@@ -211,7 +217,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'printf 格式化',
     code: '{{ printf "%s%%" 变量 }}',
     description: '按 Go 格式化语法拼接，常用于 LIKE 模糊查询（%% 转义为 %）。',
-    example: 'WHERE name LIKE \'{{ printf "%%%s%%" name }}\'',
+    example: 'WHERE column_name LIKE \'{{ printf "%%%s%%" column_name }}\'',
   },
   {
     id: 'fn-index',
@@ -219,7 +225,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'index 取数组元素',
     code: '{{ index 变量 0 }}',
     description: '按下标取数组/映射中的值。',
-    example: 'AND first_tag = {{ index tag_list 0 }}',
+    example: 'AND column_name = {{ index value_list 0 }}',
   },
 
   // ---------------------------------------------------------- 其他
@@ -229,7 +235,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: 'with 作用域',
     code: '{{with 变量}} {{.}} {{end}}',
     description: '变量非空时进入该作用域，内部可直接用 {{.}}。',
-    example: '{{with device}} AND device_no = {{.device_no}} {{end}}',
+    example: '{{with table_name}} AND column_name = {{.column_name}} {{end}}',
   },
   {
     id: 'fuzzy',
@@ -237,7 +243,7 @@ export const SQL_SNIPPETS: SqlSnippet[] = [
     name: '常用：模糊查询片段',
     code: '{{if 变量}} AND name LIKE {{ printf "%%%s%%" 变量 }} {{end}}',
     description: '关键词模糊查询，变量为空时不拼接该条件。',
-    example: '{{if keyword}} AND device_name LIKE {{ printf "%%%s%%" keyword }} {{end}}',
+    example: '{{if keyword}} AND column_name LIKE {{ printf "%%%s%%" keyword }} {{end}}',
   },
   {
     id: 'pagerange',

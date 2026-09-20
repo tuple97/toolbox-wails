@@ -89,7 +89,7 @@ export function renderTemplate(
  *
  * 依据映射配置决定列顺序、别名、宽度与对齐；
  * 未被映射的列追加在后面，保证结果集不会丢列。
- * 类型与注释一并带出，供表头三行展示（类型 / 注释都来自数据库元信息）。
+ * 类型 / 注释 / 来源表一并带出，供表头展示与悬停提示（都来自数据库元信息）。
  */
 export function buildColumns(
   columns: ColumnMeta[],
@@ -101,6 +101,7 @@ export function buildColumns(
   align: 'left' | 'center' | 'right'
   type: string
   comment: string
+  table: string
 }> {
   const names = columns.map(c => c.name)
   const metaOf = new Map(columns.map(c => [c.name, c]))
@@ -113,6 +114,7 @@ export function buildColumns(
     align: 'left' | 'center' | 'right'
     type: string
     comment: string
+    table: string
   }> = []
 
   // 已配置映射的列，按配置顺序优先展示
@@ -127,6 +129,7 @@ export function buildColumns(
       align: mapping.align ?? 'left',
       type: metaOf.get(mapping.column)?.type ?? '',
       comment: metaOf.get(mapping.column)?.comment ?? '',
+      table: metaOf.get(mapping.column)?.table ?? '',
     })
   }
 
@@ -141,6 +144,7 @@ export function buildColumns(
       align: 'left',
       type: metaOf.get(name)?.type ?? '',
       comment: metaOf.get(name)?.comment ?? '',
+      table: metaOf.get(name)?.table ?? '',
     })
   }
 

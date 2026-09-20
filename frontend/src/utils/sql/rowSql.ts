@@ -9,9 +9,9 @@
  *  - 标识符与字符串按方言转义：MySQL 用反引号、反斜杠转义；PostgreSQL 用双引号。
  */
 
-import { ElMessage } from 'element-plus'
 import { executeStatement } from '@/api/executor'
 import { copyText } from '@/utils/clipboard'
+import { notify } from '@/utils/notify'
 import { IDENT_SOURCE } from './sqlLexemes'
 import type { ContextMenuAction } from '@/types'
 
@@ -21,9 +21,15 @@ export type SqlDialect = 'mysql' | 'postgres'
 /** 复制类型 */
 export type RowSqlKind = 'insert' | 'update' | 'delete'
 
-/** 生成语句所需的上下文（由调用方从当前视图状态提供） */
-export interface RowSqlContext {
-  /** 连接 ID，用于查主键 */
+/**
+ * 结果来源上下文：识别表名与查主键只需要这些。
+ *
+ * 单独抽出来是因为两个用途各取所需：生成行 SQL 要 `columns` / `row`（那是
+ * `RowSqlContext`），而**表头标记主键**只需要「这条结果是哪个连接、哪个库、
+ * 由哪条 SQL 产生的」。
+ */
+export interface ResultSourceContext {
+  /** 连接 ID，用于查主键；没有连接时查不了（调用方给它的可能为 null） */
   connId: number | null
   /** 当前库（未显式选择时为空串，此时用连接默认库） */
   database: string
@@ -31,24 +37,37 @@ export interface RowSqlContext {
   dbType: string
   /** 产生该结果集的 SQL，用于解析表名 */
   sql: string
+}
+
+/** 生成语句所需的上下文（由调用方从当前视图状态提供） */
+export interface RowSqlContext extends ResultSourceContext {
   /** 结果列名（按展示顺序） */
   columns: string[]
   /** 被右键的那一行 */
   row: Record<string, unknown>
 }
 
-/** 结果表格右键菜单项：两级结构「复制为… → INSERT / UPDATE / DELETE」 */
-export const ROW_SQL_MENU_ITEMS: ContextMenuAction[] = [
-  {
-    key: 'copy-as',
-    label: '复制为…',
-    children: [
-      { key: 'copy-insert', label: 'INSERT' },
-      { key: 'copy-update', label: 'UPDATE（按主键）' },
-      { key: 'copy-delete', label: 'DELETE（按主键）' },
-    ],
-  },
-]
+/**
+ * 结果表格右键菜单项：两级结构「复制为… → INSERT / UPDATE / DELETE」。
+ *
+ * `rowCount > 1` 时标签带上行数（「批量复制为…（3 行）」）——
+ * 批量操作最怕「不知道会作用于几行」，把数字写在菜单上是最省事的确认。
+ */
+export function rowSqlMenuItems(rowCount = 1): ContextMenuAction[] {
+  const batch = rowCount > 1
+  const suffix = batch ? `（${rowCount} 行）` : ''
+  return [
+    {
+      key: 'copy-as',
+      label: batch ? `批量复制为…（${rowCount} 行）` : '复制为…',
+      children: [
+        { key: 'copy-insert', label: `INSERT${suffix}` },
+        { key: 'copy-update', label: `UPDATE（按主键）${suffix}` },
+        { key: 'copy-delete', label: `DELETE（按主键）${suffix}` },
+      ],
+    },
+  ]
+}
 
 /** 把菜单项的 key 映射成复制类型；非本菜单的项返回 null */
 export function kindOfMenuItem(key: string): RowSqlKind | null {
@@ -115,7 +134,7 @@ export function parseTableRef(sql: string): TableRef | null {
  * MySQL 的库名直接可用；PostgreSQL 不允许跨库限定名，限定的是 schema，
  * 与后端元数据查询的约定一致（默认 public）。
  */
-function resolveTable(ctx: RowSqlContext, dialect: SqlDialect): TableRef | null {
+function resolveTable(ctx: ResultSourceContext, dialect: SqlDialect): TableRef | null {
   const parsed = parseTableRef(ctx.sql)
   if (!parsed) {
     return null
@@ -179,7 +198,7 @@ function qualify(ref: TableRef, dialect: SqlDialect): string {
 
 /** 查询表主键（information_schema，MySQL / PostgreSQL 通用结构） */
 export async function fetchPrimaryKeys(
-  ctx: RowSqlContext,
+  ctx: ResultSourceContext,
   ref: TableRef,
   dialect: SqlDialect,
 ): Promise<string[]> {
@@ -216,63 +235,180 @@ export async function fetchPrimaryKeys(
 }
 
 /**
- * 生成并复制某一行的 SQL。
+ * 结果集对应表的主键列名（表头给主键列加标识用）。
  *
- * 失败（表名/主键识别不了、剪贴板不可用）时自行提示，不抛错，
- * 便于直接当菜单回调使用。
+ * 与「复制为 UPDATE / DELETE」那条路径的要求**相反**：那边拿不到主键必须明说，
+ * 因为生成的语句会误伤全表；这里是**装饰性**信息 —— 没有标识不影响看数据，
+ * 所以「识别不出表 / 没有连接 / 查询报错」一律安静地返回空数组，不弹提示。
  */
-export async function copyRowSql(kind: RowSqlKind, ctx: RowSqlContext): Promise<void> {
+export async function primaryKeysOfResult(ctx: ResultSourceContext): Promise<string[]> {
+  if (!ctx.connId) {
+    return []
+  }
   const dialect = dialectOf(ctx.dbType)
   const ref = resolveTable(ctx, dialect)
   if (!ref) {
-    ElMessage.warning('无法从结果对应的 SQL 中识别表名，已取消生成')
-    return
+    return []
+  }
+  try {
+    return await fetchPrimaryKeys(ctx, ref, dialect)
+  }
+  catch {
+    // 权限不足 / 库不可用 / 网络断开：都只是「没有主键标识」
+    return []
+  }
+}
+
+/** 生成语句所需的表与主键信息（多行共用一次解析结果） */
+export interface RowSqlTarget {
+  dialect: SqlDialect
+  /** 已带库名的表限定名 */
+  target: string
+  /** 结果集里可用于定位的主键列（INSERT 时为空） */
+  keys: string[]
+}
+
+/**
+ * 解析表名与主键。
+ *
+ * 批量复制时**只解析一次**：主键要走一趟 information_schema，
+ * 一行为一次的话，选 50 行就要查 50 次（而且结果完全一样）。
+ *
+ * 失败时返回原因文案，由调用方决定怎么提示（单行 / 批量提示的位置不同）。
+ */
+async function prepareRowSql(
+  kind: RowSqlKind,
+  ctx: RowSqlContext,
+): Promise<{ ok: true, value: RowSqlTarget } | { ok: false, reason: string }> {
+  const dialect = dialectOf(ctx.dbType)
+  const ref = resolveTable(ctx, dialect)
+  if (!ref) {
+    return { ok: false, reason: '无法从结果对应的 SQL 中识别表名，已取消生成' }
   }
 
   const target = qualify(ref, dialect)
+  if (kind === 'insert') {
+    return { ok: true, value: { dialect, target, keys: [] } }
+  }
+
+  // UPDATE / DELETE：必须拿到主键，否则不生成（避免误伤全表）
+  const label = kind.toUpperCase()
+  const allKeys = await fetchPrimaryKeys(ctx, ref, dialect)
+  if (!allKeys.length) {
+    return { ok: false, reason: `未识别到 ${target} 的主键，已取消生成 ${label}` }
+  }
+  const keys = allKeys.filter(key => ctx.columns.includes(key))
+  if (!keys.length) {
+    return {
+      ok: false,
+      reason: `结果集里没有主键列（${allKeys.join(', ')}），已取消生成 ${label}`,
+    }
+  }
+  if (kind === 'update' && !ctx.columns.some(name => !keys.includes(name))) {
+    return { ok: false, reason: '结果集里除主键外没有可更新的列，已取消生成 UPDATE' }
+  }
+  return { ok: true, value: { dialect, target, keys } }
+}
+
+/**
+ * 为**一行**生成 SQL（纯函数：解析结果由调用方传入，便于用例覆盖）。
+ *
+ * 返回 `null` 表示这一行不能安全生成，目前只有一种情况：**主键值缺失**。
+ * 那时 WHERE 会写成 `id = NULL` —— 永远不成立，拿去执行等于
+ * 「看起来执行了、其实什么都没改」，比不生成更糟。
+ */
+export function buildRowSqlStatement(
+  kind: RowSqlKind,
+  ctx: RowSqlContext,
+  resolved: RowSqlTarget,
+): string | null {
+  const { dialect, target: table, keys } = resolved
+  const nameOf = (name: string) => quoteIdent(name, dialect)
+
+  if (kind === 'insert') {
+    const names = ctx.columns.map(nameOf).join(', ')
+    const values = ctx.columns.map(name => formatValue(ctx.row[name], dialect)).join(', ')
+    return `INSERT INTO ${table} (${names}) VALUES (${values});`
+  }
+
+  if (keys.some(key => ctx.row[key] === null || ctx.row[key] === undefined)) {
+    return null
+  }
+  const where = keys
+    .map(key => `${nameOf(key)} = ${formatValue(ctx.row[key], dialect)}`)
+    .join(' AND ')
+
+  if (kind === 'delete') {
+    return `DELETE FROM ${table} WHERE ${where};`
+  }
+
+  const sets = ctx.columns
+    .filter(name => !keys.includes(name))
+    .map(name => `${nameOf(name)} = ${formatValue(ctx.row[name], dialect)}`)
+  if (!sets.length) {
+    return null
+  }
+  return `UPDATE ${table} SET ${sets.join(', ')} WHERE ${where};`
+}
+
+/**
+ * 生成并复制某一行的 SQL（单行入口）。
+ *
+ * 失败（表名 / 主键识别不了、剪贴板不可用）时自行提示，不抛错，
+ * 便于直接当菜单回调使用。
+ */
+export async function copyRowSql(kind: RowSqlKind, ctx: RowSqlContext): Promise<void> {
+  await copyRowsSql(kind, [ctx])
+}
+
+/**
+ * 生成并复制若干行的 SQL（结果表格 Ctrl / Shift 多选后的「批量复制为…」）。
+ *
+ * 多行共用一次表名与主键解析；语句按**选择顺序**用换行拼接，
+ * 方便直接贴进 SQL 客户端逐条执行。不能安全生成的行会被跳过，并在提示里说明。
+ */
+export async function copyRowsSql(kind: RowSqlKind, contexts: RowSqlContext[]): Promise<void> {
+  if (!contexts.length) {
+    return
+  }
   const label = kind.toUpperCase()
 
   try {
-    if (kind === 'insert') {
-      const names = ctx.columns.map(name => quoteIdent(name, dialect)).join(', ')
-      const values = ctx.columns.map(name => formatValue(ctx.row[name], dialect)).join(', ')
-      await copyText(`INSERT INTO ${target} (${names}) VALUES (${values});`)
-      ElMessage.success('已复制 INSERT 语句')
+    const prepared = await prepareRowSql(kind, contexts[0])
+    if (!prepared.ok) {
+      notify.warning(prepared.reason)
       return
     }
 
-    // UPDATE / DELETE：必须拿到主键，否则不生成（避免误伤全表）
-    const allKeys = await fetchPrimaryKeys(ctx, ref, dialect)
-    if (!allKeys.length) {
-      ElMessage.warning(`未识别到 ${target} 的主键，已取消生成 ${label}`)
-      return
+    const statements: string[] = []
+    let skipped = 0
+    for (const ctx of contexts) {
+      const sql = buildRowSqlStatement(kind, ctx, prepared.value)
+      if (sql) {
+        statements.push(sql)
+      }
+      else {
+        skipped += 1
+      }
     }
-    const keys = allKeys.filter(key => ctx.columns.includes(key))
-    if (!keys.length) {
-      ElMessage.warning(`结果集里没有主键列（${allKeys.join(', ')}），已取消生成 ${label}`)
-      return
-    }
-    const where = keys
-      .map(key => `${quoteIdent(key, dialect)} = ${formatValue(ctx.row[key], dialect)}`)
-      .join(' AND ')
 
-    if (kind === 'delete') {
-      await copyText(`DELETE FROM ${target} WHERE ${where};`)
-      ElMessage.success('已复制 DELETE 语句')
+    if (!statements.length) {
+      notify.warning(`选中的 ${contexts.length} 行都无法生成 ${label}（主键值缺失）`)
       return
     }
 
-    const sets = ctx.columns
-      .filter(name => !keys.includes(name))
-      .map(name => `${quoteIdent(name, dialect)} = ${formatValue(ctx.row[name], dialect)}`)
-    if (!sets.length) {
-      ElMessage.warning('结果集里除主键外没有可更新的列，已取消生成 UPDATE')
-      return
+    await copyText(statements.join('\n'))
+    if (skipped > 0) {
+      notify.success(`已复制 ${statements.length} 条 ${label} 语句（跳过 ${skipped} 行：主键值缺失）`)
     }
-    await copyText(`UPDATE ${target} SET ${sets.join(', ')} WHERE ${where};`)
-    ElMessage.success('已复制 UPDATE 语句')
+    else if (statements.length > 1) {
+      notify.success(`已复制 ${statements.length} 条 ${label} 语句`)
+    }
+    else {
+      notify.success(`已复制 ${label} 语句`)
+    }
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }

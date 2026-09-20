@@ -1,10 +1,18 @@
 import { fileURLToPath, URL } from 'node:url'
+import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    /*
+     * Tailwind v4：走 Vite 插件（不需要 postcss 配置与 tailwind.config.js，
+     * 主题令牌写在 src/styles/tailwind.css 的 @theme 里）。
+     */
+    tailwindcss(),
+  ],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
@@ -39,13 +47,12 @@ export default defineConfig({
         // 把体积大的依赖拆包，避免单个 chunk 过大影响首屏
         manualChunks: {
           echarts: ['echarts'],
-          element: ['element-plus'],
         },
       },
     },
   },
   optimizeDeps: {
-    // Element Plus 与拖拽库为预构建依赖，显式声明可加快冷启动。
-    include: ['element-plus', 'vue-draggable-plus'],
+    // 拖拽库为预构建依赖，显式声明可加快冷启动。
+    include: ['vue-draggable-plus'],
   },
 })

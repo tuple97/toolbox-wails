@@ -33,22 +33,36 @@
   /* 侧边栏宽度：展开 240px；收起为 64px 图标栏（见 AppSidebar.vue） */
   --sidebar-width: 240px;
   --sidebar-width-collapsed: 64px;
-  /* 界面字体大小，由设置面板动态写入 */
-  --app-font-size: 13px;
+  /*
+   * 界面缩放比例（设置 → 外观 → 缩放比例），1 = 100%，由 configStore 写到根节点上。
+   *
+   * 这是**全局尺度**：根字号 = 13px × 它（见 styles/tailwind.css 的 @layer base），
+   * 于是两套体系一起缩放 ——
+   *  1. Tailwind 的 rem 类（字号 / 间距 / 圆角）；
+   *  2. 下面的 --app-font-size 阶梯（历史样式与自绘组件都从它派生）。
+   */
+  --app-scale: 1;
+  /*
+   * 基准字号：13px。其余字号都在它上下 ±1~3px 波动（波动幅度同样乘缩放比例，
+   * 免得放大后「大标题和小字」的差距反而变小）。
+   * --app-font-size 是唯一的中间量：历史代码与 EP 都从它派生，不要绕过它写死 px。
+   */
+  --app-font-base: 13px;
+  --app-font-size: calc(var(--app-font-base) * var(--app-scale));
   /*
    * 派生字号：自定义组件样式请使用这些变量而不是写死 px，
-   * 否则「设置 → 字体大小」对它们无效。
+   * 否则「设置 → 外观 → 缩放比例」对它们无效。
    */
-  --app-font-size-2xs: calc(var(--app-font-size) - 3px);
-  --app-font-size-xs: calc(var(--app-font-size) - 2px);
-  --app-font-size-sm: calc(var(--app-font-size) - 1px);
-  --app-font-size-lg: calc(var(--app-font-size) + 1px);
-  --app-font-size-xl: calc(var(--app-font-size) + 2px);
+  --app-font-size-2xs: calc(var(--app-font-size) - 3px * var(--app-scale));
+  --app-font-size-xs: calc(var(--app-font-size) - 2px * var(--app-scale));
+  --app-font-size-sm: calc(var(--app-font-size) - 1px * var(--app-scale));
+  --app-font-size-lg: calc(var(--app-font-size) + 1px * var(--app-scale));
+  --app-font-size-xl: calc(var(--app-font-size) + 2px * var(--app-scale));
   /*
-   * 控件大小倍率，由设置面板动态写入（小 0.9 / 默认 1 / 大 1.1）。
-   * Element Plus 的控件高度已由下方 --el-component-size* 自动跟随；
+   * 控件大小倍率，由配置写入（历史配置项：小 0.9 / 默认 1 / 大 1.1）。
    * 自绘控件（标题栏按钮、菜单项、标签页、面板工具行…）在「控件高度/宽度」上
-   * 显式乘它即可，如 height: calc(32px * var(--app-control-scale))。
+   * 显式乘它即可，如 height: calc(32px * var(--app-control-scale))；
+   * `components/ui/*` 里的组件都已经这么做了。
    * 注意只缩放控件自身，容器高度（窗口标题栏、面板、内容区）保持固定。
    */
   --app-control-scale: 1;
@@ -81,6 +95,9 @@ html.dark {
   /* 兼容既有引用：--brand-color-strong 的语义已由 --accent-color 承担 */
   --brand-color-strong: var(--accent-color);
   --danger-color: #f87171;
+  /* 成功 / 警告语义色：自绘组件（提示条、结果行）用它们，不再借 Element Plus 的 --el-color-* */
+  --success-color: #34d399;
+  --warning-color: #fbbf24;
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
   --titlebar-bg: rgb(12 18 34);
   --panel-bg: rgb(8 13 26);
@@ -107,6 +124,9 @@ html:not(.dark) {
   --accent-color: #6366f1;
   --brand-color-strong: var(--accent-color);
   --danger-color: #dc2626;
+  /* 亮色下绿/黄要压深一档，否则在白底上「提示成功」几乎看不清 */
+  --success-color: #059669;
+  --warning-color: #d97706;
   --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
   --titlebar-bg: rgb(255 255 255);
   --panel-bg: rgb(248 250 252);
@@ -137,6 +157,8 @@ html[data-theme='midnight'] {
   --accent-color: #a5b4fc;
   --brand-color-strong: var(--accent-color);
   --danger-color: #f87171;
+  --success-color: #34d399;
+  --warning-color: #fbbf24;
   --titlebar-bg: rgb(14 14 16);
   --panel-bg: rgb(18 18 21);
   --menu-bg: rgb(var(--bg-rgb));
@@ -156,51 +178,15 @@ html[data-theme='idea'] {
   --accent-color: #ffc66d;
   --brand-color-strong: var(--accent-color);
   --danger-color: #e05561;
+  /* Darcula 的绿/黄：与橙色调不打架 */
+  --success-color: #6a8759;
+  --warning-color: #ebb54a;
   --titlebar-bg: rgb(60 63 65);
   --panel-bg: rgb(50 52 54);
   --menu-bg: rgb(43 43 43);
   --overlay-bg: rgb(60 63 65);
   --hover-bg: rgba(255, 255, 255, 0.08);
   --active-bg: rgba(204, 120, 50, 0.18);
-}
-
-/*
- * 让 Element Plus 组件（弹窗、表单、下拉、表格…）沿用应用调色板。
- *
- * EP 自带的主题是固定配色（暗色为 #141414 一类），弹窗看起来会与应用主题脱节。
- * 这里用应用语义变量覆盖 EP 的关键变量；由于 main.ts 中 global.css 在 EP 的
- * css-vars 之后导入，同特异性下后者生效。
- */
-html.dark,
-html:not(.dark) {
-  --el-bg-color: var(--bg-color);
-  --el-bg-color-page: var(--bg-color);
-  /* 浮层（弹窗/下拉/浮框）底色：跟随主题，固定不透明度（不跟窗口透明度） */
-  --el-bg-color-overlay: var(--overlay-bg);
-  --el-text-color-primary: var(--text-color);
-  --el-text-color-regular: var(--text-color);
-  --el-text-color-secondary: var(--text-muted);
-  --el-text-color-placeholder: var(--text-muted);
-  --el-text-color-disabled: var(--text-muted);
-  --el-border-color: var(--border-color);
-  --el-border-color-light: var(--border-color);
-  --el-border-color-lighter: var(--border-color);
-  --el-border-color-extra-light: var(--border-color);
-  --el-fill-color: var(--surface-color);
-  --el-fill-color-light: var(--surface-color);
-  --el-fill-color-lighter: var(--surface-color);
-  --el-fill-color-blank: var(--bg-color-soft);
-  --el-color-primary: var(--brand-color);
-  --el-color-primary-light-3: var(--brand-color-strong);
-  --el-color-primary-light-5: var(--brand-color-strong);
-  --el-color-primary-light-7: var(--brand-color-strong);
-  --el-color-primary-light-8: var(--brand-color-strong);
-  --el-color-primary-light-9: var(--active-bg);
-  --el-color-primary-dark-2: var(--brand-color);
-  --el-box-shadow: var(--shadow-md);
-  --el-box-shadow-light: var(--shadow-md);
-  --el-mask-color: var(--app-mask);
-  --el-disabled-bg-color: var(--surface-color);
 }
 
 * {
@@ -324,112 +310,6 @@ html:not(.dark) #app-backdrop {
 }
 
 /*
- * Element Plus 主题对齐。
- *
- * 暗色：覆写为深蓝配色，与自定义工具栏一致。
- * 亮色：不覆写，直接使用 Element Plus 默认亮色变量 + dark/css-vars 的
- *       非激活状态，保证亮色主题也能正常显示。
- */
-html.dark {
-  /*
-   * 主色系列刻意不再硬编码：由上面的语义映射统一提供
-   * （--el-color-primary → var(--brand-color)，light-3/5/7/8 → var(--brand-color-strong)，
-   * light-9 → var(--active-bg)）。
-   * 历史坑：这里曾硬编码过 #38bdf8 一组，会静默覆盖前面的映射，
-   * 导致「只改 --brand-color 换不了 EP 组件颜色」。
-   */
-  --el-color-danger: var(--danger-color);
-  --el-color-success: #34d399;
-  --el-color-warning: #fbbf24;
-
-  --el-bg-color: #0f172a;
-  /* 注意：不要在这里写死 --el-bg-color-overlay，
-     否则 midnight / idea 等主题会被迫用深蓝色（弹窗看起来"没跟主题换"） */
-  --el-bg-color-page: #0b1120;
-  --el-text-color-primary: #e2e8f0;
-  --el-text-color-regular: #cbd5e1;
-  --el-text-color-secondary: #94a3b8;
-  --el-text-color-placeholder: #64748b;
-  --el-border-color: rgba(255, 255, 255, 0.12);
-  --el-border-color-light: rgba(255, 255, 255, 0.08);
-  --el-border-color-lighter: rgba(255, 255, 255, 0.06);
-  --el-fill-color-blank: rgba(255, 255, 255, 0.03);
-  --el-fill-color-light: rgba(255, 255, 255, 0.05);
-  --el-mask-color: rgba(2, 6, 23, 0.7);
-}
-
-/* 亮色主色来自 --brand-color(#4f46e5)，在白底上对比度足够，无需单独覆盖 */
-
-/*
- * 字号与控件尺寸跟随「设置 → 字体大小 / 控件大小」。
- *
- * Element Plus 的字号（--el-font-size-*）与控件高度（--el-component-size*）
- * 自成一套，且 `<ElConfigProvider :size>` 只对「没显式写 size 的组件」生效，
- * 组件上写了 size="small" 就完全不受控。这里把两套变量都挂到应用变量上：
- *  - --app-font-size：设置面板写入的正文字号
- *  - --app-control-scale：控件大小倍率（小 0.9 / 默认 1 / 大 1.1）
- * 注意必须在 EP 的 :root 变量之后、且选择器特异性不低于它才会生效。
- */
-html.dark,
-html:not(.dark) {
-  --el-font-size-extra-large: calc(var(--app-font-size) + 6px);
-  --el-font-size-large: calc(var(--app-font-size) + 4px);
-  --el-font-size-medium: calc(var(--app-font-size) + 2px);
-  --el-font-size-base: var(--app-font-size);
-  --el-font-size-small: calc(var(--app-font-size) - 1px);
-  --el-font-size-extra-small: calc(var(--app-font-size) - 2px);
-
-  --el-component-size-large: calc(40px * var(--app-control-scale));
-  --el-component-size: calc(32px * var(--app-control-scale));
-  --el-component-size-small: calc(24px * var(--app-control-scale));
-}
-
-/* 表格贴合暗色背景 */
-.el-table {
-  --el-table-border-color: var(--border-color);
-  --el-table-header-bg-color: var(--surface-color);
-  --el-table-tr-bg-color: transparent;
-  --el-table-row-hover-bg-color: var(--active-bg);
-  --el-table-bg-color: transparent;
-  background: transparent;
-}
-
-/*
- * 弹窗 / 抽屉 / 消息框：底色统一用 --overlay-bg（各主题的固定不透明度版本）。
- *
- * EP 的背景来源各不相同——弹窗取 --el-dialog-bg-color、抽屉取 --el-drawer-bg-color、
- * 消息框直接取 --el-bg-color——所以这里统一改掉并显式给 background-color 兜底。
- *
- * 浮层底色一律不透明（--overlay-bg，2026-09-14 起窗口与浮层都不再透明），
- * 与主界面之间靠边框和阴影区分层级；EP 自带的入场动画
- * （动 .el-overlay / .el-overlay-dialog 的 opacity/transform）可以照常保留。
- *
- * 选择器必须带 `html ` 前缀抬高特异性：EP 自己的样式里就有
- * `.el-dialog{--el-dialog-bg-color:var(--el-bg-color);background:var(--el-dialog-bg-color)}`
- * （特异性与裸 `.el-dialog` 相同，谁在后面谁赢）。而 --el-bg-color 是不透明的，
- * 一旦按打包顺序落到我们后面，弹窗就永远是实心的「不跟主题走」。
- * 加上 html 前缀后无论顺序如何都由我们说了算。
- */
-html .el-dialog,
-html .el-drawer,
-html .el-message-box {
-  --el-dialog-bg-color: var(--overlay-bg);
-  --el-drawer-bg-color: var(--overlay-bg);
-  background-color: var(--overlay-bg);
-}
-
-/*
- * 弹窗遮罩：完全透明，弹窗以外的主界面保持原样。
- *
- * EP 默认的遮罩是固定的 50% 黑（--el-overlay-color-lighter），会把主界面压暗；
- * 这里关掉它。若想让弹窗外压暗，把 background-color 改成 var(--app-mask)。
- * 同样带 `html ` 前缀：EP 自己也有 `.el-overlay{background-color:var(--el-overlay-color-lighter)}`。
- */
-html .el-overlay {
-  background-color: transparent;
-}
-
-/*
  * 应用自己的小提示（替代原生 title，见 utils/tooltip.ts）。
  *
  * 原生 title 的样式由系统决定、CSS 管不到，和应用的浮层观感对不上，
@@ -449,6 +329,12 @@ html .el-overlay {
   font-size: var(--app-font-size-xs);
   line-height: 1.55;
   word-break: break-word;
+  /*
+   * 保留换行：提示内容里有 `\n` 时按行显示。
+   * 结果集的单元格提示就是多行拼的（字段值说明 + 若干条 EXPLAIN 优化建议），
+   * 不设这一条会被压成一行、挤在一起读不了。
+   */
+  white-space: pre-line;
   pointer-events: none;
   user-select: none;
   animation: app-tip-in 0.12s ease-out;
@@ -468,6 +354,270 @@ html .el-overlay {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/*
+ * 富卡片模式：提示内容是「列悬停卡片」（.column-hover，见下），它自带
+ * 底色 / 描边 / 阴影，容器让出自己的表面，避免两层边框叠在一起。
+ */
+#app-tip.app-tip--card {
+  max-width: 460px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+/*
+ * 列悬停卡片（DOM 由 utils/sql/columnHoverCard.ts 拼装，编辑器悬停与
+ * 结果表头悬停共用）。层次与结果表头一致：列名是主体（正文色 + 加粗 +
+ * 大一档字号），类型 / 来源表 / 注释小一档弱色，图标各带一种标识色
+ * （来源表 = 品牌色、注释 = 琥珀色，与补全候选行的图标颜色同一套约定）。
+ * 字号走主题变量：缩放比例对它生效。
+ */
+.column-hover {
+  min-width: 220px;
+  max-width: 420px;
+  padding: 10px 12px;
+  font-size: var(--app-font-size-xs);
+  line-height: 1.5;
+}
+
+.column-hover--surface {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--overlay-bg);
+  box-shadow: var(--shadow-md);
+}
+
+.column-hover__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.column-hover__name {
+  color: var(--text-color);
+  font-size: var(--app-font-size-lg);
+  font-weight: 600;
+}
+
+/* 类型跟一个等宽的完整定义（varchar(32) / decimal(10,2)），保持次要层级 */
+.column-hover__type {
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--app-font-size-xs);
+  word-break: break-all;
+}
+
+.column-hover__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.column-hover__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.column-hover__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.column-hover__icon--table {
+  color: var(--brand-color);
+}
+
+.column-hover__icon--comment {
+  color: var(--warning-color);
+}
+
+.column-hover__value {
+  min-width: 0;
+  word-break: break-word;
+}
+
+/*
+ * 表结构卡片（DOM 由 utils/sql/hover/tableCard.ts 拼装）。
+ * 编辑器悬停时表面由 CM 的 .cm-tooltip 提供；独立浮层（.table-card-popup）自带表面。
+ * 列清单是**容器级网格**：列名 / 类型 / 描述三列跨行对齐 —— 行自身
+ * `display: contents`；每行各自开网格是跨行对不齐的（max-content 只按本行算）。
+ * 文本显式放开选择（全局默认禁选）：复制类型 / 注释是高频动作。
+ */
+.table-hover {
+  min-width: 240px;
+  max-width: 460px;
+  padding: 10px 12px;
+  font-size: var(--app-font-size-xs);
+  line-height: 1.5;
+  user-select: text;
+}
+
+.table-card-popup {
+  position: fixed;
+  z-index: 4500;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--overlay-bg);
+  box-shadow: var(--shadow-md);
+}
+
+.table-hover__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.table-hover__name {
+  color: var(--text-color);
+  font-size: var(--app-font-size-lg);
+  font-weight: 600;
+}
+
+.table-hover__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-2xs);
+  cursor: pointer;
+}
+
+.table-hover__copy:hover {
+  color: var(--text-color);
+  border-color: var(--brand-color);
+}
+
+.table-hover__list {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, max-content) minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: baseline;
+  margin-top: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* 行是「三个格子」本身：display: contents 让它把格子交给上层网格排 */
+.table-hover__row {
+  display: contents;
+}
+
+.table-hover__column {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+/* 主键 / 外键小徽标：主键金（与列头钥匙一致）、外键品牌色 */
+.table-hover__badge {
+  flex: none;
+  padding: 0 3px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-size: var(--app-font-size-2xs);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.table-hover__badge--pk {
+  color: var(--warning-color);
+  border-color: color-mix(in srgb, var(--warning-color) 35%, transparent);
+  background: color-mix(in srgb, var(--warning-color) 12%, transparent);
+}
+
+.table-hover__badge--fk {
+  color: var(--brand-color);
+  border-color: color-mix(in srgb, var(--brand-color) 30%, transparent);
+  background: color-mix(in srgb, var(--brand-color) 12%, transparent);
+}
+
+.table-hover__type {
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.table-hover__comment {
+  min-width: 0;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+/* 派生来源的说明（没有 DDL 可复制时占复制按钮的位置） */
+.table-hover__hint {
+  color: var(--text-muted);
+  font-size: var(--app-font-size-2xs);
+  white-space: nowrap;
+}
+
+/* 索引区块：卡片最下面一块 */
+.table-hover__indexes {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.table-hover__indexes-title {
+  color: var(--text-muted);
+  font-size: var(--app-font-size-2xs);
+  letter-spacing: 0.4px;
+}
+
+.table-hover__indexes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.table-hover__index {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-2xs);
+}
+
+.table-hover__index-name {
+  flex: none;
+  color: var(--text-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.table-hover__index-unique {
+  flex: none;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--active-bg);
+  color: var(--brand-color);
+  font-size: var(--app-font-size-2xs);
+}
+
+.table-hover__index-columns {
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
 }
 
 /*

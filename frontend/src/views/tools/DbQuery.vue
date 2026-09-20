@@ -1,20 +1,28 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import Button from '@/components/ui/Button.vue'
+import Combobox from '@/components/ui/Combobox.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import Icon from '@/components/ui/Icon.vue'
+import TabGroup from '@/components/ui/TabGroup.vue'
+import { notify } from '@/utils/notify'
 import DynamicForm from '@/components/DynamicForm.vue'
 import ResultTable from '@/components/ResultTable.vue'
 import ResultPagination from '@/components/ResultPagination.vue'
 import ExecutionLog from '@/components/ExecutionLog.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import ConnectionSelect from '@/components/ConnectionSelect.vue'
-import { copyRowSql, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/utils/sql/rowSql'
+import { copyRowsSql, kindOfMenuItem, rowSqlMenuItems } from '@/utils/sql/rowSql'
+import type { ResultSourceContext } from '@/utils/sql/rowSql'
 import { DEFAULT_PAGE_SIZE, executeTemplateQuery, fetchTemplate, fetchTemplateList } from '@/api/templates'
 import { fetchConnections } from '@/api/db'
+import { fetchDatabases } from '@/api/executor'
 import { EventsOn } from '@/api/runtime'
 import { useLogStore } from '@/stores/logStore'
 import { useTabStore } from '@/stores/tabStore'
 import type {
   ContextMenuAction,
+  DatabaseInfo,
   DBConnection,
   DbQueryPayload,
   FieldMapping,
@@ -86,6 +94,28 @@ const formPanelRef = ref<HTMLElement | null>(null)
 /** 结果区页签：log = 执行日志（固定），result = 查询结果 */
 const activeTab = ref('log')
 
+/** 结果区页签定义（日志懒挂载：没打开过就不去渲染日志面板） */
+const resultTabs = [
+  { value: 'log', label: '执行日志', lazy: true },
+  { value: 'result', label: '查询结果' },
+]
+
+/**
+ * 模板下拉的选中值：Combobox 用 string 做 v-model，这里做一层转换。
+ * 置空（清空按钮）同样会经过 setter，于是「清空模板」与 `watch(templateId)`
+ * 那套「重载配置 + 回第一页」的逻辑完全一致，不用再写一遍。
+ */
+const templateSelection = computed({
+  get: () => (templateId.value === null ? '' : String(templateId.value)),
+  set: (value: string) => {
+    templateId.value = value === '' ? null : Number(value)
+  },
+})
+
+/** 模板下拉选项 */
+const templateOptions = computed(() =>
+  templates.value.map(tpl => ({ label: tpl.name, value: String(tpl.id) })))
+
 /** 日志页签组件引用：切到该页签时把日志滚到底部 */
 const logRef = ref<InstanceType<typeof ExecutionLog> | null>(null)
 
@@ -96,15 +126,42 @@ watch(activeTab, async (tab) => {
   }
 })
 
-/** 结果表格右键菜单：位置与被点的行 */
+/**
+ * 结果来源：解析表名（复制为 UPDATE / DELETE）与表头标记主键共用一套口径。
+ *
+ * 单独抽出来是为了**只有一处**知道「这条结果对应哪个连接 / 哪个库」——
+ * 表名解析与主键查询对它的要求完全一样，两处各写一遍迟早写岔。
+ */
+function sourceOf(res: QueryResult): ResultSourceContext {
+  return {
+    connId: connId.value,
+    // 库的口径与执行一致：先看本次请求选的库，再看结果回带的生效库，最后连接默认库
+    database: database.value || res.database || currentConnection.value?.database || '',
+    dbType: currentConnection.value?.dbType ?? 'mysql',
+    sql: res.sql,
+  }
+}
+
+/** 给结果区用的来源（无结果时为 null，表头也就不去查主键） */
+const resultSource = computed(() => (result.value ? sourceOf(result.value) : null))
+
+/** 结果表格右键菜单：位置与要作用的行（多选时是多行） */
 const rowMenuVisible = ref(false)
 const rowMenuX = ref(0)
 const rowMenuY = ref(0)
-const rowMenuRow = ref<Record<string, unknown> | null>(null)
+const rowMenuRows = ref<Record<string, unknown>[]>([])
+
+/** 菜单项：多选时标签带上行数（「批量复制为…（3 行）」） */
+const rowMenuItems = computed(() => rowSqlMenuItems(Math.max(1, rowMenuRows.value.length)))
 
 /** 打开结果行右键菜单（内容为「复制为 INSERT / UPDATE / DELETE」） */
-function openRowMenu(payload: { row: Record<string, unknown>, x: number, y: number }) {
-  rowMenuRow.value = payload.row
+function openRowMenu(payload: {
+  row: Record<string, unknown>
+  rows: Record<string, unknown>[]
+  x: number
+  y: number
+}) {
+  rowMenuRows.value = payload.rows
   rowMenuX.value = payload.x
   rowMenuY.value = payload.y
   rowMenuVisible.value = true
@@ -113,19 +170,14 @@ function openRowMenu(payload: { row: Record<string, unknown>, x: number, y: numb
 /** 处理「复制为…」：UPDATE / DELETE 以主键为条件，生成的 SQL 带库名 */
 async function handleRowMenuSelect(item: ContextMenuAction) {
   const kind = kindOfMenuItem(item.key)
-  const row = rowMenuRow.value
+  const rows = rowMenuRows.value
   const data = result.value
-  if (!kind || !row || !data) {
+  if (!kind || !rows.length || !data) {
     return
   }
-  await copyRowSql(kind, {
-    connId: connId.value,
-    database: currentConnection.value?.database ?? '',
-    dbType: currentConnection.value?.dbType ?? 'mysql',
-    sql: data.sql,
-    columns: data.columns.map(column => column.name),
-    row,
-  })
+  // 选中的每一行共用同一套上下文，只有 row 不同（表名与主键在生成时只解析一次）
+  const base = { ...sourceOf(data), columns: data.columns.map(column => column.name) }
+  await copyRowsSql(kind, rows.map(row => ({ ...base, row })))
 }
 
 /** 当前选中的模板项 */
@@ -138,6 +190,51 @@ const currentConnection = computed(
   () => connections.value.find(c => c.id === connId.value) ?? null,
 )
 
+/**
+ * 库选择：空 = 连接默认库。查询结果的描述 / 来源表、生成 SQL 的库名都跟随它。
+ *
+ * 「不静默改变选择」的约定与执行器一致：每个连接记住上一次用过的库，
+ * 切回来按它恢复；库列表加载失败或不含已选库时**保留选择**，绝不悄悄回落。
+ */
+const databases = ref<DatabaseInfo[]>([])
+const database = ref('')
+const lastDatabaseByConn = new Map<number, string>()
+
+/** 库下拉选项 */
+const databaseOptions = computed(() =>
+  databases.value.map(info => ({ label: info.name, value: info.name })))
+
+const databaseSelection = computed({
+  get: () => database.value,
+  set: (value: string) => {
+    database.value = value
+    if (connId.value) {
+      lastDatabaseByConn.set(connId.value, value)
+    }
+  },
+})
+
+/** 占位文案：直接写清不选时会落到哪个连接默认库 */
+const databasePlaceholder = computed(() => {
+  const fallback = currentConnection.value?.database
+  return fallback ? `连接默认：${fallback}` : '选择数据库'
+})
+
+/** 库列表（跟随所选连接）；失败清空列表但不动已选的库 */
+async function loadDatabases() {
+  if (!connId.value) {
+    databases.value = []
+    return
+  }
+  try {
+    databases.value = await fetchDatabases(connId.value)
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+    databases.value = []
+  }
+}
+
 // ------------------------------------------------------------ 加载
 
 async function loadTemplates() {
@@ -145,7 +242,7 @@ async function loadTemplates() {
     templates.value = await fetchTemplateList()
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -154,7 +251,7 @@ async function loadConnections() {
     connections.value = await fetchConnections()
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -181,7 +278,7 @@ async function loadTemplateConfig(id: number | null) {
     }
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
     variableConfigs.value = []
     fieldMappings.value = []
     pageSize.value = DEFAULT_PAGE_SIZE
@@ -213,11 +310,11 @@ function parseJSON<T>(raw: string, fallback: T): T {
  */
 async function handleRun(targetPage = 1, reuseTotal = false) {
   if (!templateId.value) {
-    ElMessage.warning('请先选择 SQL 模板')
+    notify.warning('请先选择 SQL 模板')
     return
   }
   if (!connId.value) {
-    ElMessage.warning('请选择数据库连接')
+    notify.warning('请选择数据库连接')
     return
   }
 
@@ -227,11 +324,13 @@ async function handleRun(targetPage = 1, reuseTotal = false) {
   const requestPage = pageSize.value > 0 ? Math.max(targetPage, 1) : 0
 
   try {
-    // 只传模板 ID 与变量值；SQL 与脚本由后端从模板读取
+    // 只传模板 ID 与变量值；SQL 与脚本由后端从模板读取。
+    // 库传所选的（空 = 连接默认库），后端会把它钉在会话上并随结果回带生效库。
     const data = await executeTemplateQuery({
       templateId: templateId.value,
       connId: connId.value,
       variables: values,
+      database: database.value,
       page: requestPage,
       pageSize: pageSize.value,
       total: reuseTotal ? lastTotal.value : 0,
@@ -255,7 +354,7 @@ async function handleRun(targetPage = 1, reuseTotal = false) {
     logStore.logSuccess(data.rowCount, data.elapsedMs)
 
     if (data.truncated) {
-      ElMessage.warning(`结果超过上限，仅展示前 ${data.rowCount} 行`)
+      notify.warning(`结果超过上限，仅展示前 ${data.rowCount} 行`)
     }
   }
   catch (e) {
@@ -268,7 +367,7 @@ async function handleRun(targetPage = 1, reuseTotal = false) {
      * 出错位置会在「SQL 模板」页的编辑器里以红色波浪线标出。
      */
     if (!message.includes('模板语法错误')) {
-      ElMessage.error(message)
+      notify.error(message)
     }
   }
   finally {
@@ -348,11 +447,13 @@ watch(templateId, id => {
   lastTotal.value = 0
 })
 
-/** 切换连接后原结果不再对应当前库，清空并重置分页 */
-watch(connId, () => {
+/** 切换连接后原结果不再对应当前库，清空并重置分页；库选择按连接恢复 */
+watch(connId, async (id) => {
   result.value = null
   page.value = 1
   lastTotal.value = 0
+  database.value = id ? (lastDatabaseByConn.get(id) ?? '') : ''
+  await loadDatabases()
 })
 
 /**
@@ -370,6 +471,8 @@ const offTemplatesChanged = EventsOn('templates:changed', async () => {
 
 const offConnectionsChanged = EventsOn('connections:changed', async () => {
   await loadConnections()
+  // 连接编辑可能改了默认库 / 可见库：刷新列表（不动已选的库）
+  await loadDatabases()
 })
 
 onBeforeUnmount(() => {
@@ -412,20 +515,14 @@ onMounted(async () => {
     <!-- 顶部操作栏：选模板 → 选连接 → 执行 -->
     <header class="db-query__toolbar">
       <div class="db-query__toolbar-left">
-        <el-select
-          v-model="templateId"
+        <Combobox
+          v-model="templateSelection"
+          :options="templateOptions"
           placeholder="选择 SQL 模板"
+          search-placeholder="搜索模板…"
           clearable
-          filterable
-          style="width: 240px"
-        >
-          <el-option
-            v-for="tpl in templates"
-            :key="tpl.id"
-            :label="tpl.name"
-            :value="tpl.id"
-          />
-        </el-select>
+          class="w-[240px]"
+        />
 
         <ConnectionSelect
           v-model="connId"
@@ -434,29 +531,31 @@ onMounted(async () => {
           width="200px"
         />
 
-        <!-- 图标按钮：跳转到对应的单例标签页 -->
-        <el-button
-          class="db-query__icon-btn"
-          title="连接管理"
-          @click="openTool('connections')"
-        >
-          <el-icon><Link /></el-icon>
-        </el-button>
+        <!-- 库：空 = 连接默认库；描述 / 来源表反查与生成 SQL 的库名都跟随它 -->
+        <Combobox
+          v-model="databaseSelection"
+          :options="databaseOptions"
+          :placeholder="databasePlaceholder"
+          search-placeholder="搜索数据库…"
+          clearable
+          width="160px"
+        />
 
-        <el-button
-          class="db-query__icon-btn"
-          title="SQL 模板管理"
-          @click="openTool('sql-template')"
-        >
-          <el-icon><Document /></el-icon>
-        </el-button>
+        <!-- 图标按钮：跳转到对应的单例标签页 -->
+        <Button variant="secondary" size="icon" title="连接管理" @click="openTool('connections')">
+          <Icon name="link" />
+        </Button>
+
+        <Button variant="secondary" size="icon" title="SQL 模板管理" @click="openTool('sql-template')">
+          <Icon name="document" />
+        </Button>
       </div>
 
       <div class="db-query__toolbar-right">
-        <el-button type="primary" :loading="running" @click="handleRun()">
-          <el-icon><VideoPlay /></el-icon>
+        <Button :loading="running" @click="handleRun()">
+          <Icon name="play" />
           <span>执行查询</span>
-        </el-button>
+        </Button>
       </div>
     </header>
 
@@ -474,11 +573,7 @@ onMounted(async () => {
           </small>
         </div>
 
-        <el-empty
-          v-if="!templateId"
-          description="请选择 SQL 模板后填写变量"
-          :image-size="70"
-        />
+        <EmptyState v-if="!templateId" description="请选择 SQL 模板后填写变量" />
 
         <DynamicForm
           v-else
@@ -494,34 +589,38 @@ onMounted(async () => {
 
       <!-- 结果区：执行日志固定页签在最前，查询结果在后 -->
       <section class="db-query__result">
-        <el-tabs v-model="activeTab" class="db-query__tabs">
-          <el-tab-pane label="执行日志" name="log" lazy>
+        <TabGroup v-model="activeTab" :items="resultTabs" class="min-h-0 flex-1">
+          <template #panel-log>
             <ExecutionLog ref="logRef" />
-          </el-tab-pane>
-          <el-tab-pane label="查询结果" name="result">
-            <ResultTable
-              v-if="result"
-              :result="result"
-              :mappings="fieldMappings"
-              @row-contextmenu="openRowMenu"
-            />
-            <el-empty v-else description="尚未执行查询" />
+          </template>
 
-            <!-- 分页常驻：页大小填 0 即不分页；语句不支持分页时由 supported 提示 -->
-            <ResultPagination
-              v-if="result"
-              :page="page"
-              :page-size="pageSize"
-              :total="result.total"
-              :page-count="result.pageCount"
-              :supported="result.pageSize > 0 || pageSize === 0"
-              :elapsed-ms="result.elapsedMs"
-              :loading="running"
-              @change="changePage"
-              @size-change="changePageSize"
-            />
-          </el-tab-pane>
-        </el-tabs>
+          <template #panel-result>
+            <div class="flex h-full min-h-0 flex-col">
+              <ResultTable
+                v-if="result"
+                :result="result"
+                :mappings="fieldMappings"
+                :source="resultSource"
+                @row-contextmenu="openRowMenu"
+              />
+              <EmptyState v-else description="尚未执行查询" />
+
+              <!-- 分页常驻：页大小填 0 即不分页；语句不支持分页时由 supported 提示 -->
+              <ResultPagination
+                v-if="result"
+                :page="page"
+                :page-size="pageSize"
+                :total="result.total"
+                :page-count="result.pageCount"
+                :supported="result.pageSize > 0 || pageSize === 0"
+                :elapsed-ms="result.elapsedMs"
+                :loading="running"
+                @change="changePage"
+                @size-change="changePageSize"
+              />
+            </div>
+          </template>
+        </TabGroup>
       </section>
     </div>
 
@@ -530,7 +629,7 @@ onMounted(async () => {
       v-model:visible="rowMenuVisible"
       :x="rowMenuX"
       :y="rowMenuY"
-      :items="ROW_SQL_MENU_ITEMS"
+      :items="rowMenuItems"
       @select="handleRowMenuSelect"
     />
   </div>
@@ -542,11 +641,6 @@ onMounted(async () => {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-}
-
-/* 图标按钮：只显示图标，跳转到对应的单例标签页 */
-.db-query__icon-btn {
-  padding: 8px 10px;
 }
 
 .db-query__toolbar {
@@ -563,16 +657,6 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-/*
- * Element Plus 会给「相邻按钮」加 margin-left: 12px（.el-button + .el-button），
- * 和这里的 gap 叠加后两个图标按钮之间变成 20px（与 select 的 8px 不一致）。
- * 本项目按钮行一律用 flex + gap 排版，所以清掉默认外边距。
- */
-.db-query__toolbar-left :deep(.el-button + .el-button),
-.db-query__toolbar-right :deep(.el-button + .el-button) {
-  margin-left: 0;
 }
 
 /* 条件区在上、结果区在下 */
@@ -639,29 +723,7 @@ onMounted(async () => {
   min-height: 0;
 }
 
-.db-query__tabs :deep(.el-tabs__header) {
-  flex: 0 0 auto;
-  margin: 0 0 6px;
-}
 
-/* 页签项收紧到 30px：默认 40px 会在标签上下留出较多空白 */
-.db-query__tabs :deep(.el-tabs__item) {
-  height: 30px;
-  line-height: 30px;
-}
-
-.db-query__tabs :deep(.el-tabs__content) {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.db-query__tabs :deep(.el-tab-pane) {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
 
 /* 结果表格自己滚动；横向留白由分栏 padding 提供，不再另加 */
 .db-query__result :deep(.result-table) {

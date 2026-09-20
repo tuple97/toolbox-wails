@@ -566,8 +566,10 @@ export function derivedSourceDetail(columns: VirtualColumn[]): string {
  * 表补全项（表名一律带引用符，插入时吃掉用户已经敲下的开引号）。
  *
  * `autoAlias` 为真（设置项开启 **且** 当前位置是 FROM / JOIN 之后）时，
- * 每张表给两条候选：带自动别名的排在前面（boost 更高，列表默认高亮的也是它），
- * 以及一条「不加别名」的原样候选 —— 单表查询常常不需要别名，不能只给一种。
+ * 每张表**只给一条**带自动别名的候选（`users AS u`）：
+ * 同一个表出两条（带别名 / 不带别名）会让人在同一张表上犹豫 ——
+ * 开启这个开关的意思就是「我要别名」，再摆一条不带的等于把选择又推回去。
+ * 想要不带别名，把开关关掉即可（或插入后删掉 ` AS u`）。
  */
 export function tableSuggestions(
   connId: number,
@@ -576,7 +578,7 @@ export function tableSuggestions(
   metadata: MetadataProvider,
   autoAlias = false,
 ): Completion[] {
-  return metadata.tables(connId, database).flatMap((table) => {
+  return metadata.tables(connId, database).map((table) => {
     const quoted = quoteIdent(table, dialect)
     const plain: Completion = {
       label: table,
@@ -586,23 +588,20 @@ export function tableSuggestions(
       apply: quotedIdentApply(quoted),
     }
     if (!autoAlias) {
-      return [plain]
+      return plain
     }
 
+    // 推导不出别名（表名为空）时退回原样，不能给一条「表名 AS 空」
     const alias = aliasForTable(table)
     if (!alias) {
-      return [plain]
+      return plain
     }
-    return [
-      {
-        ...plain,
-        label: aliasedTableText(table, alias),
-        detail: `表 / 视图 · 自动别名 ${alias}`,
-        boost: BOOST_TABLE + 5,
-        apply: quotedIdentApply(aliasedTableText(quoted, alias)),
-      },
-      { ...plain, detail: '表 / 视图 · 不加别名' },
-    ]
+    return {
+      ...plain,
+      label: aliasedTableText(table, alias),
+      detail: `表 / 视图 · 自动别名 ${alias}`,
+      apply: quotedIdentApply(aliasedTableText(quoted, alias)),
+    }
   })
 }
 
@@ -678,7 +677,7 @@ export interface SuggestionContext {
   kind: ClauseKind
   /** 子句槽位（关键字集合与表库资格都按它算，见 completion/ 两个模块） */
   slot: SqlCompletionSlot
-  /** 光标前的紧贴情形：库名只在 `tight === 'none'` 时给 */
+  /** 光标前的紧贴情形：`'keyword'`（还在写 `FROM` 这个词）时表与库都不给 */
   tight: SqlCursorText['clause']['tight']
   /** 光标前正在输入的词 */
   prefix: string
@@ -831,7 +830,7 @@ function tableCandidates(ctx: SuggestionContext): Completion[] {
   return tableSuggestions(connId, database, dialect, metadata, ctx.autoAlias)
 }
 
-/** 库名候选：只在 `tight === 'none'`（没有紧贴正在输入的标识符）时给 */
+/** 库名候选 */
 function namespaceCandidates(ctx: SuggestionContext): Completion[] {
   const { connId, dialect, metadata } = ctx.deps
   // 系统库是否出现由设置项决定（默认显示），判定统一走 sqlVisibility
@@ -867,6 +866,26 @@ function functionCandidates(): Completion[] {
   }))
 }
 
+/**
+ * 表名与库名的**共同资格**。
+ *
+ * 两者时机本来就相同：`FROM ord|` 既可能是表 `orders`，也可能是库 `order_center`；
+ * 选定库名后接着敲 `.` 还能展开它的表。所以用同一条判据，
+ * 「这个位置该不该给表 / 库」交给槽位层（`isCandidateAllowed`）精确决定 ——
+ * 表达式位置（WHERE / ON / SELECT / AS …）在那里就已经被拦掉了。
+ *
+ * 这里只排除一件事：**光标正紧贴着关键字本身**（`FROM|`、`INTO|`）。
+ * 那时用户还在写这个词，此刻冒出来的长库名（fuzzy 能把 `FROM` 当子序列匹配上、
+ * boost 又高）会被顶到第一位，回车直接插成 `` `information_schema`. ``。
+ *
+ * 曾经的写法是「库名比表名更保守：紧贴任何标识符就不给」——`tight` 描述的是
+ * 「正在输入」，与「库名在这里有没有意义」不是一回事：`FROM d|` 正是在写表名，
+ * 库名恰恰有用，于是库名在表位置整批消失（用户反馈的 bug）。
+ */
+function supportsTableOrNamespace(ctx: SuggestionContext): boolean {
+  return ctx.kind !== 'column' && ctx.kind !== 'alias' && ctx.tight !== 'keyword'
+}
+
 /** 列 + 别名：只在表达式位置 */
 const columnProvider: SuggestionProvider = {
   id: 'columns',
@@ -874,17 +893,17 @@ const columnProvider: SuggestionProvider = {
   provide: columnCandidates,
 }
 
-/** 表名：表名位置的唯一来源；其它位置只要不是在写关键字 / 别名就给 */
+/** 表名：表名位置的唯一来源 */
 const tableProvider: SuggestionProvider = {
   id: 'tables',
-  supports: ctx => ctx.kind !== 'column' && ctx.kind !== 'alias' && ctx.tight !== 'keyword',
+  supports: supportsTableOrNamespace,
   provide: tableCandidates,
 }
 
-/** 库名：比表名更保守 —— 只有完全没在写标识符的时候才出现 */
+/** 库名：与表名同一条资格判据（时机本来就相同） */
 const namespaceProvider: SuggestionProvider = {
   id: 'namespaces',
-  supports: ctx => ctx.kind !== 'column' && ctx.kind !== 'alias' && ctx.tight === 'none',
+  supports: supportsTableOrNamespace,
   provide: namespaceCandidates,
 }
 

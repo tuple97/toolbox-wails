@@ -13,6 +13,7 @@ import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import Icon from '@/components/ui/Icon.vue'
 import { fetchSystemMetrics } from '@/api/system'
 import type { SystemMetrics } from '@/api/system'
 import { useConfigStore } from '@/stores/configStore'
@@ -26,6 +27,11 @@ const emit = defineEmits<{ (e: 'ready'): void }>()
 
 const tabStore = useTabStore()
 const configStore = useConfigStore()
+
+/** 工具图标名（注册表里没有对应工具时给问号图标，模板里就不必到处判空） */
+function iconOf(type: string): string {
+  return toolOf(type)?.icon ?? 'question'
+}
 
 // ---------------------------------------------------------------- 顶部
 
@@ -50,10 +56,10 @@ interface QuickAction {
 
 /** 四个常用入口：多例工具新建实例，单例工具跳转 */
 const QUICK_ACTIONS: QuickAction[] = [
-  { type: 'db-query', label: 'SQL 查询', icon: 'Search', description: '按模板执行查询' },
-  { type: 'command-executor', label: 'SQL 执行', icon: 'Monitor', description: '自由编写并执行 SQL' },
-  { type: 'connections', label: '连接管理', icon: 'Link', description: '维护数据库连接' },
-  { type: 'dictionary', label: '词典管理', icon: 'Collection', description: '维护本地词典数据' },
+  { type: 'db-query', label: 'SQL 查询', icon: 'search', description: '按模板执行查询' },
+  { type: 'command-executor', label: 'SQL 执行', icon: 'terminal', description: '自由编写并执行 SQL' },
+  { type: 'connections', label: '连接管理', icon: 'link', description: '维护数据库连接' },
+  { type: 'dictionary', label: '词典管理', icon: 'book', description: '维护本地词典数据' },
 ]
 
 function openQuick(action: QuickAction) {
@@ -287,7 +293,7 @@ watch(() => configStore.theme, () => renderChart())
           type="button"
           @click="openQuick(action)"
         >
-          <el-icon class="home__card-icon"><component :is="action.icon" /></el-icon>
+          <Icon class="home__card-icon" :name="action.icon" />
           <span class="home__card-title">{{ action.label }}</span>
           <span class="home__card-desc">{{ action.description }}</span>
         </button>
@@ -336,9 +342,7 @@ watch(() => configStore.theme, () => renderChart())
             :class="{ 'is-active': tab.id === tabStore.activeId }"
             @click="activateTab(tab.id)"
           >
-            <el-icon v-if="toolOf(tab.toolType)" class="home__tab-icon">
-              <component :is="toolOf(tab.toolType)?.icon" />
-            </el-icon>
+            <Icon v-if="toolOf(tab.toolType)" class="home__tab-icon" :name="iconOf(tab.toolType)" />
             <span class="home__tab-name">{{ tab.name }}</span>
           </li>
         </ul>

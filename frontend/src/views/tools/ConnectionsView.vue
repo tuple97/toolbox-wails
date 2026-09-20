@@ -1,6 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import Button from '@/components/ui/Button.vue'
+import Checkbox from '@/components/ui/Checkbox.vue'
+import ColorInput from '@/components/ui/ColorInput.vue'
+import Field from '@/components/ui/Field.vue'
+import Icon from '@/components/ui/Icon.vue'
+import Input from '@/components/ui/Input.vue'
+import NumberInput from '@/components/ui/NumberInput.vue'
+import Combobox from '@/components/ui/Combobox.vue'
+import TabGroup from '@/components/ui/TabGroup.vue'
+import Tag from '@/components/ui/Tag.vue'
+import { askConfirm } from '@/utils/confirm'
+import { notify } from '@/utils/notify'
 import {
   fetchConnection,
   fetchConnections,
@@ -69,6 +80,18 @@ const SSL_HINTS: Record<string, string> = {
 /** 详情页签 */
 const activeTab = ref('basic')
 
+/**
+ * 详情页签定义。
+ *
+ * SSL 页签上有个「已启用」小圆点，由 `#tab-ssl` 插槽渲染
+ * （页签文字本身不带状态，圆点才不该出现在无障碍名称里）。
+ */
+const CONN_TABS = [
+  { value: 'basic', label: '基本' },
+  { value: 'advanced', label: '高级' },
+  { value: 'ssl', label: 'SSL' },
+]
+
 /** SSL 页的说明文案 */
 const sslHint = computed(() => SSL_HINTS[form.sslMode] ?? SSL_HINTS.disable)
 
@@ -136,7 +159,7 @@ async function load() {
     connections.value = await fetchConnections()
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
   finally {
     loading.value = false
@@ -227,7 +250,7 @@ async function buildPayload(): Promise<DBConnection> {
 function requireSavedConnection(): DBConnection | null {
   const conn = savedConnection.value
   if (!conn) {
-    ElMessage.warning('请先保存连接，再查看或刷新元数据')
+    notify.warning('请先保存连接，再查看或刷新元数据')
   }
   return conn
 }
@@ -249,10 +272,10 @@ async function handleRefreshMetadata() {
   try {
     // 库以表单里填写的为准（未填时用连接自身配置的库）
     await metadataStore.refreshConnection(conn.id, form.database || conn.database || '')
-    ElMessage.success('元数据已刷新')
+    notify.success('元数据已刷新')
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
   finally {
     metadataRefreshing.value = false
@@ -264,10 +287,10 @@ async function handleTest() {
   testing.value = true
   try {
     await testConnection(await buildPayload())
-    ElMessage.success('连接成功')
+    notify.success('连接成功')
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
   finally {
     testing.value = false
@@ -283,13 +306,13 @@ async function handleSave() {
   if (!form.name.trim()) {
     // 名称在「基本」页：校验失败先切过去，否则用户在别的页签上看不到要填什么
     activeTab.value = 'basic'
-    ElMessage.warning('请输入连接名称')
+    notify.warning('请输入连接名称')
     return
   }
   saving.value = true
   try {
     const id = await persistConnection(await buildPayload())
-    ElMessage.success('保存成功')
+    notify.success('保存成功')
     await load()
     // 新建成功后停在刚保存的这条上（editingId 从 0 变成新 ID）
     const saved = connections.value.find(item => item.id === id)
@@ -299,7 +322,7 @@ async function handleSave() {
     notifyChanged()
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
   finally {
     saving.value = false
@@ -308,14 +331,23 @@ async function handleSave() {
 
 /** 删除连接 */
 async function handleDelete(conn: DBConnection) {
+  /*
+   * 取消是正常分支：旧写法靠 `catch (e) { if (e !== 'cancel') ... }`
+   * 用魔法字符串区分「用户取消」与「真出错」，改动一个字就会吞掉真错误。
+   */
+  const confirmed = await askConfirm({
+    message: `确定删除连接「${conn.name}」吗？其下的 SQL 模板也会一并删除。`,
+    title: '删除连接',
+    confirmText: '删除',
+    tone: 'danger',
+  })
+  if (!confirmed) {
+    return
+  }
+
   try {
-    await ElMessageBox.confirm(
-      `确定删除连接「${conn.name}」吗？其下的 SQL 模板也会一并删除。`,
-      '删除连接',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-    )
     await removeConnection(conn.id)
-    ElMessage.success('已删除')
+    notify.success('已删除')
     await load()
     // 删掉的正是当前编辑项时，回落到列表首项（没有就进入新建）
     if (editingId.value === conn.id) {
@@ -330,10 +362,7 @@ async function handleDelete(conn: DBConnection) {
     notifyChanged()
   }
   catch (e) {
-    // 用户取消时不提示
-    if (e !== 'cancel') {
-      ElMessage.error(e instanceof Error ? e.message : String(e))
-    }
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -389,13 +418,13 @@ onBeforeUnmount(() => {
       <aside class="conn-mgr__list">
         <div class="conn-mgr__list-head">
           <span>连接列表</span>
-          <el-button size="small" type="primary" @click="startCreate">
-            <el-icon><Plus /></el-icon>
+          <Button size="sm" @click="startCreate">
+            <Icon name="plus" />
             <span>新建</span>
-          </el-button>
+          </Button>
         </div>
 
-        <ul v-loading="loading" class="conn-mgr__items">
+        <ul class="conn-mgr__items">
           <li
             v-for="item in connections"
             :key="item.id"
@@ -408,25 +437,24 @@ onBeforeUnmount(() => {
               <span class="conn-mgr__item-name">
                 <span v-if="item.color" class="conn-mgr__dot" :style="{ background: item.color }" />
                 <span class="conn-mgr__item-text">{{ item.name }}</span>
-                <el-tag v-if="item.isLocal" size="small" type="success" effect="plain">本地</el-tag>
-                <el-tag v-if="item.isTest" size="small" type="warning" effect="plain">测试</el-tag>
-                <el-tag v-if="item.isProduction" size="small" type="danger" effect="plain">生产</el-tag>
-                <el-tag v-if="item.readOnly" size="small" type="info" effect="plain">只读</el-tag>
+                <Tag v-if="item.isLocal" size="sm" tone="success" effect="plain">本地</Tag>
+                <Tag v-if="item.isTest" size="sm" tone="warning" effect="plain">测试</Tag>
+                <Tag v-if="item.isProduction" size="sm" tone="danger" effect="plain">生产</Tag>
+                <Tag v-if="item.readOnly" size="sm" tone="info" effect="plain">只读</Tag>
               </span>
               <span class="conn-mgr__item-addr">
                 {{ item.dbType }} · {{ item.host }}:{{ item.port }}/{{ item.database }}
               </span>
             </div>
-            <el-icon
+            <Icon
+              name="trash"
               class="conn-mgr__item-del"
               title="删除"
               @click.stop="handleDelete(item)"
-            >
-              <Delete />
-            </el-icon>
+            />
           </li>
 
-          <li v-if="!connections.length && !loading" class="conn-mgr__empty">
+          <li v-if="!connections.length" class="conn-mgr__empty">
             暂无连接，点击新建创建
           </li>
         </ul>
@@ -442,188 +470,184 @@ onBeforeUnmount(() => {
 
           <div class="conn-mgr__editor-actions">
             <!-- 元数据：查看（放大镜）/ 刷新，放在「测试连接」左边 -->
-            <el-button
+            <Button
+              variant="secondary"
+              size="icon"
               :disabled="!editingId"
               title="查看元数据（库 / 表 / 字段）"
               @click="handleViewMetadata"
             >
-              <el-icon><Search /></el-icon>
-            </el-button>
-            <el-button
+              <Icon name="search" />
+            </Button>
+            <Button
+              variant="secondary"
+              size="icon"
               :disabled="!editingId"
               :loading="metadataRefreshing"
               title="刷新元数据"
               @click="handleRefreshMetadata"
             >
-              <el-icon><Refresh /></el-icon>
-            </el-button>
+              <Icon name="refresh" />
+            </Button>
 
-            <el-button :loading="testing" @click="handleTest">测试连接</el-button>
-            <el-button
-              type="primary"
-              :loading="saving"
-              title="保存（Ctrl+S）"
-              @click="handleSave"
-            >
+            <Button variant="secondary" :loading="testing" @click="handleTest">测试连接</Button>
+            <Button :loading="saving" title="保存（Ctrl+S）" @click="handleSave">
               保存
-            </el-button>
+            </Button>
           </div>
         </header>
 
-        <el-form :label-width="100" label-position="right" class="conn-mgr__form">
-          <el-tabs v-model="activeTab" class="conn-mgr__tabs">
+        <div class="conn-mgr__form">
+          <TabGroup v-model="activeTab" :items="CONN_TABS" class="conn-mgr__tabs">
             <!-- 基本：连接地址与账号 -->
-            <el-tab-pane label="基本" name="basic">
-              <el-form-item label="名称" required>
-                <el-input v-model="form.name" placeholder="如：生产库" />
-              </el-form-item>
+            <template #panel-basic>
+              <Field label="名称" required label-width="100px">
+                <Input v-model="form.name" placeholder="如：生产库" />
+              </Field>
 
-              <el-form-item label="类型" required>
-                <el-select v-model="form.dbType" style="width: 100%" @change="handleTypeChange">
-                  <el-option
-                    v-for="item in DB_TYPES"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
+              <Field label="类型" required label-width="100px">
+                <Combobox
+                  v-model="form.dbType"
+                  :options="DB_TYPES"
+                  @update:model-value="handleTypeChange"
+                />
+              </Field>
 
-              <el-form-item label="主机">
-                <el-input v-model="form.host" placeholder="127.0.0.1" />
-              </el-form-item>
+              <Field label="主机" label-width="100px">
+                <Input v-model="form.host" placeholder="127.0.0.1" />
+              </Field>
 
-              <el-form-item label="端口">
-                <el-input-number v-model="form.port" :min="1" :max="65535" controls-position="right" />
-              </el-form-item>
+              <Field label="端口" label-width="100px">
+                <NumberInput v-model="form.port" :min="1" :max="65535" />
+              </Field>
 
-              <el-form-item label="数据库">
-                <el-input v-model="form.database" />
-              </el-form-item>
+              <Field label="数据库" label-width="100px">
+                <Input v-model="form.database" />
+              </Field>
 
-              <el-form-item label="用户名">
-                <el-input v-model="form.username" />
-              </el-form-item>
+              <Field label="用户名" label-width="100px">
+                <Input v-model="form.username" />
+              </Field>
 
-              <el-form-item label="密码">
-                <!-- 只保留输入框自带的「眼睛」切换明文 -->
-                <el-input
+              <Field label="密码" label-width="100px">
+                <!-- 输入框自带的「眼睛」切换明文（对应 EP 的 show-password） -->
+                <Input
                   v-model="form.password"
                   type="password"
                   placeholder="留空沿用已保存密码"
                   show-password
                 />
-              </el-form-item>
+              </Field>
 
-              <el-form-item label="备注">
-                <el-input v-model="form.note" placeholder="可选，连接列表悬停展示" />
-              </el-form-item>
+              <Field label="备注" label-width="100px">
+                <Input v-model="form.note" placeholder="可选，连接列表悬停展示" />
+              </Field>
 
-              <el-form-item label="标记">
+              <Field label="标记" label-width="100px">
                 <div class="conn-form__markers">
-                  <el-color-picker v-model="form.color" />
+                  <ColorInput v-model="form.color" />
 
                   <!-- 环境标识：三者互斥，生产在最右 -->
-                  <el-checkbox
+                  <Checkbox
                     :model-value="envMark === 'local'"
-                    @change="(value: boolean | string | number) => toggleEnv('local', Boolean(value))"
+                    @update:model-value="toggleEnv('local', $event)"
                   >
                     本地库
-                  </el-checkbox>
-                  <el-checkbox
+                  </Checkbox>
+                  <Checkbox
                     :model-value="envMark === 'test'"
-                    @change="(value: boolean | string | number) => toggleEnv('test', Boolean(value))"
+                    @update:model-value="toggleEnv('test', $event)"
                   >
                     测试库
-                  </el-checkbox>
-                  <el-checkbox
+                  </Checkbox>
+                  <Checkbox
                     :model-value="envMark === 'production'"
-                    @change="(value: boolean | string | number) => toggleEnv('production', Boolean(value))"
+                    @update:model-value="toggleEnv('production', $event)"
                   >
                     生产库
-                  </el-checkbox>
+                  </Checkbox>
 
-                  <el-checkbox v-model="form.readOnly">只读连接</el-checkbox>
+                  <Checkbox v-model="form.readOnly">只读连接</Checkbox>
                 </div>
-              </el-form-item>
+              </Field>
               <p class="conn-form__tip">
                 颜色用于列表着色区分环境；本地 / 测试 / 生产为互斥的环境标识；
                 只读连接会在后端拒绝执行写操作。
               </p>
-            </el-tab-pane>
+            </template>
 
             <!-- 高级：方言、超时与自定义参数 -->
-            <el-tab-pane label="高级" name="advanced">
-              <el-form-item v-if="form.dbType === 'mysql'" label="字符集">
-                <el-input v-model="form.charset" placeholder="默认 utf8mb4" />
-              </el-form-item>
-              <el-form-item v-else label="默认模式">
-                <el-input v-model="form.defaultSchema" placeholder="如 public，留空用连接默认 search_path" />
-              </el-form-item>
+            <template #panel-advanced>
+              <Field v-if="form.dbType === 'mysql'" label="字符集" label-width="100px">
+                <Input v-model="form.charset" placeholder="默认 utf8mb4" />
+              </Field>
+              <Field v-else label="默认模式" label-width="100px">
+                <Input v-model="form.defaultSchema" placeholder="如 public，留空用连接默认 search_path" />
+              </Field>
 
-              <el-form-item label="连接超时">
-                <el-input-number v-model="form.connectTimeoutSecs" :min="1" :max="600" controls-position="right" />
-                <span class="conn-form__unit">秒（默认 10）</span>
-              </el-form-item>
+              <Field label="连接超时" label-width="100px">
+                <div class="flex items-center gap-2">
+                  <NumberInput v-model="form.connectTimeoutSecs" :min="1" :max="600" />
+                  <span class="conn-form__unit">秒（默认 10）</span>
+                </div>
+              </Field>
 
-              <el-form-item label="查询超时">
-                <el-input-number v-model="form.queryTimeoutSecs" :min="1" :max="3600" controls-position="right" />
-                <span class="conn-form__unit">秒（默认 60）</span>
-              </el-form-item>
+              <Field label="查询超时" label-width="100px">
+                <div class="flex items-center gap-2">
+                  <NumberInput v-model="form.queryTimeoutSecs" :min="1" :max="3600" />
+                  <span class="conn-form__unit">秒（默认 60）</span>
+                </div>
+              </Field>
 
-              <el-form-item label="空闲回收">
-                <el-input-number v-model="form.keepaliveSecs" :min="1" :max="3600" controls-position="right" />
-                <span class="conn-form__unit">秒（默认 30）</span>
-              </el-form-item>
+              <Field label="空闲回收" label-width="100px">
+                <div class="flex items-center gap-2">
+                  <NumberInput v-model="form.keepaliveSecs" :min="1" :max="3600" />
+                  <span class="conn-form__unit">秒（默认 30）</span>
+                </div>
+              </Field>
 
-              <el-form-item label="附加参数">
-                <el-input
+              <Field label="附加参数" label-width="100px">
+                <Input
                   v-model="form.urlParams"
                   type="textarea"
                   :rows="3"
                   placeholder="key=value&key2=value2，同名参数会覆盖上面的默认值"
                 />
-              </el-form-item>
-            </el-tab-pane>
+              </Field>
+            </template>
 
-            <!-- SSL：单独一页，标签上的小圆点表示已启用 -->
-            <el-tab-pane name="ssl">
-              <template #label>
-                <span class="conn-form__tab">
-                  SSL
-                  <span v-if="form.sslMode !== 'disable'" class="conn-form__tab-dot" />
-                </span>
-              </template>
+            <!-- SSL 页签上的小圆点表示已启用（只影响页签外观，不影响无障碍名称） -->
+            <template #tab-ssl>
+              <span class="conn-form__tab">
+                SSL
+                <span v-if="form.sslMode !== 'disable'" class="conn-form__tab-dot" />
+              </span>
+            </template>
 
-              <el-form-item label="SSL 模式">
-                <el-select v-model="form.sslMode" style="width: 100%">
-                  <el-option
-                    v-for="item in SSL_MODES"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
+            <!-- SSL：单独一页 -->
+            <template #panel-ssl>
+              <Field label="SSL 模式" label-width="100px">
+                <Combobox v-model="form.sslMode" :options="SSL_MODES" />
+              </Field>
 
               <template v-if="form.sslMode !== 'disable'">
-                <el-form-item label="CA 证书">
-                  <el-input v-model="form.sslCaPath" placeholder="verify-ca / verify-full 时需要，如 /etc/ssl/ca.pem" />
-                </el-form-item>
-                <el-form-item label="客户端证书">
-                  <el-input v-model="form.sslCertPath" placeholder="双向认证时填写，如 /etc/ssl/client.pem" />
-                </el-form-item>
-                <el-form-item label="客户端私钥">
-                  <el-input v-model="form.sslKeyPath" placeholder="双向认证时填写，如 /etc/ssl/client.key" />
-                </el-form-item>
+                <Field label="CA 证书" label-width="100px">
+                  <Input v-model="form.sslCaPath" placeholder="verify-ca / verify-full 时需要，如 /etc/ssl/ca.pem" />
+                </Field>
+                <Field label="客户端证书" label-width="100px">
+                  <Input v-model="form.sslCertPath" placeholder="双向认证时填写，如 /etc/ssl/client.pem" />
+                </Field>
+                <Field label="客户端私钥" label-width="100px">
+                  <Input v-model="form.sslKeyPath" placeholder="双向认证时填写，如 /etc/ssl/client.key" />
+                </Field>
               </template>
 
               <p class="conn-form__tip conn-form__tip--ssl">
                 {{ sslHint }}
               </p>
-            </el-tab-pane>
-          </el-tabs>
-        </el-form>
+            </template>
+          </TabGroup>
+        </div>
       </section>
     </div>
 
@@ -797,10 +821,11 @@ onBeforeUnmount(() => {
   margin-left: auto;
 }
 
-/* Element Plus 会给相邻按钮加 12px 外边距，与这里的 gap 叠加后间距不均 */
-.conn-mgr__editor-actions :deep(.el-button + .el-button) {
-  margin-left: 0;
-}
+/*
+ * 编辑器操作行：按钮间距只由 gap 决定。
+ * （旧样式里那条 `.el-button + .el-button { margin-left: 0 }` 是在抵消
+ * Element Plus 给相邻按钮加的 12px，随组件库一起去掉了。）
+ */
 
 .conn-mgr__form {
   display: flex;
@@ -820,14 +845,12 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-.conn-mgr__tabs :deep(.el-tabs__header) {
+.conn-mgr__tabs :deep(.app-tabgroup__tabs) {
   flex: 0 0 auto;
-  margin: 0;
   padding: 6px 12px 0;
-  border-bottom: 1px solid var(--border-color);
 }
 
-.conn-mgr__tabs :deep(.el-tabs__content) {
+.conn-mgr__tabs :deep(.app-tabgroup__content) {
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -865,7 +888,7 @@ onBeforeUnmount(() => {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--el-color-success, #67c23a);
+  background: var(--success-color);
 }
 
 .conn-form__unit {

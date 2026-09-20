@@ -2,7 +2,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { Component, ComponentPublicInstance } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTabStore } from '@/stores/tabStore'
 import { useDictStore } from '@/stores/dictStore'
 import { useConfigStore } from '@/stores/configStore'
@@ -10,6 +9,9 @@ import { EventsOn } from '@/api/runtime'
 import { toolOf } from '@/utils/tools'
 import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
 import { parseSidebarView, serializeSidebarView } from '@/utils/sidebarView'
+import { askConfirm } from '@/utils/confirm'
+import { notify } from '@/utils/notify'
+import Icon from '@/components/ui/Icon.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ToolPickerDialog from '@/components/ToolPickerDialog.vue'
 import DbQuery from '@/views/tools/DbQuery.vue'
@@ -25,6 +27,11 @@ import type { ToolType, WorkbenchTab } from '@/types'
 const tabStore = useTabStore()
 const dictStore = useDictStore()
 const configStore = useConfigStore()
+
+/** 工具图标名（注册表里没有对应工具时给问号图标，模板里就不必到处判空） */
+function iconOf(type: string): string {
+  return toolOf(type)?.icon ?? 'question'
+}
 
 /** 状态栏右侧的版本号（取自后端 GetAppInfo，避免前后端各维护一份版本号） */
 const appVersionLabel = ref('')
@@ -374,7 +381,7 @@ function handleMenuSelect(key: string) {
 
 function handleClose(tab: WorkbenchTab) {
   if (tab.isLocked) {
-    ElMessage.warning('标签已锁定，请先解锁')
+    notify.warning('标签已锁定，请先解锁')
     return
   }
   tabStore.closeTab(tab.id)
@@ -384,17 +391,16 @@ async function handleCloseAll() {
   if (tabStore.closableTabs.length === 0) {
     return
   }
-  try {
-    await ElMessageBox.confirm(
-      '确定要关闭全部未锁定的标签吗？',
-      '关闭全部',
-      { type: 'warning', confirmButtonText: '关闭', cancelButtonText: '取消' },
-    )
-    tabStore.closeAll()
+  // 取消是正常分支（旧写法用 catch 表达「用户取消」，会把真实错误也一起吞掉）
+  const confirmed = await askConfirm({
+    message: '确定要关闭全部未锁定的标签吗？',
+    title: '关闭全部',
+    confirmText: '关闭',
+  })
+  if (!confirmed) {
+    return
   }
-  catch {
-    // 用户取消，无需处理
-  }
+  tabStore.closeAll()
 }
 
 // ------------------------------------------------------------ 内容区
@@ -533,7 +539,7 @@ function handleTabReady(uid: string) {
           :title="sidebarCollapsed ? '展开菜单' : '收起菜单'"
           @click="toggleSidebar"
         >
-          <el-icon><Expand v-if="sidebarCollapsed" /><Fold v-else /></el-icon>
+          <Icon :name="sidebarCollapsed ? 'chevrons-right' : 'chevrons-left'" />
         </button>
 
         <!-- 新建：打开工具选择弹窗 -->
@@ -543,7 +549,7 @@ function handleTabReady(uid: string) {
           title="新建标签（选择工具）"
           @click="pickerVisible = true"
         >
-          <el-icon><Plus /></el-icon>
+          <Icon name="plus" />
         </button>
 
         <span class="workbench__divider" aria-hidden="true" />
@@ -575,10 +581,12 @@ function handleTabReady(uid: string) {
             @dblclick.stop="startRename(tab)"
             @contextmenu="openContextMenu($event, tab)"
           >
-            <el-icon v-if="toolOf(tab.toolType)" class="workbench__tab-icon">
-              <component :is="toolOf(tab.toolType)?.icon" />
-            </el-icon>
-            <el-icon v-if="tab.isLocked" class="workbench__tab-icon"><Lock /></el-icon>
+            <Icon
+              v-if="toolOf(tab.toolType)"
+              class="workbench__tab-icon"
+              :name="iconOf(tab.toolType)"
+            />
+            <Icon v-if="tab.isLocked" name="lock" class="workbench__tab-icon" />
 
             <input
               v-if="renamingId === tab.id"
@@ -593,13 +601,12 @@ function handleTabReady(uid: string) {
             >
             <span v-else class="workbench__tab-name">{{ tab.name }}</span>
 
-            <el-icon
+            <Icon
               v-if="canClose(tab)"
+              name="close"
               class="workbench__tab-close"
               @click.stop="handleClose(tab)"
-            >
-              <Close />
-            </el-icon>
+            />
           </div>
             </VueDraggable>
           </div>
@@ -612,7 +619,7 @@ function handleTabReady(uid: string) {
             title="向左滚动"
             @click="scrollTabs(-1)"
           >
-            <el-icon><ArrowLeft /></el-icon>
+            <Icon name="arrow-left" />
           </button>
           <button
             v-if="canScrollRight"
@@ -621,7 +628,7 @@ function handleTabReady(uid: string) {
             title="向右滚动"
             @click="scrollTabs(1)"
           >
-            <el-icon><ArrowRight /></el-icon>
+            <Icon name="arrow-right" />
           </button>
         </div>
       </div>

@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import Button from '@/components/ui/Button.vue'
+import Dialog from '@/components/ui/Dialog.vue'
+import Icon from '@/components/ui/Icon.vue'
+import Input from '@/components/ui/Input.vue'
+import TabGroup from '@/components/ui/TabGroup.vue'
+import Tag from '@/components/ui/Tag.vue'
+import { askConfirm } from '@/utils/confirm'
+import { notify } from '@/utils/notify'
 import { Events } from '@wailsio/runtime'
 import { useConfigStore } from '@/stores/configStore'
 import { useTabStore } from '@/stores/tabStore'
@@ -87,6 +94,19 @@ const detectedVariables = ref<string[]>([])
 /** 配置区当前页签，默认落在变量配置 */
 const configTab = ref('variables')
 
+/**
+ * 配置区页签。
+ *
+ * `lazy`：未激活不挂载 —— 避免隐藏的编辑器 / 面板在每次切换模板时被无谓更新
+ * （两个脚本编辑器都是 CodeMirror 实例，代价不小）。
+ */
+const CONFIG_TABS = [
+  { value: 'variables', label: '变量配置', lazy: true },
+  { value: 'fields', label: '字段映射', lazy: true },
+  { value: 'pre', label: '前置脚本', lazy: true },
+  { value: 'post', label: '后置脚本', lazy: true },
+]
+
 // ------------------------------------------------------------ 加载
 
 async function loadTemplates() {
@@ -95,7 +115,7 @@ async function loadTemplates() {
     templates.value = await fetchTemplateList()
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
   finally {
     loading.value = false
@@ -130,7 +150,7 @@ async function loadTemplate(id: number) {
     await checkTemplate()
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -144,7 +164,7 @@ function parseJSON<T>(raw: string, fallback: T): T {
     return Array.isArray(parsed) ? (parsed as T) : fallback
   }
   catch {
-    ElMessage.warning('模板中的配置 JSON 解析失败，已重置为空')
+    notify.warning('模板中的配置 JSON 解析失败，已重置为空')
     return fallback
   }
 }
@@ -190,7 +210,7 @@ async function refreshVariables() {
     const message = e instanceof Error ? e.message : String(e)
     // 模板语法错误不弹窗：编辑时半成品语法很常见，位置已在编辑器上用波浪线标出
     if (!message.includes('模板语法错误')) {
-      ElMessage.error(message)
+      notify.error(message)
     }
   }
 }
@@ -268,15 +288,15 @@ function handleCreate() {
 /** 保存模板 */
 async function handleSave() {
   if (!form.name.trim()) {
-    ElMessage.warning('请输入模板名称')
+    notify.warning('请输入模板名称')
     return
   }
   if (!form.connId) {
-    ElMessage.warning('请选择所属连接')
+    notify.warning('请选择所属连接')
     return
   }
   if (!form.sqlText.trim()) {
-    ElMessage.warning('SQL 内容不能为空')
+    notify.warning('SQL 内容不能为空')
     return
   }
 
@@ -305,7 +325,7 @@ async function handleSave() {
     await validateScript(form.postScript)
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
     return
   }
 
@@ -324,12 +344,12 @@ async function handleSave() {
 
     const id = await persistTemplate(payload)
     editingId.value = id
-    ElMessage.success('模板已保存')
+    notify.success('模板已保存')
     await loadTemplates()
     notifyChanged()
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
   finally {
     saving.value = false
@@ -338,26 +358,33 @@ async function handleSave() {
 
 /** 删除模板 */
 async function handleDelete(item: TemplateListItem) {
+  /*
+   * 取消是正常分支。旧写法靠 `catch (e) { if (e !== 'cancel') ... }` ——
+   * 用一个魔法字符串区分「用户取消」和「真出错」，多一个字少一个字都会吞掉真错误。
+   */
+  const confirmed = await askConfirm({
+    message: `确定删除模板「${item.name}」吗？引用它的标签页将无法再执行。`,
+    title: '删除模板',
+    confirmText: '删除',
+    tone: 'danger',
+  })
+  if (!confirmed) {
+    return
+  }
+
   try {
-    await ElMessageBox.confirm(
-      `确定删除模板「${item.name}」吗？引用它的标签页将无法再执行。`,
-      '删除模板',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-    )
     await removeTemplate(item.id)
 
     // 删除的正是当前编辑的模板时，重置编辑区
     if (editingId.value === item.id) {
       handleCreate()
     }
-    ElMessage.success('已删除')
+    notify.success('已删除')
     await loadTemplates()
     notifyChanged()
   }
   catch (e) {
-    if (e !== 'cancel') {
-      ElMessage.error(e instanceof Error ? e.message : String(e))
-    }
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -413,6 +440,9 @@ const sqlEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null)
 const snippetVisible = ref(false)
 /** 当前选中的分类 */
 const snippetCategory = ref<string>(SNIPPET_CATEGORIES[0])
+/** 分类分段控件的选项（分类名本身就是值） */
+const snippetCategories = computed(() =>
+  SNIPPET_CATEGORIES.map(category => ({ value: category, label: category })))
 /** 当前选中的片段 */
 const selectedSnippet = ref<SqlSnippet>(SQL_SNIPPETS[0])
 
@@ -436,7 +466,7 @@ function openSnippetPicker() {
  */
 function insertSnippet(snippet: SqlSnippet) {
   if (!sqlEditorRef.value?.insertText(snippet.code)) {
-    ElMessage.warning('编辑器尚未就绪，请稍后再试')
+    notify.warning('编辑器尚未就绪，请稍后再试')
     return
   }
   snippetVisible.value = false
@@ -474,13 +504,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       <aside class="tpl-mgr__list">
         <div class="tpl-mgr__list-head">
           <span>模板列表</span>
-          <el-button size="small" type="primary" @click="handleCreate">
-            <el-icon><Plus /></el-icon>
+          <Button size="sm" @click="handleCreate">
+            <Icon name="plus" />
             <span>新建</span>
-          </el-button>
+          </Button>
         </div>
 
-        <ul v-loading="loading" class="tpl-mgr__items">
+        <ul class="tpl-mgr__items">
           <li
             v-for="item in templates"
             :key="item.id"
@@ -492,17 +522,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
               <span class="tpl-mgr__item-name">{{ item.name }}</span>
               <code class="tpl-mgr__item-sql">{{ item.sqlText }}</code>
             </div>
-            <el-icon
+            <Icon
+              name="trash"
               class="tpl-mgr__item-del"
               title="删除"
               @click.stop="handleDelete(item)"
-            >
-              <Delete />
-            </el-icon>
+            />
           </li>
 
-          <li v-if="!templates.length && !loading" class="tpl-mgr__empty">
-            暂无模板，点击新建创建
+          <li v-if="!templates.length" class="tpl-mgr__empty">
+            {{ loading ? '正在读取模板…' : '暂无模板，点击新建创建' }}
           </li>
         </ul>
       </aside>
@@ -510,7 +539,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       <!-- 右：编辑区 -->
       <section class="tpl-mgr__editor">
         <header class="tpl-mgr__editor-head">
-          <el-input
+          <Input
             v-model="form.name"
             placeholder="模板名称"
             class="tpl-mgr__name"
@@ -521,9 +550,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
             placeholder="所属连接"
             class="tpl-mgr__conn"
           />
-          <el-button type="primary" :loading="saving" @click="handleSave">
+          <Button :loading="saving" @click="handleSave">
             保存模板
-          </el-button>
+          </Button>
         </header>
 
         <!-- 上方：SQL 编辑器，约占 40% -->
@@ -534,14 +563,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
               用 <code>&#123;&#123; 变量名 &#125;&#125;</code> 插入变量；
               支持 <code>&#123;&#123;if 变量&#125;&#125;...&#123;&#123;end&#125;&#125;</code> 条件拼接
             </small>
-            <el-button
+            <Button
+              variant="secondary"
+              size="sm"
               class="tpl-mgr__sql-insert"
-              size="small"
               @click="openSnippetPicker"
             >
-              <el-icon><Plus /></el-icon>
+              <Icon name="plus" />
               <span>插入模板</span>
-            </el-button>
+            </Button>
           </div>
           <!-- 补全上下文：所属连接的表/列 + 本模板变量（见 templateCompletionContext） -->
           <CodeEditor
@@ -560,25 +590,24 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
         <div class="tpl-mgr__config">
           <div class="tpl-mgr__config-head">
             <span>模板配置</span>
-            <el-tag v-if="detectedVariables.length" size="small" type="info">
+            <Tag v-if="detectedVariables.length" size="sm" tone="info">
               检测到 {{ detectedVariables.length }} 个变量
-            </el-tag>
+            </Tag>
           </div>
 
-          <el-tabs v-model="configTab" class="tpl-mgr__tabs">
-            <!-- lazy：未激活不挂载，避免隐藏的编辑器/面板在每次选模板时被无谓更新 -->
-            <el-tab-pane label="变量配置" name="variables" lazy>
+          <TabGroup v-model="configTab" :items="CONFIG_TABS" class="tpl-mgr__tabs">
+            <template #panel-variables>
               <VariableConfigPanel
                 v-model="variableConfigs"
                 :conn-id="form.connId || null"
               />
-            </el-tab-pane>
+            </template>
 
-            <el-tab-pane label="字段映射" name="fields" lazy>
+            <template #panel-fields>
               <FieldMappingPanel v-model="fieldMappings" />
-            </el-tab-pane>
+            </template>
 
-            <el-tab-pane label="前置脚本" name="pre" lazy>
+            <template #panel-pre>
               <p class="tpl-mgr__hint">
                 可修改变量并追加 SQL 片段：
                 <code>return &#123; variables, sqlFragment &#125;</code>
@@ -590,9 +619,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
                 height="220px"
                 @mount="handlePreScriptMount"
               />
-            </el-tab-pane>
+            </template>
 
-            <el-tab-pane label="后置脚本" name="post" lazy>
+            <template #panel-post>
               <p class="tpl-mgr__hint">
                 可加工结果集：
                 <code>return &#123; rows &#125;</code>
@@ -604,33 +633,18 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
                 height="220px"
                 @mount="handlePostScriptMount"
               />
-            </el-tab-pane>
-          </el-tabs>
+            </template>
+          </TabGroup>
         </div>
       </section>
     </div>
 
     <!-- 插入模板片段：左侧选择，右侧预览 -->
-    <el-dialog
-      v-model="snippetVisible"
-      title="插入模板片段"
-      width="860px"
-      align-center
-      append-to-body
-      class="snippet-dlg"
-    >
+    <Dialog v-model="snippetVisible" title="插入模板片段" :width="860">
       <div class="snippet">
         <!-- 左：分类 + 片段列表 -->
         <aside class="snippet__list">
-          <el-radio-group v-model="snippetCategory" size="small" class="snippet__cats">
-            <el-radio-button
-              v-for="category in SNIPPET_CATEGORIES"
-              :key="category"
-              :value="category"
-            >
-              {{ category }}
-            </el-radio-button>
-          </el-radio-group>
+          <Tabs v-model="snippetCategory" :items="snippetCategories" class="snippet__cats" />
 
           <ul class="snippet__items">
             <li
@@ -668,12 +682,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       </div>
 
       <template #footer>
-        <el-button @click="snippetVisible = false">关闭</el-button>
-        <el-button type="primary" @click="insertSnippet(selectedSnippet)">
+        <Button variant="secondary" size="sm" @click="snippetVisible = false">关闭</Button>
+        <Button size="sm" @click="insertSnippet(selectedSnippet)">
           插入
-        </el-button>
+        </Button>
       </template>
-    </el-dialog>
+    </Dialog>
   </div>
 </template>
 
@@ -847,7 +861,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
   margin-left: auto;
 }
 
-.tpl-mgr__sql-insert .el-icon {
+.tpl-mgr__sql-insert .app-icon {
   margin-right: 4px;
 }
 
@@ -867,11 +881,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 
 .snippet__cats {
   flex: 0 0 auto;
-}
-
-.snippet__cats :deep(.el-radio-button__inner) {
-  padding: 6px 10px;
-  font-size: var(--app-font-size-sm);
 }
 
 .snippet__items {
@@ -998,16 +1007,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
   padding: 0 12px;
 }
 
-.tpl-mgr__tabs :deep(.el-tabs__header) {
-  flex: 0 0 auto;
-  margin: 0;
-}
-
-.tpl-mgr__tabs :deep(.el-tabs__content) {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
+/* 页签栏与内容区的版面由 TabGroup 自带（页签栏固定 + 内容占满剩余高度） */
 
 .tpl-mgr__hint {
   margin: 0 0 8px;

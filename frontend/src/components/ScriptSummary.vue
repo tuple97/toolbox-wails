@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import DataTable from '@/components/ui/DataTable.vue'
+import Tag from '@/components/ui/Tag.vue'
+import type { TableColumn } from '@/utils/tableLayout'
 import type { ScriptRunSummary, StatementRunRecord } from '@/types'
 
 /**
@@ -40,6 +43,21 @@ const stats = computed(() => [
   { label: '总耗时', value: props.summary.totalMs ? formatDuration(props.summary.totalMs) : '—' },
 ])
 
+/**
+ * 明细表列。
+ *
+ * 固定信息的列给 `width`（时间、耗时、状态），语句与结果给 `minWidth`
+ * —— 它们内容长度差异最大，按 220 : 160 的比例分剩余空间。
+ */
+const COLUMNS: TableColumn[] = [
+  { key: 'sql', label: '语句', minWidth: 220, ellipsis: true },
+  { key: 'status', label: '状态', width: 96, align: 'center' },
+  { key: 'result', label: '结果', minWidth: 160, ellipsis: true },
+  { key: 'startedAt', label: '开始时间', width: 118, align: 'center' },
+  { key: 'finishedAt', label: '结束时间', width: 118, align: 'center' },
+  { key: 'elapsedMs', label: '耗时', width: 100, align: 'right' },
+]
+
 /** 状态文案 */
 function statusText(record: StatementRunRecord): string {
   switch (record.status) {
@@ -54,8 +72,8 @@ function statusText(record: StatementRunRecord): string {
   }
 }
 
-/** 状态标签样式 */
-function statusType(record: StatementRunRecord): 'success' | 'danger' | 'info' | 'primary' {
+/** 状态标签语气（`brand` 就是原来的 primary，自绘 Tag 用这个名字） */
+function statusTone(record: StatementRunRecord): 'success' | 'danger' | 'info' | 'brand' {
   switch (record.status) {
     case 'success':
       return 'success'
@@ -64,7 +82,7 @@ function statusType(record: StatementRunRecord): 'success' | 'danger' | 'info' |
     case 'cancelled':
       return 'info'
     default:
-      return 'primary'
+      return 'brand'
   }
 }
 
@@ -84,117 +102,63 @@ function resultText(record: StatementRunRecord): string {
   }
   return '—'
 }
+
+/** 失败 / 取消的结果文字用错误色 */
+function isFailed(record: StatementRunRecord): boolean {
+  return record.status === 'failed' || record.status === 'cancelled'
+}
+
+/** 行号列：明细表从 1 开始编号（写成函数而不是模板里的箭头 —— 模板里的箭头参数没有类型推断） */
+function rowNumberOf(index: number): number {
+  return index + 1
+}
 </script>
 
 <template>
-  <div class="script-summary">
-    <div class="script-summary__stats">
-      <div v-for="item in stats" :key="item.label" class="script-summary__stat">
-        <span class="script-summary__stat-label">{{ item.label }}</span>
-        <span class="script-summary__stat-value">{{ item.value }}</span>
+  <div class="script-summary flex min-h-0 flex-1 flex-col gap-2.5">
+    <div class="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2">
+      <div
+        v-for="item in stats"
+        :key="item.label"
+        class="flex items-baseline gap-2 rounded-md border border-border bg-surface px-3 py-2"
+      >
+        <span class="text-xs text-muted">{{ item.label }}</span>
+        <span class="text-sm font-semibold text-text">{{ item.value }}</span>
       </div>
     </div>
 
-    <el-table
-      :data="summary.records"
-      size="small"
-      border
-      height="100%"
-      class="script-summary__table"
+    <DataTable
+      :columns="COLUMNS"
+      :rows="summary.records"
+      :index-of="rowNumberOf"
+      :index-width="52"
+      size="sm"
+      striped
+      class="min-h-0 flex-1 rounded-md border border-border"
       empty-text="没有可执行的语句"
     >
-      <el-table-column type="index" label="#" width="52" align="center" />
-      <el-table-column prop="sql" label="语句" min-width="220" show-overflow-tooltip />
-      <el-table-column label="状态" width="96" align="center">
-        <template #default="{ row }">
-          <el-tag :type="statusType(row)" size="small" effect="light">
-            {{ statusText(row) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <!-- 截断时悬停出完整内容，与「语句」列同一行为（show-overflow-tooltip） -->
-      <el-table-column label="结果" min-width="160" show-overflow-tooltip>
-        <template #default="{ row }">
-          <span
-            class="script-summary__result"
-            :class="{ 'script-summary__result--error': row.status === 'failed' || row.status === 'cancelled' }"
-          >{{ resultText(row) }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="开始时间" width="118" align="center">
-        <template #default="{ row }">{{ formatTime(row.startedAt) }}</template>
-      </el-table-column>
-      <el-table-column label="结束时间" width="118" align="center">
-        <template #default="{ row }">{{ row.finishedAt ? formatTime(row.finishedAt) : '执行中…' }}</template>
-      </el-table-column>
-      <el-table-column label="耗时" width="100" align="right">
-        <template #default="{ row }">
-          {{ row.finishedAt ? formatDuration(row.elapsedMs) : '—' }}
-        </template>
-      </el-table-column>
-    </el-table>
+      <template #cell-status="{ row }">
+        <Tag :tone="statusTone(row)" size="sm">
+          {{ statusText(row) }}
+        </Tag>
+      </template>
+
+      <!-- 结果列：默认弱化色，失败/取消用错误色 -->
+      <template #cell-result="{ row }">
+        <span :class="isFailed(row) ? 'text-danger' : 'text-muted'">{{ resultText(row) }}</span>
+      </template>
+
+      <template #cell-startedAt="{ row }">
+        {{ formatTime(row.startedAt) }}
+      </template>
+
+      <template #cell-finishedAt="{ row }">
+        {{ row.finishedAt ? formatTime(row.finishedAt) : '执行中…' }}
+      </template>
+
+      <template #cell-elapsedMs="{ row }">
+        {{ row.finishedAt ? formatDuration(row.elapsedMs) : '—' }}
+      </template>
+    </DataTable>
   </div>
 </template>
-
-<style scoped>
-.script-summary {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  gap: 10px;
-}
-
-.script-summary__stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.script-summary__stat {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--surface-color);
-}
-
-.script-summary__stat-label {
-  color: var(--text-muted);
-  font-size: var(--app-font-size-xs);
-}
-
-.script-summary__stat-value {
-  color: var(--text-color);
-  font-size: var(--app-font-size-sm);
-  font-weight: 600;
-}
-
-.script-summary__table {
-  flex: 1;
-  min-height: 0;
-  background: transparent;
-}
-
-/* 结果列：默认弱化色，失败/取消用错误色，长文本截断（不弹悬停提示） */
-.script-summary__result {
-  color: var(--text-muted);
-  font-size: var(--app-font-size-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.script-summary__result--error {
-  color: var(--danger-color, var(--el-color-danger));
-}
-
-.script-summary__table :deep(.el-table__cell) {
-  font-size: var(--app-font-size-sm);
-  user-select: text;
-  -webkit-user-select: text;
-}
-</style>

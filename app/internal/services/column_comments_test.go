@@ -9,47 +9,52 @@ func TestFromTables(t *testing.T) {
 	cases := []struct {
 		name  string
 		query string
-		want  []string
+		want  []tableRef
 	}{
 		{
-			name:  "单表",
+			name:  "单表（未限定：schema 留空，由调用方回退默认库）",
 			query: "SELECT * FROM users",
-			want:  []string{"users"},
+			want:  []tableRef{{table: "users"}},
 		},
 		{
-			name:  "限定名取最后一段",
+			name:  "限定名带上库（连接没配默认库时，这是唯一的 schema 线索）",
 			query: "SELECT u.id FROM `db`.`users` u",
-			want:  []string{"users"},
+			want:  []tableRef{{schema: "db", table: "users"}},
 		},
 		{
 			name:  "JOIN 两张表并去重",
 			query: "SELECT * FROM users u JOIN orders o ON o.user_id = u.id JOIN users u2 ON 1 = 1",
-			want:  []string{"users", "orders"},
+			want:  []tableRef{{table: "users"}, {table: "orders"}},
+		},
+		{
+			name:  "同名表在不同库：按 库.表 区分，都保留",
+			query: "SELECT * FROM a.users JOIN b.users ON 1 = 1",
+			want:  []tableRef{{schema: "a", table: "users"}, {schema: "b", table: "users"}},
 		},
 		{
 			name:  "子查询：跳过括号本身，仍能取到内部的表",
 			query: "SELECT * FROM (SELECT * FROM orders) t",
-			want:  []string{"orders"},
+			want:  []tableRef{{table: "orders"}},
 		},
 		{
 			name:  "注释里的 from 不算",
 			query: "SELECT * FROM /* from fake */ users",
-			want:  []string{"users"},
+			want:  []tableRef{{table: "users"}},
 		},
 		{
 			name:  "没有表来源",
 			query: "SELECT 1",
-			want:  []string{},
+			want:  []tableRef{},
 		},
 		{
 			name:  "字符串里的 from 不算",
 			query: "SELECT * FROM users WHERE name = 'from orders'",
-			want:  []string{"users"},
+			want:  []tableRef{{table: "users"}},
 		},
 		{
 			name:  "CTE：按出现顺序收集（CTE 名查不到注释，无副作用）",
 			query: "WITH c AS (SELECT * FROM users) SELECT * FROM c",
-			want:  []string{"users", "c"},
+			want:  []tableRef{{table: "users"}, {table: "c"}},
 		},
 	}
 
@@ -63,5 +68,27 @@ func TestFromTables(t *testing.T) {
 				t.Fatalf("fromTables(%q) = %v, 期望 %v", item.query, got, item.want)
 			}
 		})
+	}
+}
+
+func TestQualifiedTableRef(t *testing.T) {
+	cases := []struct {
+		text   string
+		schema string
+		table  string
+	}{
+		{"users", "", "users"},
+		{"`db`.`users` u", "db", "users"},
+		{`"public"."log"`, "public", "log"},
+		{"db.users WHERE 1 = 1", "db", "users"},
+		{"(SELECT 1) t", "", ""},
+		{"", "", ""},
+	}
+
+	for _, item := range cases {
+		got := qualifiedTableRef(item.text)
+		if got.schema != item.schema || got.table != item.table {
+			t.Fatalf("qualifiedTableRef(%q) = %+v, 期望 {%s %s}", item.text, got, item.schema, item.table)
+		}
 	}
 }

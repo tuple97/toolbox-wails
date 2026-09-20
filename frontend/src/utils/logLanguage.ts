@@ -482,6 +482,9 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         // 上限（窄窗口 / 光标靠右时更小），行放不下就会被 li 的 ellipsis 切掉尾巴
         // ——「图标不见了」就是这么来的。允许折行后，最坏情况只是这一行变高。
         flexWrap: 'wrap',
+        // tips 文本放开选择：复制类型 / 来源表 / 注释是高频动作
+        // （全局默认禁选，见 global.css 的 body 规则）
+        userSelect: 'text',
         gap: '0.7em',
         marginLeft: '1.1em',
         fontSize: '0.92em',
@@ -542,6 +545,13 @@ export function editorThemeExtensions(themeName: string): Extension[] {
        */
       '.cm-tooltip-autocomplete ul li .cm-column-detail__part--source .cm-column-detail__icon': {
         color: h(palette.accent),
+      },
+      // 来源表可点击（点击弹出表结构卡片，见 CodeEditor 的 openTableCardFromDetail）
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__part--link': {
+        cursor: 'pointer',
+      },
+      '.cm-tooltip-autocomplete ul li .cm-column-detail__part--link:hover .cm-column-detail__value': {
+        textDecoration: 'underline',
       },
       '.cm-tooltip-autocomplete ul li .cm-column-detail__part--comment .cm-column-detail__icon': {
         color: palette.dark ? '#fbbf24' : '#b45309',

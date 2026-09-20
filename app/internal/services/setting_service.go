@@ -23,6 +23,9 @@ const (
 var defaultSettings = []database.Setting{
 	{Key: "theme", Type: SettingTypeString, Value: "dark"},
 	{Key: "font_size", Type: SettingTypeNumber, Value: "13"},
+	// 界面缩放比例（百分比，100 = 100%）：基准字号 13px 由它放大缩小，
+	// 与 font_size（历史项，已由缩放比例承担）不是一回事
+	{Key: "ui_scale", Type: SettingTypeNumber, Value: "100"},
 	{Key: "control_size", Type: SettingTypeString, Value: "default"},
 	{Key: "editor_font_size", Type: SettingTypeNumber, Value: "13"},
 	{Key: "log_max_lines", Type: SettingTypeNumber, Value: "200"},

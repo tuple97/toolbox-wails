@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { EditorView } from '@codemirror/view'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { askConfirm } from '@/utils/confirm'
+import { notify } from '@/utils/notify'
 import CodeEditor from '@/components/CodeEditor.vue'
 import ResultTable from '@/components/ResultTable.vue'
 import ResultPagination from '@/components/ResultPagination.vue'
@@ -9,7 +10,12 @@ import ExecutionLog from '@/components/ExecutionLog.vue'
 import ScriptSummary from '@/components/ScriptSummary.vue'
 import ConnectionSelect from '@/components/ConnectionSelect.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
-import { copyRowSql, dialectOf, kindOfMenuItem, ROW_SQL_MENU_ITEMS } from '@/utils/sql/rowSql'
+import Button from '@/components/ui/Button.vue'
+import Combobox from '@/components/ui/Combobox.vue'
+import Icon from '@/components/ui/Icon.vue'
+import TabGroup from '@/components/ui/TabGroup.vue'
+import { copyRowsSql, dialectOf, kindOfMenuItem, rowSqlMenuItems } from '@/utils/sql/rowSql'
+import type { ResultSourceContext } from '@/utils/sql/rowSql'
 import { formatSql, minifySql as minifySqlText } from '@/utils/sql/sqlFormat'
 import { copyText } from '@/utils/clipboard'
 import { fetchConnections } from '@/api/db'
@@ -190,6 +196,31 @@ const scriptResults = ref<Array<{
 /** 结果页签：log = 执行日志（固定），summary = 摘要，result-N = 第 N 条语句的结果 */
 const activeScriptTab = ref('log')
 
+/** 库下拉选项（Combobox 只吃 label / value；「系统」标记走 #option 插槽） */
+const databaseOptions = computed(() =>
+  databases.value.map(info => ({ label: info.name, value: info.name })))
+
+/** 该库是不是系统库：下拉里给它一个「系统」标记，解释「为什么关掉设置后它就不见了」 */
+function isSystemDatabase(name: string): boolean {
+  return databases.value.some(info => info.name === name && info.isSystem)
+}
+
+/**
+ * 结果区页签定义。
+ *
+ * 页签是**数据驱动**的（摘要按需出现、结果页签随语句数变化），
+ * 面板内容用与页签名同名的具名插槽（`panel-<value>`）渲染。
+ */
+const resultTabs = computed(() => [
+  { value: 'log', label: '执行日志', lazy: true },
+  ...(scriptSummary.value ? [{ value: 'summary', label: '摘要' }] : []),
+  ...scriptResults.value.map(item => ({
+    value: `result-${item.index}`,
+    label: `结果${item.index}`,
+    lazy: true,
+  })),
+])
+
 /** 日志页签组件引用：切到该页签时把日志滚到底部 */
 const logRef = ref<InstanceType<typeof ExecutionLog> | null>(null)
 
@@ -207,11 +238,11 @@ watch(activeScriptTab, async (tab) => {
  */
 const pageSize = ref(DEFAULT_PAGE_SIZE)
 
-/** 结果表格右键菜单：位置与被点的行 */
+/** 结果表格右键菜单：位置与要作用的行（多选时是多行） */
 const rowMenuVisible = ref(false)
 const rowMenuX = ref(0)
 const rowMenuY = ref(0)
-const rowMenuRow = ref<Record<string, unknown> | null>(null)
+const rowMenuRows = ref<Record<string, unknown>[]>([])
 /**
  * 菜单来自哪个结果集。
  *
@@ -221,9 +252,15 @@ const rowMenuRow = ref<Record<string, unknown> | null>(null)
  */
 const rowMenuSource = ref<QueryResult | null>(null)
 
+/** 菜单项：多选时标签带上行数（「批量复制为…（3 行）」） */
+const rowMenuItems = computed(() => rowSqlMenuItems(Math.max(1, rowMenuRows.value.length)))
+
 /** 打开结果行右键菜单（内容为「复制为 INSERT / UPDATE / DELETE」） */
-function openRowMenu(payload: { row: Record<string, unknown>, x: number, y: number }, source: QueryResult | null) {
-  rowMenuRow.value = payload.row
+function openRowMenu(
+  payload: { row: Record<string, unknown>, rows: Record<string, unknown>[], x: number, y: number },
+  source: QueryResult | null,
+) {
+  rowMenuRows.value = payload.rows
   rowMenuX.value = payload.x
   rowMenuY.value = payload.y
   rowMenuSource.value = source
@@ -367,15 +404,15 @@ function resolveEditorMenuTarget(event: MouseEvent) {
 async function copySqlAtCursor() {
   const range = resolveRange()
   if (!range) {
-    ElMessage.warning('光标处未匹配到 SQL 命令')
+    notify.warning('光标处未匹配到 SQL 命令')
     return
   }
   try {
     await copyText(range.text)
-    ElMessage.success('已复制 SQL')
+    notify.success('已复制 SQL')
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -415,23 +452,32 @@ function handleEditorMenuSelect(item: ContextMenuAction) {
   }
 }
 
+/**
+ * 结果来源：解析表名（复制为 UPDATE / DELETE）与表头标记主键共用一套口径。
+ *
+ * 库用**生效库**（未手选时回退到连接默认库）—— 与执行时打在哪张表上一致，
+ * 否则主键会查到一个空库名下去。
+ */
+function sourceOf(res: QueryResult): ResultSourceContext {
+  return {
+    connId: connId.value,
+    database: effectiveDatabase.value,
+    dbType: dbType.value,
+    sql: res.sql,
+  }
+}
+
 /** 处理「复制为…」：UPDATE / DELETE 以主键为条件，生成的 SQL 带库名 */
 async function handleRowMenuSelect(item: ContextMenuAction) {
   const kind = kindOfMenuItem(item.key)
-  const row = rowMenuRow.value
+  const rows = rowMenuRows.value
   const data = rowMenuSource.value
-  if (!kind || !row || !data) {
+  if (!kind || !rows.length || !data) {
     return
   }
-  await copyRowSql(kind, {
-    connId: connId.value,
-    // 未显式选择库时用连接配置里的默认库，保证生成的 SQL 带上库名
-    database: effectiveDatabase.value,
-    dbType: dbType.value,
-    sql: data.sql,
-    columns: data.columns.map(column => column.name),
-    row,
-  })
+  // 选中的每一行共用同一套上下文，只有 row 不同（表名与主键在生成时只解析一次）
+  const base = { ...sourceOf(data), columns: data.columns.map(column => column.name) }
+  await copyRowsSql(kind, rows.map(row => ({ ...base, row })))
 }
 
 // ------------------------------------------------------------ 初始化
@@ -497,7 +543,7 @@ async function loadConnections() {
     connections.value = await fetchConnections()
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -533,14 +579,14 @@ async function loadDatabases(preferred = ''): Promise<boolean> {
 
     if (!list.length) {
       // 列表为空多半是账号权限（看不到任何库）或服务端配置问题，说清楚别让用户猜
-      ElMessage.warning('当前连接没有返回任何库：请检查账号权限，或点击旁边的刷新按钮重试')
+      notify.warning('当前连接没有返回任何库：请检查账号权限，或点击旁边的刷新按钮重试')
       return true
     }
 
     if (database.value) {
       if (!list.some(info => info.name === database.value)) {
         // 选过的库这次不在列表里（权限变化 / 已删除 / 列表不完整）：保留并说明，不静默改库
-        ElMessage.warning(`所选库 ${database.value} 不在当前库列表中，仍按它执行；如需切换请重新选择`)
+        notify.warning(`所选库 ${database.value} 不在当前库列表中，仍按它执行；如需切换请重新选择`)
       }
       return true
     }
@@ -556,7 +602,7 @@ async function loadDatabases(preferred = ''): Promise<boolean> {
     }
     // 只清空候选列表，保留 database：否则执行时会静默落到连接默认库上
     allDatabases.value = []
-    ElMessage.error(`读取库列表失败：${e instanceof Error ? e.message : String(e)}`)
+    notify.error(`读取库列表失败：${e instanceof Error ? e.message : String(e)}`)
     return false
   }
 }
@@ -729,13 +775,13 @@ async function runCurrent() {
     return
   }
   if (!connId.value) {
-    ElMessage.warning('请先选择数据库连接')
+    notify.warning('请先选择数据库连接')
     return
   }
 
   const range = resolveRange()
   if (!range) {
-    ElMessage.warning('光标处未匹配到 SQL 命令')
+    notify.warning('光标处未匹配到 SQL 命令')
     return
   }
 
@@ -802,7 +848,7 @@ const formatButtonTitle = computed(() => {
 function applyFormat() {
   const range = formatTarget.value
   if (!range) {
-    ElMessage.warning('光标处未匹配到 SQL 命令')
+    notify.warning('光标处未匹配到 SQL 命令')
     return
   }
   if (formatAction.value === 'minify') {
@@ -813,7 +859,7 @@ function applyFormat() {
     replaceRange(range, formatSql(range.text, dialectOf(currentConnection.value?.dbType ?? 'mysql')))
   }
   catch (e) {
-    ElMessage.error(`美化失败：${e instanceof Error ? e.message : String(e)}`)
+    notify.error(`美化失败：${e instanceof Error ? e.message : String(e)}`)
   }
 }
 
@@ -844,17 +890,17 @@ async function confirmProductionWrite(sql: string): Promise<boolean> {
   if (!conn?.isProduction || !isWriteStatement(sql)) {
     return true
   }
-  try {
-    await ElMessageBox.confirm(
-      `连接「${conn.name}」标记为生产库，即将执行写操作且不可撤销。确认继续？`,
-      '生产库写操作确认',
-      { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' },
-    )
-    return true
-  }
-  catch {
-    return false
-  }
+  /*
+   * 取消是正常分支：旧写法用 try/catch + ElMessageBox，把「用户点了取消」
+   * 和「弹窗真的出错」混在同一条 catch 里 —— 现在直接看返回值。
+   * 语气用 danger 而不是 warning：这一步不可撤销，颜色该是危险色。
+   */
+  return askConfirm({
+    message: `连接「${conn.name}」标记为生产库，即将执行写操作且不可撤销。确认继续？`,
+    title: '生产库写操作确认',
+    confirmText: '确认执行',
+    tone: 'danger',
+  })
 }
 
 /**
@@ -867,7 +913,7 @@ async function confirmProductionWrite(sql: string): Promise<boolean> {
 async function runSingle(sqlText: string, options: { stateKey?: string, analysis?: boolean } = {}) {
   const id = connId.value
   if (!id) {
-    ElMessage.warning('请先选择数据库连接')
+    notify.warning('请先选择数据库连接')
     return
   }
   if (!(await confirmProductionWrite(sqlText))) {
@@ -940,13 +986,13 @@ async function runSingle(sqlText: string, options: { stateKey?: string, analysis
         logStore.logPagedSQL(data.sql)
       }
       if (data.truncated) {
-        ElMessage.warning(`结果超过上限，仅展示前 ${data.rowCount} 行`)
+        notify.warning(`结果超过上限，仅展示前 ${data.rowCount} 行`)
       }
     }
     else {
       record.affectedRows = data.affectedRows
       logStore.append(`<< [成功] 影响 ${data.affectedRows} 行, 耗时 ${data.elapsedMs}ms`)
-      ElMessage.success(`执行成功，影响 ${data.affectedRows} 行`)
+      notify.success(`执行成功，影响 ${data.affectedRows} 行`)
     }
   }
   catch (e) {
@@ -957,13 +1003,13 @@ async function runSingle(sqlText: string, options: { stateKey?: string, analysis
       record.status = 'cancelled'
       markRunState(stateKey, 'cancelled')
       logStore.append('<< [已取消] 查询已中止')
-      ElMessage.info('查询已取消')
+      notify.info('查询已取消')
     }
     else {
       record.status = 'failed'
       markRunState(stateKey, 'error')
       logStore.logError(message)
-      ElMessage.error(message)
+      notify.error(message)
     }
   }
   finally {
@@ -996,12 +1042,12 @@ function toExplainSql(sql: string): string {
 async function runScript(script: string, mode: 'run' | 'analyze' = 'run') {
   const statements = splitSqlStatements(script, dbType.value).map(item => item.sql)
   if (!statements.length) {
-    ElMessage.warning('没有可执行的语句')
+    notify.warning('没有可执行的语句')
     return
   }
   const id = connId.value
   if (!id) {
-    ElMessage.warning('请先选择数据库连接')
+    notify.warning('请先选择数据库连接')
     return
   }
 
@@ -1158,10 +1204,10 @@ async function runScript(script: string, mode: 'run' | 'analyze' = 'run') {
     `<< [脚本完成] 共 ${statements.length} 条，成功 ${summary.successCount}，失败 ${summary.failedCount}，总耗时 ${summary.totalMs}ms`,
   )
   if (summary.failedCount) {
-    ElMessage.warning(`执行完成：成功 ${summary.successCount} 条，失败 ${summary.failedCount} 条`)
+    notify.warning(`执行完成：成功 ${summary.successCount} 条，失败 ${summary.failedCount} 条`)
   }
   else {
-    ElMessage.success(`执行完成：${statements.length} 条语句，总耗时 ${summary.totalMs} ms`)
+    notify.success(`执行完成：${statements.length} 条语句，总耗时 ${summary.totalMs} ms`)
   }
 }
 
@@ -1219,7 +1265,7 @@ async function reloadResultPage(index: number, page: number, size: number) {
     const message = e instanceof Error ? e.message : String(e)
     if (!isCancelled(message)) {
       logStore.logError(message)
-      ElMessage.error(message)
+      notify.error(message)
     }
   }
   finally {
@@ -1259,13 +1305,13 @@ function analyzeSql() {
   }
   const range = resolveRange()
   if (!range) {
-    ElMessage.warning('光标处未匹配到 SQL 命令')
+    notify.warning('光标处未匹配到 SQL 命令')
     return
   }
 
   const statements = splitSqlStatements(range.text, dbType.value)
   if (!statements.length) {
-    ElMessage.warning('没有可分析的语句')
+    notify.warning('没有可分析的语句')
     return
   }
 
@@ -1341,7 +1387,7 @@ async function refreshMeta() {
   // 表列表按需重拉；字段缓存已随连接一起失效，用户点开表或补全时再加载
   void meta.loadTables(requested, effectiveDatabase.value, true)
   if (ok) {
-    ElMessage.success('元数据已刷新')
+    notify.success('元数据已刷新')
   }
 }
 
@@ -1376,27 +1422,28 @@ watch([connId, database, sql, pageSize], notifyChange)
       <div class="executor__toolbar-left">
         <ConnectionSelect v-model="connId" :connections="connections" width="210px" />
 
-        <el-select
+        <Combobox
           v-model="database"
+          :options="databaseOptions"
           :placeholder="databasePlaceholder"
-          filterable
-          style="width: 190px"
+          search-placeholder="搜索数据库…"
+          class="w-[190px]"
         >
           <!-- 系统库带一个「系统」标记：解释「为什么关掉设置后它就不见了」 -->
-          <el-option
-            v-for="info in databases"
-            :key="info.name"
-            :label="info.name"
-            :value="info.name"
-          >
-            <span>{{ info.name }}</span>
-            <small v-if="info.isSystem" class="executor__db-system">系统</small>
-          </el-option>
-        </el-select>
+          <template #option="{ option }">
+            <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
+            <small v-if="isSystemDatabase(option.value)" class="executor__db-system">系统</small>
+          </template>
+        </Combobox>
 
-        <el-button title="刷新元数据（表 / 字段缓存）" @click="refreshMeta">
-          <el-icon><Refresh /></el-icon>
-        </el-button>
+        <Button
+          variant="secondary"
+          size="icon"
+          title="刷新元数据（表 / 字段缓存）"
+          @click="refreshMeta"
+        >
+          <Icon name="refresh" />
+        </Button>
       </div>
 
     </header>
@@ -1404,41 +1451,43 @@ watch([connId, database, sql, pageSize], notifyChange)
     <!-- 编辑器操作行：运行/终止（同一位置切换）、格式化（图标按钮） -->
     <div class="executor__actions">
       <!-- 运行与终止共用一个按钮：执行中变成终止，不再并排显示两个 -->
-      <el-button
+      <Button
         v-if="!running"
-        type="primary"
         title="执行：有选中内容就执行选中，否则执行光标所在语句（Ctrl+Enter）"
         @click="runCurrent"
       >
-        <el-icon><VideoPlay /></el-icon>
-      </el-button>
-      <el-button
+        <Icon name="play" />
+      </Button>
+      <Button
         v-else
-        type="danger"
+        variant="danger"
         title="终止正在执行的查询"
         @click="cancelRunning"
       >
-        <el-icon><VideoPause /></el-icon>
-      </el-button>
+        <Icon name="pause" />
+      </Button>
 
       <!-- 分析：用 EXPLAIN 查看执行计划，结果在结果区展示 -->
-      <el-button
+      <Button
+        variant="secondary"
+        size="icon"
         :disabled="running"
         title="分析：用 EXPLAIN 查看当前语句的执行计划（有选中就分析选中，否则分析光标所在语句）"
         @click="analyzeSql"
       >
-        <el-icon><DataAnalysis /></el-icon>
-      </el-button>
+        <Icon name="chart" />
+      </Button>
 
       <!-- 美化 / 压缩合成一个按钮：当前范围是单行就美化，是多行就压缩 -->
-      <el-button
+      <Button
+        variant="secondary"
+        size="icon"
         :disabled="running"
         :title="formatButtonTitle"
         @click="applyFormat"
       >
-        <el-icon v-if="formatAction === 'beautify'"><MagicStick /></el-icon>
-        <el-icon v-else><Fold /></el-icon>
-      </el-button>
+        <Icon :name="formatAction === 'beautify' ? 'wand' : 'chevrons-left'" />
+      </Button>
     </div>
 
     <!-- 编辑器：Ctrl+Enter 执行；识别出的语句带边框；高度可拖 -->
@@ -1471,41 +1520,48 @@ watch([connId, database, sql, pageSize], notifyChange)
 
     <!-- 结果区：执行日志固定页签在最前，摘要与各结果页签随后 -->
     <section class="executor__result">
-      <el-tabs v-model="activeScriptTab" class="executor__tabs">
-        <el-tab-pane label="执行日志" name="log" lazy>
+      <TabGroup v-model="activeScriptTab" :items="resultTabs" class="min-h-0 flex-1">
+        <template #panel-log>
           <ExecutionLog ref="logRef" />
-        </el-tab-pane>
-        <el-tab-pane v-if="scriptSummary" label="摘要" name="summary">
+        </template>
+
+        <template v-if="scriptSummary" #panel-summary>
           <ScriptSummary :summary="scriptSummary" />
-        </el-tab-pane>
-        <el-tab-pane
+        </template>
+
+        <!--
+          结果页签是动态的（每条返回结果集的语句一个）：插槽名随语句序号变化，
+          所以这里用 `#[`panel-result-N`]` 的动态插槽名 —— 与 ResultTable 的单元格插槽同一套路。
+        -->
+        <template
           v-for="item in scriptResults"
           :key="item.index"
-          :label="`结果${item.index}`"
-          :name="`result-${item.index}`"
-          lazy
+          #[`panel-result-${item.index}`]
         >
-          <ResultTable
-            :result="item.result"
-            :mappings="[]"
-            :analysis="analysisResult"
-            @row-contextmenu="openRowMenu($event, item.result)"
-          />
+          <div class="flex h-full min-h-0 flex-col">
+            <ResultTable
+              :result="item.result"
+              :mappings="[]"
+              :analysis="analysisResult"
+              :source="sourceOf(item.result)"
+              @row-contextmenu="openRowMenu($event, item.result)"
+            />
 
-          <!-- 分页常驻：页大小填 0 即不分页；语句不支持分页时由 supported 提示 -->
-          <ResultPagination
-            :page="item.result.page"
-            :page-size="item.size"
-            :total="item.result.total"
-            :page-count="item.result.pageCount"
-            :supported="item.result.pageSize > 0 || item.size === 0"
-            :elapsed-ms="item.result.elapsedMs"
-            :loading="running"
-            @change="changeResultPage(item.index, $event)"
-            @size-change="changeResultPageSize(item.index, $event)"
-          />
-        </el-tab-pane>
-      </el-tabs>
+            <!-- 分页常驻：页大小填 0 即不分页；语句不支持分页时由 supported 提示 -->
+            <ResultPagination
+              :page="item.result.page"
+              :page-size="item.size"
+              :total="item.result.total"
+              :page-count="item.result.pageCount"
+              :supported="item.result.pageSize > 0 || item.size === 0"
+              :elapsed-ms="item.result.elapsedMs"
+              :loading="running"
+              @change="changeResultPage(item.index, $event)"
+              @size-change="changeResultPageSize(item.index, $event)"
+            />
+          </div>
+        </template>
+      </TabGroup>
     </section>
 
     <!-- 结果行右键菜单：复制为 INSERT / UPDATE / DELETE -->
@@ -1513,7 +1569,7 @@ watch([connId, database, sql, pageSize], notifyChange)
       v-model:visible="rowMenuVisible"
       :x="rowMenuX"
       :y="rowMenuY"
-      :items="ROW_SQL_MENU_ITEMS"
+      :items="rowMenuItems"
       @select="handleRowMenuSelect"
     />
 
@@ -1572,21 +1628,6 @@ watch([connId, database, sql, pageSize], notifyChange)
   border-bottom: 1px solid var(--border-color);
 }
 
-/*
- * Element Plus 会给「相邻按钮」加 margin-left: 12px（.el-button + .el-button），
- * 和这里的 gap 叠加后按钮间距变成 20px，与上面一行 select 的 8px 不一致。
- * 本项目按钮行一律用 flex + gap 排版，所以清掉默认外边距，间距只由 gap 决定。
- */
-.executor__actions :deep(.el-button + .el-button) {
-  margin-left: 0;
-}
-
-/* 纯图标按钮收窄左右内边距（与查询页的 .db-query__icon-btn 保持一致），
-   否则默认的 15px 会让图标按钮显得比同行的 select 宽一圈 */
-.executor__actions :deep(.el-button) {
-  padding: 8px 10px;
-}
-
 /* 编辑器高度由分栏拖动决定（高度内联在标签上），结果区占剩余空间 */
 .executor__editor {
   flex: 0 0 auto;
@@ -1625,35 +1666,4 @@ watch([connId, database, sql, pageSize], notifyChange)
   padding: 0;
 }
 
-/* 结果页签（摘要 / 结果N）：页签栏固定，内容区占满剩余高度 */
-.executor__tabs {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-
-.executor__tabs :deep(.el-tabs__header) {
-  flex: 0 0 auto;
-  margin: 0 0 6px;
-}
-
-/* 页签项收紧到 30px：默认 40px 会在标签上下留出较多空白 */
-.executor__tabs :deep(.el-tabs__item) {
-  height: 30px;
-  line-height: 30px;
-}
-
-.executor__tabs :deep(.el-tabs__content) {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.executor__tabs :deep(.el-tab-pane) {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-</style>
+/* 结果页签（摘要 / 结果N）的版面由 TabGroup 自带（页签栏固定 + 内容占满剩余高度） */</style>

@@ -1,6 +1,13 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { notify } from '@/utils/notify'
 import { ref, watch } from 'vue'
+import Button from '@/components/ui/Button.vue'
+import Combobox from '@/components/ui/Combobox.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import Field from '@/components/ui/Field.vue'
+import Input from '@/components/ui/Input.vue'
+import NumberInput from '@/components/ui/NumberInput.vue'
+import Tabs from '@/components/ui/Tabs.vue'
 import { fetchVariableOptions } from '@/api/db'
 import type { VariableComponent, VariableConfig, VariableDataType, VariableOption } from '@/types'
 
@@ -44,6 +51,12 @@ const DATA_TYPES: Array<{ value: VariableDataType, label: string }> = [
   { value: 'float', label: '小数' },
   { value: 'bool', label: '布尔' },
   { value: 'date', label: '日期' },
+]
+
+/** 选项来源（分段控件；两个模式互斥，用分段比下拉更直白） */
+const SOURCE_MODES = [
+  { value: 'static', label: '静态配置' },
+  { value: 'dynamic', label: 'SQL 动态获取' },
 ]
 
 /** 组件类型的中文名（收起态标记用） */
@@ -90,6 +103,22 @@ function optionsMode(config: VariableConfig): 'static' | 'dynamic' {
   return config.dynamicOptions ? 'dynamic' : 'static'
 }
 
+/**
+ * 只改动态选项里的某一个字段。
+ *
+ * 动态选项是「三个字段一起存」的对象，旧模板里三处各自手写嵌套对象
+ * （`{ dynamicOptions: { sql: ..., valueColumn: ..., labelColumn: ... } }`），
+ * 抄错一个字段就会静默丢配置；这里统一合并一次。
+ */
+function updateDynamicOption(
+  index: number,
+  config: VariableConfig,
+  patch: Partial<NonNullable<VariableConfig['dynamicOptions']>>,
+) {
+  const current = config.dynamicOptions ?? { sql: '', valueColumn: 'value', labelColumn: 'label' }
+  update(index, { dynamicOptions: { ...current, ...patch } })
+}
+
 /** 新增静态选项 */
 function addOption(index: number, config: VariableConfig) {
   const options = [...(config.options ?? []), { label: '', value: '' } as VariableOption]
@@ -118,35 +147,34 @@ function removeOption(index: number, config: VariableConfig, optionIndex: number
 /** 测试动态选项 SQL 是否能正确返回数据 */
 async function testDynamicOptions(config: VariableConfig) {
   if (!props.connId) {
-    ElMessage.warning('请先在工具栏选择数据库连接')
+    notify.warning('请先在工具栏选择数据库连接')
     return
   }
   const dynamic = config.dynamicOptions
   if (!dynamic?.sql.trim()) {
-    ElMessage.warning('请填写选项查询 SQL')
+    notify.warning('请填写选项查询 SQL')
     return
   }
 
   try {
     const rows = await fetchVariableOptions(props.connId, dynamic.sql)
     if (rows.length === 0) {
-      ElMessage.warning('查询成功，但未返回任何数据')
+      notify.warning('查询成功，但未返回任何数据')
       return
     }
-    ElMessage.success(`查询成功，共 ${rows.length} 条选项`)
+    notify.success(`查询成功，共 ${rows.length} 条选项`)
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 </script>
 
 <template>
   <div class="tpl-panel-list">
-    <el-empty
+    <EmptyState
       v-if="!modelValue.length"
       description="暂无变量，在 SQL 中使用 {{ 变量名 }} 会自动识别"
-      :image-size="60"
     />
 
     <div v-else class="tpl-master">
@@ -171,48 +199,34 @@ async function testDynamicOptions(config: VariableConfig) {
         v-show="config.name === selectedName"
         class="tpl-master__detail-item"
       >
-        <el-form class="tpl-panel__form" label-position="left" label-width="76px" size="small">
+        <div class="tpl-panel__form">
           <!-- 展示设置 -->
           <section class="tpl-panel__group">
             <div class="tpl-panel__group-title">展示设置</div>
             <div class="tpl-panel__grid">
-              <el-form-item label="展示名称">
-                <el-input
+              <Field label="展示名称" label-width="76px">
+                <Input
                   :model-value="config.label"
                   placeholder="界面上的标签"
                   @update:model-value="update(index, { label: $event })"
                 />
-              </el-form-item>
+              </Field>
 
-              <el-form-item label="组件类型">
-                <el-select
+              <Field label="组件类型" label-width="76px">
+                <Combobox
                   :model-value="config.component"
-                  style="width: 100%"
-                  @update:model-value="update(index, { component: $event })"
-                >
-                  <el-option
-                    v-for="item in COMPONENTS"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
+                  :options="COMPONENTS"
+                  @update:model-value="update(index, { component: $event as VariableComponent })"
+                />
+              </Field>
 
-              <el-form-item label="数据类型">
-                <el-select
+              <Field label="数据类型" label-width="76px">
+                <Combobox
                   :model-value="config.dataType"
-                  style="width: 100%"
-                  @update:model-value="update(index, { dataType: $event })"
-                >
-                  <el-option
-                    v-for="item in DATA_TYPES"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
+                  :options="DATA_TYPES"
+                  @update:model-value="update(index, { dataType: $event as VariableDataType })"
+                />
+              </Field>
             </div>
           </section>
 
@@ -220,23 +234,19 @@ async function testDynamicOptions(config: VariableConfig) {
           <section v-if="usesRange(config.component)" class="tpl-panel__group">
             <div class="tpl-panel__group-title">取值范围</div>
             <div class="tpl-panel__grid">
-              <el-form-item label="最小值">
-                <el-input-number
+              <Field label="最小值" label-width="76px">
+                <NumberInput
                   :model-value="config.min ?? 0"
-                  controls-position="right"
-                  style="width: 100%"
-                  @update:model-value="update(index, { min: $event ?? 0 })"
+                  @update:model-value="update(index, { min: $event })"
                 />
-              </el-form-item>
+              </Field>
 
-              <el-form-item label="最大值">
-                <el-input-number
+              <Field label="最大值" label-width="76px">
+                <NumberInput
                   :model-value="config.max ?? 100"
-                  controls-position="right"
-                  style="width: 100%"
-                  @update:model-value="update(index, { max: $event ?? 100 })"
+                  @update:model-value="update(index, { max: $event })"
                 />
-              </el-form-item>
+              </Field>
             </div>
           </section>
 
@@ -244,105 +254,86 @@ async function testDynamicOptions(config: VariableConfig) {
           <section v-if="usesOptions(config.component)" class="tpl-panel__group">
             <div class="tpl-panel__group-title">下拉选项</div>
 
-            <el-form-item label="选项来源">
-              <el-radio-group
+            <Field label="选项来源" label-width="76px">
+              <Tabs
                 :model-value="optionsMode(config)"
-                @update:model-value="handleSourceChange(index, config, $event as string)"
-              >
-                <el-radio-button value="static">静态配置</el-radio-button>
-                <el-radio-button value="dynamic">SQL 动态获取</el-radio-button>
-              </el-radio-group>
-            </el-form-item>
+                :items="SOURCE_MODES"
+                @update:model-value="handleSourceChange(index, config, $event)"
+              />
+            </Field>
 
             <!-- 静态选项 -->
             <template v-if="optionsMode(config) === 'static'">
-              <div class="tpl-panel__options">
+              <div class="tpl-panel__options mt-2.5">
                 <div
                   v-for="(opt, optIndex) in config.options ?? []"
                   :key="optIndex"
                   class="tpl-panel__option-row"
                 >
-                  <el-input
+                  <Input
                     :model-value="opt.label"
                     placeholder="显示文本"
                     @update:model-value="updateOption(index, config, optIndex, { label: $event })"
                   />
-                  <el-input
+                  <Input
                     :model-value="opt.value"
                     placeholder="实际值"
                     @update:model-value="updateOption(index, config, optIndex, { value: $event })"
                   />
-                  <el-button
-                    link
-                    type="danger"
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="shrink-0 text-danger"
                     @click="removeOption(index, config, optIndex)"
                   >
                     删除
-                  </el-button>
+                  </Button>
                 </div>
               </div>
 
               <div class="tpl-panel__actions">
-                <el-button link type="primary" @click="addOption(index, config)">
+                <Button variant="ghost" size="sm" class="text-brand" @click="addOption(index, config)">
                   ＋ 添加选项
-                </el-button>
+                </Button>
               </div>
             </template>
 
             <!-- 动态选项 -->
             <template v-else>
-              <el-form-item label="查询 SQL" class="tpl-panel__field--multiline">
-                <el-input
+              <Field label="查询 SQL" label-width="76px">
+                <Input
                   :model-value="config.dynamicOptions?.sql ?? ''"
                   type="textarea"
                   :rows="3"
                   placeholder="SELECT status AS value, status_name AS label FROM dict"
-                  @update:model-value="update(index, {
-                    dynamicOptions: {
-                      sql: $event,
-                      valueColumn: config.dynamicOptions?.valueColumn ?? 'value',
-                      labelColumn: config.dynamicOptions?.labelColumn ?? 'label',
-                    },
-                  })"
+                  @update:model-value="updateDynamicOption(index, config, { sql: $event })"
                 />
-              </el-form-item>
+              </Field>
 
               <div class="tpl-panel__grid">
-                <el-form-item label="值列名">
-                  <el-input
+                <Field label="值列名" label-width="76px">
+                  <Input
                     :model-value="config.dynamicOptions?.valueColumn ?? ''"
-                    @update:model-value="update(index, {
-                      dynamicOptions: {
-                        sql: config.dynamicOptions?.sql ?? '',
-                        valueColumn: $event,
-                        labelColumn: config.dynamicOptions?.labelColumn ?? 'label',
-                      },
-                    })"
+                    @update:model-value="updateDynamicOption(index, config, { valueColumn: $event })"
                   />
-                </el-form-item>
+                </Field>
 
-                <el-form-item label="文本列名">
-                  <el-input
+                <Field label="文本列名" label-width="76px">
+                  <Input
                     :model-value="config.dynamicOptions?.labelColumn ?? ''"
-                    @update:model-value="update(index, {
-                      dynamicOptions: {
-                        sql: config.dynamicOptions?.sql ?? '',
-                        valueColumn: config.dynamicOptions?.valueColumn ?? 'value',
-                        labelColumn: $event,
-                      },
-                    })"
+                    @update:model-value="updateDynamicOption(index, config, { labelColumn: $event })"
                   />
-                </el-form-item>
+                </Field>
               </div>
 
               <div class="tpl-panel__actions">
-                <el-button link type="primary" @click="testDynamicOptions(config)">
+                <Button variant="ghost" size="sm" class="text-brand" @click="testDynamicOptions(config)">
                   测试查询
-                </el-button>
+                </Button>
               </div>
             </template>
           </section>
-        </el-form>
+        </div>
       </div>
       </div>
     </div>
@@ -353,10 +344,6 @@ async function testDynamicOptions(config: VariableConfig) {
 /* 具体排版规范见 styles/template-panels.css，这里只保留面板级微调 */
 .tpl-panel-list {
   padding: 2px 0;
-}
-
-.tpl-panel-list :deep(.el-collapse-item__header) {
-  font-size: var(--app-font-size);
 }
 
 .tpl-master { display: grid; grid-template-columns: minmax(180px, 26%) minmax(0, 1fr); min-height: 300px; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: color-mix(in srgb, var(--bg-color) 88%, var(--brand-color)); }

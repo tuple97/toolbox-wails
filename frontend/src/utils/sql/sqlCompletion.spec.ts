@@ -357,10 +357,56 @@ describe('补全位置与次序（回归）', () => {
     expect(labels).not.toContain('testdb')
   })
 
-  it('紧贴的是正在输入的名字（FROM or|）：表名照给，库名不给', () => {
-    const labels = labelsOf('SELECT * FROM or|')
+  it('紧贴的是正在输入的名字（FROM ord|）：表名与库名一起给', () => {
+    expect(labelsOf('SELECT * FROM or|')).toContain('orders')
+    /*
+     * 库名同样是「正在写库/表名」时的合法选项：选定库名后接着敲 `.`
+     * 就能展开它的表。表与库的资格完全一致，由槽位层决定。
+     */
+    expect(labelsOf('SELECT * FROM te|')).toContain('testdb')
+  })
+
+  it('表位置输入部分表名（FROM d| / FROM de| / FROM us|）：表名照给', () => {
+    /*
+     * 症状回归：以前只有「恰好是关键字」的紧贴词（`or`）才被让过，
+     * `d` / `de` 这类非关键字被当成「表已写完」⇒ 表名候选整批消失，
+     * 只剩 ORDER BY 这些子句关键字。
+     *
+     * 注：候选还要过 CodeMirror 的前缀模糊匹配，所以断言按「哪个前缀命中哪张表」写。
+     */
+    const labels = labelsOf('SELECT * FROM d|')
     expect(labels).toContain('orders')
-    expect(labels).not.toContain('testdb')
+    expect(labels).not.toContain('ORDER BY')
+    // 库名与表名一起给：`FROM d|` 里也可能是想写库名，选完敲 `.` 再展开表
+    expect(labels).toContain('testdb')
+    expect(labelsOf('SELECT * FROM us|')).toContain('users')
+    expect(labelsOf('SELECT * FROM ord|')).toContain('orders')
+    // 不是 FROM 专属：其它「后面接表」的关键字同样受益
+    expect(labelsOf('INSERT INTO us|')).toContain('users')
+    expect(labelsOf('UPDATE us|')).toContain('users')
+    // 库限定名写到一半：库名已写、表名正在写
+    expect(labelsOf('SELECT * FROM testdb.us|')).toContain('users')
+  })
+
+  it('扫描层：紧贴光标的非关键字词一律是「正在输入的名字」', () => {
+    // 表位置：任意前缀都还是表位置（判据是词的身份，不是它长什么样）
+    expect(scanClause('SELECT * FROM d').kind).toBe('source')
+    expect(scanClause('SELECT * FROM users').kind).toBe('source')
+    // `user` 是需要引用符的保留字，但不是关键字 —— 不能因此当子句
+    expect(scanClause('SELECT * FROM user').kind).toBe('source')
+    // 库限定名写到一半：库名已写、表名正在写
+    expect(scanClause('SELECT * FROM testdb.us').kind).toBe('source')
+    // 逗号之后的下一个来源同理
+    expect(scanClause('SELECT * FROM users, ord').kind).toBe('source')
+  })
+
+  it('名字写完（后面落空格）才转为「表之后」，别名不算来源', () => {
+    // 边界：让过只针对紧贴光标的词
+    expect(scanClause('SELECT * FROM users ').kind).toBe('afterSource')
+    expect(scanClause('SELECT * FROM users u').kind).toBe('afterSource')
+    // 紧贴的仍是关键字时由关键字决定位置，不受「让过」影响
+    expect(scanClause('SELECT * FROM users WHERE').kind).toBe('column')
+    expect(scanClause('SELECT * FROM users ORDER BY id DESC').kind).toBe('column')
   })
 
   it('ON| / WHERE| 紧贴：不给库名', () => {

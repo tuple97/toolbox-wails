@@ -4,6 +4,7 @@
  * 从 sqlCompletion.ts 拆出：这些清单随 SQL 方言 / 产品取舍演进，
  * 集中在一个文件里改起来不用在两千行的补全实现里翻找。
  */
+import { SQL_FUNCTION_DOCS } from './functionCatalog'
 
 /**
  * 候选权重（CodeMirror 的 `boost`）—— **类别次序的唯一出处**。
@@ -86,6 +87,20 @@ export const EXPRESSION_KEYWORD_SET = new Set(EXPRESSION_KEYWORDS)
 export const STATEMENT_KEYWORD_SET = new Set(STATEMENT_KEYWORDS)
 
 /**
+ * 关键字词表（多词结构拆成单个词、小写）。
+ *
+ * 与 `RESERVED_WORDS` 的区别：这里**只有关键字**，不含「只是需要引用符的保留字」。
+ * `user` / `key` / `rank` 这些是极常见的表名列名（`FROM user|` 就在写 user 表），
+ * 把它们当关键字会把位置判错，所以两张表不能混用。
+ *
+ * 用途：光标扫描判断「紧贴光标的这个词是关键字，还是正在输入的标识符」——
+ * 只有前者才由自己决定位置语义，后者要让过（见 sqlCursor 的 scanClause）。
+ */
+export const KEYWORD_WORDS = new Set(
+  SQL_KEYWORDS.flatMap(keyword => keyword.toLowerCase().split(/\s+/)),
+)
+
+/**
  * 需要引用符才能当标识符用的保留字。
  *
  * 补全里出现的语句关键字是基础（多词结构拆成单词），另外补一批列名里最常踩到的
@@ -98,7 +113,7 @@ export const STATEMENT_KEYWORD_SET = new Set(STATEMENT_KEYWORDS)
  */
 export const RESERVED_WORDS = new Set([
   // 补全里的关键字（含多词结构拆开后的单词）
-  ...SQL_KEYWORDS.flatMap(keyword => keyword.toLowerCase().split(/\s+/)),
+  ...KEYWORD_WORDS,
   // 两词结构的后半截（`GROUP BY` / `ORDER BY` 的 by 已在上面的拆分里）
   'group', 'order', 'union', 'cross', 'outer', 'inner', 'left', 'right',
   // 列名里最常见的保留字
@@ -111,31 +126,16 @@ export const RESERVED_WORDS = new Set([
   'current_user', 'current_date', 'current_time', 'current_timestamp',
 ])
 
-/** 常用函数（label → 提示的签名说明） */
-export const SQL_FUNCTIONS: Record<string, string> = {
-  COUNT: '统计行数',
-  SUM: '求和',
-  AVG: '平均',
-  MIN: '最小值',
-  MAX: '最大值',
-  IFNULL: 'IFNULL(值, 默认值)',
-  COALESCE: '返回第一个非空值',
-  NOW: '当前时间',
-  DATE_FORMAT: 'DATE_FORMAT(日期, 格式)',
-  STR_TO_DATE: 'STR_TO_DATE(文本, 格式)',
-  CONCAT: '字符串拼接',
-  SUBSTRING: 'SUBSTRING(文本, 起点, 长度)',
-  LENGTH: '字节长度',
-  TRIM: '去首尾空白',
-  UPPER: '转大写',
-  LOWER: '转小写',
-  ROUND: '四舍五入',
-  FLOOR: '向下取整',
-  CEIL: '向上取整',
-  UNIX_TIMESTAMP: 'Unix 时间戳',
-  FROM_UNIXTIME: '时间戳转日期',
-  DATE_ADD: 'DATE_ADD(日期, INTERVAL n 单位)',
-  DATE_SUB: 'DATE_SUB(日期, INTERVAL n 单位)',
-  DATEDIFF: '日期差（天）',
-  GROUP_CONCAT: '分组拼接',
-}
+/*
+ * 常用函数（名字 → 一行签名说明），由函数目录派生（functionCatalog.ts）。
+ * 目录是函数元数据的唯一出处：补全候选的 detail 与 Ctrl+P 参数提示都从它来，
+ * 加一个函数只改目录数据，不需要动任何调用方。
+ */
+export const SQL_FUNCTIONS: Record<string, string> = Object.fromEntries(
+  SQL_FUNCTION_DOCS.map((fn) => {
+    const params = fn.params
+      .map(param => (param.optional ? `${param.name}?` : param.name))
+      .join(', ')
+    return [fn.name, `${fn.name}(${params}${fn.variadic ? ', …' : ''})`]
+  }),
+)

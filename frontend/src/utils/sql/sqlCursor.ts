@@ -24,6 +24,7 @@
 import type { EditorState } from '@codemirror/state'
 import { normalizeSqlScanDialect, splitSqlStatements } from '@/utils/sql/sqlStatementRanges'
 import type { TextRange } from '@/utils/sql/sqlSyntax'
+import { KEYWORD_WORDS } from './sqlCompletionKeywords'
 import { IDENT_BODY_SOURCE, IDENT_SOURCE } from './sqlLexemes'
 import { readAlias, readIdentifier, readQualifiedName, skipQuoted } from './sqlSchema'
 
@@ -119,9 +120,12 @@ export interface ClauseScan {
  * - `'none'`：不紧贴（`FROM |`）—— 空位就是下一个槽位，表 / 库都该给；
  * - `'keyword'`：紧贴的就是命中的关键字（`FROM|`、`INTO|`）—— 表和库都不该给，
  *   否则 `FROM|` 的 pattern 会把长库名当子序列匹配上、再由高 boost 顶到第一位；
- * - `'name'`：紧贴的词被当成「正在输入的名字」让过（`FROM or|` 的 `or`）——
- *   表名候选正是用户要的（`orders`），照给；库名在这种「还在写标识符」的位置
- *   只会是噪音（`ON|` 也会匹配上 `information_schema`），不给。
+ * - `'name'`：紧贴的词被当成「正在输入的名字」让过（`FROM ord|` 的 `ord`）——
+ *   表名与库名候选正是用户要的（`orders` / `order_center`），照给。
+ *
+ * 注意 `'name'` 的判据是**词本身的身份**（不在关键字词表里），不是它长什么样：
+ * 任何非关键字的词紧贴光标时都是「正在输入的名字」，因此 `FROM d|`、`FROM ord|`、
+ * `FROM user|` 与曾经的 `FROM or|` 走的是同一条路 —— 不再依赖「恰好是个关键字」。
  */
 export type TightKind = 'none' | 'keyword' | 'name'
 
@@ -279,6 +283,26 @@ export function scanClause(prefix: string): ClauseScan {
           }
           return result('column', lower)
         }
+        /*
+         * 走到这里只可能是一种情况：这个词**不在关键字词表里**，于是它只能是
+         * 正在输入的标识符（表名 / 列名 / 别名 / 库名）。
+         *
+         * 位置语义由关键字给出，不由内容给出 —— 所以让过它、继续往左找子句关键字：
+         *
+         *   `SELECT * FROM d|`        → 让过 `d`，命中 FROM ⇒ 仍是**表位置**（给表名）
+         *   `SELECT * FROM user|`     → 同上（`user` 是需要引用符的保留字，但不是关键字）
+         *   `SELECT * FROM db.tab|`   → 让过 `tab`，tail 只剩 `db.` ⇒ 仍是表位置
+         *
+         * 只有**紧贴光标**才让过：`FROM users |` 里 users 后面已落空格，
+         * 那是个写完的来源，位置确实是「表之后」。
+         */
+        if (index === prefix.length && !KEYWORD_WORDS.has(lower)) {
+          skippedName = true
+          skippedNameStart = word.start
+          previousKeyword = lower
+          index = word.start
+          continue
+        }
       }
       previousKeyword = lower
       index = word.start
@@ -319,7 +343,7 @@ function readWordBackward(text: string, index: number): { text: string, start: n
 }
 
 /** 从 index（引号字符）向左找到配对的开引号，返回开引号之前的下标 */
-function skipQuotedBackward(text: string, index: number): number {
+export function skipQuotedBackward(text: string, index: number): number {
   const quote = text[index] ?? ''
   let i = index - 1
   while (i >= 0) {

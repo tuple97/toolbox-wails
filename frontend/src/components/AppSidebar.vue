@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
+import Icon from '@/components/ui/Icon.vue'
 import { useTabStore } from '@/stores/tabStore'
 import { useConfigStore } from '@/stores/configStore'
 import { PINNED_TOP_TOOLS, TOOL_GROUPS, TOP_LEVEL_TOOLS, toolOf } from '@/utils/tools'
@@ -14,6 +15,11 @@ defineProps<{
 
 const tabStore = useTabStore()
 const configStore = useConfigStore()
+
+/** 工具图标名（注册表里没有对应工具时给问号图标，模板里就不必到处判空） */
+function iconOf(type: string): string {
+  return toolOf(type)?.icon ?? 'question'
+}
 
 // ------------------------------------------------------------ 菜单配置（排序 / 显示）
 
@@ -241,9 +247,7 @@ function handleNewInstance(type: ToolType) {
             :class="{ 'is-hidden': draftHidden.includes(type) }"
           >
             <span class="app-sidebar__handle is-static" aria-hidden="true" />
-            <el-icon class="app-sidebar__icon">
-              <component :is="toolOf(type)?.icon" />
-            </el-icon>
+            <Icon class="app-sidebar__icon" :name="iconOf(type)" />
             <span class="app-sidebar__label">{{ toolOf(type)?.label }}</span>
             <button
               class="app-sidebar__eye"
@@ -251,7 +255,7 @@ function handleNewInstance(type: ToolType) {
               :title="draftHidden.includes(type) ? '显示菜单' : '隐藏菜单'"
               @click.stop="toggleDraftHidden(type)"
             >
-              <el-icon><Hide v-if="draftHidden.includes(type)" /><View v-else /></el-icon>
+              <Icon :name="draftHidden.includes(type) ? 'eye-off' : 'eye'" />
             </button>
           </li>
         </template>
@@ -264,9 +268,7 @@ function handleNewInstance(type: ToolType) {
             :title="titleOf(type)"
             @click="handleSelect(type)"
           >
-            <el-icon class="app-sidebar__icon">
-              <component :is="toolOf(type)?.icon" />
-            </el-icon>
+            <Icon class="app-sidebar__icon" :name="iconOf(type)" />
             <span class="app-sidebar__label">{{ toolOf(type)?.label }}</span>
           </li>
         </template>
@@ -284,12 +286,11 @@ function handleNewInstance(type: ToolType) {
           type="button"
           @click="toggleGroup(group.label)"
         >
-          <el-icon
+          <Icon
+            name="arrow-right"
             class="app-sidebar__arrow"
             :class="{ 'is-expanded': expandedGroups.includes(group.label) }"
-          >
-            <ArrowRight />
-          </el-icon>
+          />
           <span>{{ group.label }}</span>
         </button>
 
@@ -309,10 +310,8 @@ function handleNewInstance(type: ToolType) {
             class="app-sidebar__item is-editing"
             :class="{ 'is-hidden': draftHidden.includes(type) }"
           >
-            <el-icon class="app-sidebar__handle" title="拖动排序"><DCaret /></el-icon>
-            <el-icon class="app-sidebar__icon">
-              <component :is="toolOf(type)?.icon" />
-            </el-icon>
+            <Icon name="chevron-down" class="app-sidebar__handle" title="拖动排序" />
+            <Icon class="app-sidebar__icon" :name="iconOf(type)" />
             <span class="app-sidebar__label">{{ toolOf(type)?.label }}</span>
             <button
               class="app-sidebar__eye"
@@ -320,7 +319,7 @@ function handleNewInstance(type: ToolType) {
               :title="draftHidden.includes(type) ? '显示菜单' : '隐藏菜单'"
               @click.stop="toggleDraftHidden(type)"
             >
-              <el-icon><Hide v-if="draftHidden.includes(type)" /><View v-else /></el-icon>
+              <Icon :name="draftHidden.includes(type) ? 'eye-off' : 'eye'" />
             </button>
           </li>
         </VueDraggable>
@@ -339,9 +338,7 @@ function handleNewInstance(type: ToolType) {
             :title="titleOf(type)"
             @click="handleSelect(type)"
           >
-            <el-icon class="app-sidebar__icon">
-              <component :is="toolOf(type)?.icon" />
-            </el-icon>
+            <Icon class="app-sidebar__icon" :name="iconOf(type)" />
             <span class="app-sidebar__label">{{ toolOf(type)?.label }}</span>
 
             <!-- 多例工具：右侧 + 新建实例 -->
@@ -352,7 +349,7 @@ function handleNewInstance(type: ToolType) {
               title="新建实例"
               @click.stop="handleNewInstance(type)"
             >
-              <el-icon><Plus /></el-icon>
+              <Icon name="plus" />
             </button>
           </li>
         </ul>
@@ -371,9 +368,7 @@ function handleNewInstance(type: ToolType) {
             :class="{ 'is-hidden': draftHidden.includes(type) }"
           >
             <span class="app-sidebar__handle is-static" aria-hidden="true" />
-            <el-icon class="app-sidebar__icon">
-              <component :is="toolOf(type)?.icon" />
-            </el-icon>
+            <Icon class="app-sidebar__icon" :name="iconOf(type)" />
             <span class="app-sidebar__label">{{ toolOf(type)?.label }}</span>
             <button
               class="app-sidebar__eye"
@@ -381,7 +376,7 @@ function handleNewInstance(type: ToolType) {
               :title="draftHidden.includes(type) ? '显示菜单' : '隐藏菜单'"
               @click.stop="toggleDraftHidden(type)"
             >
-              <el-icon><Hide v-if="draftHidden.includes(type)" /><View v-else /></el-icon>
+              <Icon :name="draftHidden.includes(type) ? 'eye-off' : 'eye'" />
             </button>
           </li>
         </template>
@@ -394,9 +389,7 @@ function handleNewInstance(type: ToolType) {
             :title="titleOf(type)"
             @click="handleSelect(type)"
           >
-            <el-icon class="app-sidebar__icon">
-              <component :is="toolOf(type)?.icon" />
-            </el-icon>
+            <Icon class="app-sidebar__icon" :name="iconOf(type)" />
             <span class="app-sidebar__label">{{ toolOf(type)?.label }}</span>
           </li>
         </template>
@@ -425,7 +418,7 @@ function handleNewInstance(type: ToolType) {
         title="编辑菜单排序与显示"
         @click="enterEdit"
       >
-        <el-icon><Edit /></el-icon>
+        <Icon name="pencil" />
       </button>
     </footer>
   </aside>

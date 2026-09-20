@@ -206,7 +206,7 @@ export function sqlStatementRunGutter(options: RunGutterOptions): Extension {
       },
       '.cm-sql-run-btn.is-success': {
         // 走主题的成功色，取不到再退回一个稳妥的绿
-        color: 'var(--el-color-success, #22c55e)',
+        color: 'var(--success-color, #22c55e)',
         opacity: '1',
       },
       '.cm-sql-run-btn.is-error': {

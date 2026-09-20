@@ -13,7 +13,7 @@
  *    登记上下文；其它编辑器没登记就退化为空结果）。
  */
 import { onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
-import { Compartment, EditorState } from '@codemirror/state'
+import { Compartment, EditorState, StateEffect, StateField } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
 import {
   EditorView,
@@ -24,7 +24,9 @@ import {
   hoverTooltip,
   keymap,
   lineNumbers,
+  showTooltip,
 } from '@codemirror/view'
+import type { Tooltip } from '@codemirror/view'
 import type { ViewUpdate } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import {
@@ -59,7 +61,6 @@ import type {
   CompletionFeatureFlags,
   CompletionMode,
   CompletionRuntime,
-  SqlColumnInfo,
 } from '@/utils/sql/sqlCompletion'
 import { parseSqlTriggerMode, sqlCompletionTrigger } from '@/utils/sql/sqlCompletionTrigger'
 import { parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
@@ -81,7 +82,7 @@ import {
 import { editorErrorField, errorRangeOf, setEditorErrors } from '@/utils/editorErrors'
 import type { EditorError, ErrorPosition } from '@/utils/editorErrors'
 import { editorSearchExtensions, openEditorSearch } from '@/utils/editorSearch'
-import { ElMessage } from 'element-plus'
+import { notify } from '@/utils/notify'
 import { copyText } from '@/utils/clipboard'
 import {
   isRenaming,
@@ -92,8 +93,19 @@ import {
 import type { RenameTargetKind } from '@/utils/sql/rename/sqlRenameView'
 import type { SqlRenameViewOptions } from '@/utils/sql/rename/sqlRenameView'
 import { createTableSqlAt, tableHoverAt } from '@/utils/sql/hover/sqlTableHover'
+import { buildColumnHoverCard, COMMENT_ICON, TABLE_ICON } from '@/utils/sql/columnHoverCard'
+import {
+  openTableCardPopup,
+  renderTableCardInto,
+} from '@/utils/sql/hover/tableCard'
+import type { TableCardModel } from '@/utils/sql/hover/tableCard'
 import { resolveCreateTableSql } from '@/utils/sql/ddl/createTableSqlSource'
 import type { CreateTableSqlResult } from '@/utils/sql/ddl/createTableSqlSource'
+import { createTableModelOf, generateCreateTableSql } from '@/utils/sql/ddl/sqlCreateTable'
+import { dialectOf, fetchPrimaryKeys } from '@/utils/sql/rowSql'
+import { fetchTableIndexes } from '@/utils/sql/tableIndexes'
+import { parameterInfoAt } from '@/utils/sql/sqlParameterInfo'
+import { useMetadataStore } from '@/stores/metadataStore'
 import { resolveTableAtPosition } from '@/utils/sql/semantic/sqlSymbols'
 import {
   definitionNavigationExtension,
@@ -173,6 +185,8 @@ const props = withDefaults(defineProps<{
 })
 
 const configStore = useConfigStore()
+/** 表结构卡片的异步补齐（外键）走元数据 store 的缓存 */
+const metadataStore = useMetadataStore()
 
 /** 编辑器实例（重量级对象：必须 shallowRef） */
 const viewRef = shallowRef<EditorView | null>(null)
@@ -225,7 +239,11 @@ function themeName(): string {
 function fontExtension(): Extension {
   const fontFamily = configStore.editorFontStack
   return EditorView.theme({
-    '&': { fontSize: `${configStore.editorFontSize}px` },
+    /*
+     * 字号 = 编辑器字号 × 缩放比例。用 calc 而不是在 JS 里乘：
+     * 缩放比例是 CSS 变量，改「设置 → 缩放比例」时这里不必重建编辑器。
+     */
+    '&': { fontSize: `calc(${configStore.editorFontSize}px * var(--app-scale, 1))` },
     '.cm-scroller': {
       fontFamily,
       lineHeight: '1.6',
@@ -437,7 +455,8 @@ function columnHoverExtension(): Extension {
       pos: hover.from,
       end: hover.to,
       above: true,
-      create: () => ({ dom: renderColumnHover(hover.info) }),
+      // 卡片拼装在 utils/sql/columnHoverCard.ts（与结果表头悬停共用同一份）
+      create: () => ({ dom: buildColumnHoverCard(hover.info) }),
     }
   })
 }
@@ -468,7 +487,7 @@ function tableHoverExtension(): Extension {
       end: hover.to,
       above: true,
       create: () => ({
-        dom: renderTableHover(hover.info, async () => {
+        dom: renderTableHover(view, hover.info, async () => {
           // 悬停卡片与右键菜单走同一个来源策略：原生 DDL 优先
           const resolved = await resolveDdl(view, {
             tableName: hover.info.tableName,
@@ -498,10 +517,10 @@ function renameOptions(): SqlRenameViewOptions {
     runtime: view => sqlRuntimeFor(view, resolvedCompletionMode()),
     notify: (notice) => {
       if (notice.type === 'success') {
-        ElMessage.success(notice.message)
+        notify.success(notice.message)
       }
       else {
-        ElMessage.warning(notice.message)
+        notify.warning(notice.message)
       }
     },
   }
@@ -604,20 +623,20 @@ async function copyCreateTableAt(pos: number): Promise<boolean> {
   }
   const result = createTableSqlAt(view.state, pos, sqlRuntimeFor(view, resolvedCompletionMode()))
   if (!result) {
-    ElMessage.warning('未识别到可建表的物理表')
+    notify.warning('未识别到可建表的物理表')
     return false
   }
   try {
     // 优先数据库自己的 DDL（带索引等完整定义），拿不到才用按元数据生成的那份
     const resolved = await resolveDdl(view, result)
     await copyText(resolved.sql)
-    ElMessage.success(
+    notify.success(
       `已复制 ${result.tableName} 的建表语句（${resolved.source === 'database' ? '来自数据库' : '按元数据生成'}）`,
     )
     return true
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
     return false
   }
 }
@@ -645,152 +664,272 @@ async function resolveDdl(
   })
 }
 
-/** 「复制」图标（两张纸） */
-const COPY_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="5.6" y="2.4" width="8" height="9.2" rx="1.4"/><path d="M10.4 13.6H3.8a1.4 1.4 0 0 1-1.4-1.4V5.6"/></svg>'
-
 /**
- * 表结构卡片：标题行（表名 + 复制按钮）、列清单（名称 / 类型 / 注释）。
+ * 表结构卡片：标题行（表名 + 复制按钮）、列清单（名称 / 类型 / 注释）、索引区块。
  *
- * 列顺序就是元数据的 ordinal 顺序，不做任何重排 —— 卡片要与库里的定义顺序一致。
- * 复制失败只在按钮上给反馈，不关闭卡片（用户通常还要继续看结构）；
- * 复制的内容由 `copyDdl` 决定（原生 DDL 优先，见 resolveDdl）。
+ * DOM 拼装在 utils/sql/hover/tableCard.ts（与补全候选里的「来源表」点击共用）；
+ * 这里负责把 SqlTableHover 翻译成 model，并在卡片挂出后**异步补**主外键与索引
+ * （数据到了就地重画 —— CM 的 tooltip 会一直挂着宿主元素，重画安全）。
  */
-function renderTableHover(info: SqlTableHover, copyDdl: () => Promise<void>): HTMLElement {
-  const root = document.createElement('div')
-  root.className = 'table-hover'
-
-  const head = document.createElement('div')
-  head.className = 'table-hover__head'
-
-  const name = document.createElement('span')
-  name.className = 'table-hover__name'
-  name.textContent = info.tableName
-  head.appendChild(name)
-
-  const copy = document.createElement('button')
-  copy.className = 'table-hover__copy'
-  copy.type = 'button'
-  copy.title = '复制 CREATE TABLE'
-  copy.innerHTML = COPY_ICON
-  copy.addEventListener('mousedown', event => event.preventDefault())
-  copy.addEventListener('click', () => {
-    void (async () => {
-      try {
-        await copyDdl()
-        copy.textContent = '✓ 已复制'
-      }
-      catch {
-        copy.textContent = '复制失败'
-      }
-      setTimeout(() => {
-        copy.innerHTML = COPY_ICON
-      }, 1200)
-    })()
-  })
-  if (info.createTableSql) {
-    head.appendChild(copy)
+function renderTableHover(view: EditorView, info: SqlTableHover, copyDdl: () => Promise<void>): HTMLElement {
+  const host = document.createElement('div')
+  const model: TableCardModel = {
+    tableName: info.tableName,
+    schemaName: info.schemaName || undefined,
+    columns: info.columns,
+    virtual: info.virtual,
+    createTableSql: info.createTableSql || undefined,
+    onCopyDdl: copyDdl,
   }
-  else {
-    // 派生表 / CTE 没有建表语句：不给复制按钮（宁可不提供，也不给半截 DDL）
-    const hint = document.createElement('span')
-    hint.className = 'table-hover__hint'
-    hint.textContent = '派生列 · 无建表语句'
-    head.appendChild(hint)
+  renderTableCardInto(host, model)
+
+  const sql = sqlContextOf(view)
+  if (sql?.connId && !info.virtual) {
+    void enrichTableCard(host, model, {
+      connId: sql.connId,
+      database: sql.database,
+      dbType: sql.dbType,
+      schema: info.schemaName,
+      table: info.tableName,
+    })
   }
-  root.appendChild(head)
-
-  const list = document.createElement('div')
-  list.className = 'table-hover__list'
-  for (const column of info.columns) {
-    const row = document.createElement('div')
-    row.className = 'table-hover__row'
-
-    const columnName = document.createElement('span')
-    columnName.className = 'table-hover__column'
-    columnName.textContent = column.name
-    row.appendChild(columnName)
-
-    const type = document.createElement('span')
-    type.className = 'table-hover__type'
-    type.textContent = column.dataType ?? ''
-    row.appendChild(type)
-
-    if (column.comment) {
-      const comment = document.createElement('span')
-      comment.className = 'table-hover__comment'
-      comment.textContent = column.comment
-      row.appendChild(comment)
-    }
-    list.appendChild(row)
-  }
-  root.appendChild(list)
-  return root
+  return host
 }
-
-/** 「来源表」图标（表格轮廓，跟随文字颜色） */
-const TABLE_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2.2" y="3.2" width="11.6" height="9.6" rx="1.6"/><path d="M2.2 6.6h11.6M6.6 6.6v6.2"/></svg>'
-
-/** 「注释」图标（对话气泡） */
-const COMMENT_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M3.4 3.4h9.2a1.6 1.6 0 0 1 1.6 1.6v4.6a1.6 1.6 0 0 1-1.6 1.6H7.2L4.4 13.6v-2.4H3.4a1.6 1.6 0 0 1-1.6-1.6V5a1.6 1.6 0 0 1 1.6-1.6Z"/></svg>'
 
 /**
- * 悬停卡片：标题行是「列名 + 完整类型」，下面是带图标的来源表与注释。
- * 结构尽量扁平（不放标签底色块、不画分隔线），观感更接近 IDE 的悬停提示。
+ * 异步补齐一张表的主外键与索引，并把宿主重画成更全的版本。
+ *
+ * 三个来源互相独立：主键走 information_schema（rowSql，带缓存）、外键走
+ * 元数据 store（同样带缓存）、索引走 information_schema / pg_indexes（带缓存）。
+ * 全部失败时卡片保持原样 —— 这些都是展示增强。
  */
-function renderColumnHover(info: SqlColumnInfo): HTMLElement {
+async function enrichTableCard(
+  host: HTMLElement,
+  model: TableCardModel,
+  source: { connId: number, database: string, dbType: string, schema: string, table: string },
+): Promise<void> {
+  const [primaryKeys, foreignKeys, indexes] = await Promise.all([
+    fetchPrimaryKeys(
+      { connId: source.connId, database: source.database, dbType: source.dbType, sql: '' },
+      { schema: source.schema, table: source.table },
+      dialectOf(source.dbType),
+    ),
+    Promise.resolve(metadataStore.loadForeignKeys(source.connId, source.schema || source.database, source.table)),
+    fetchTableIndexes(source.connId, source.schema || source.database, source.table, source.dbType),
+  ])
+  // 悬停可能已经结束（宿主被 CM 摘掉）：不在文档里就不画
+  if (!host.isConnected) {
+    return
+  }
+  renderTableCardInto(host, {
+    ...model,
+    primaryKeys,
+    foreignKeys: foreignKeys.map(fk => ({
+      column: fk.column,
+      referencedTable: fk.referencedTable,
+      referencedColumn: fk.referencedColumn,
+    })),
+    indexes,
+  })
+}
+
+/**
+ * 「补全候选 tips 里点击来源表名」弹出的表结构浮层。
+ *
+ * 数据口径与悬停一致（同一份元数据缓存 + 同一套加载函数），
+ * 区别只在呈现：这里是独立浮层（tableCard.openTableCardPopup），
+ * 因为补全弹层的宽度装不下整张表卡片。
+ */
+function openTableCardFromDetail(view: EditorView, source: string, rect: DOMRect): void {
+  const sql = sqlContextOf(view)
+  if (!sql?.connId) {
+    return
+  }
+  // 血缘源头表名：`库.表` 或裸表名（见 sqlCompletionColumnPool 的 from 约定）
+  const segments = source.split('.')
+  const schema = segments.length > 1 ? segments[0]! : ''
+  const tableName = segments[segments.length - 1]!
+  const columns = defaultMetadataProvider
+    .columns(sql.connId, schema || sql.database, tableName)
+    .map(column => ({ name: column.name, dataType: column.dataType, comment: column.comment || '' }))
+  if (!columns.length) {
+    notify.warning(`暂无 ${source} 的结构信息`)
+    return
+  }
+
+  const dialect = dialectOf(sql.dbType)
+  const ddl = generateCreateTableSql(
+    createTableModelOf({ schema: schema || undefined, tableName, columns }),
+    dialect,
+  )
+  const model: TableCardModel = {
+    tableName,
+    schemaName: schema || undefined,
+    columns,
+    createTableSql: ddl || undefined,
+    onCopyDdl: async () => {
+      const resolved = await resolveDdl(view, { tableName, schema, sql: ddl })
+      await copyText(resolved.sql)
+    },
+  }
+  openTableCardPopup({
+    model,
+    anchor: { x: rect.left, y: rect.bottom },
+    loadExtras: () => enrichTableModel({
+      connId: sql.connId,
+      database: sql.database,
+      dbType: sql.dbType,
+      schema,
+      table: tableName,
+    }),
+  })
+}
+
+/**
+ * 拉一张表的主外键与索引（浮层版的异步补齐）：
+ * 与 enrichTableCard 同一套数据来源，只是返回数据而不是就地重画。
+ */
+async function enrichTableModel(source: {
+  connId: number
+  database: string
+  dbType: string
+  schema: string
+  table: string
+}): Promise<Partial<TableCardModel>> {
+  const [primaryKeys, foreignKeys, indexes] = await Promise.all([
+    fetchPrimaryKeys(
+      { connId: source.connId, database: source.database, dbType: source.dbType, sql: '' },
+      { schema: source.schema, table: source.table },
+      dialectOf(source.dbType),
+    ),
+    Promise.resolve(metadataStore.loadForeignKeys(source.connId, source.schema || source.database, source.table)),
+    fetchTableIndexes(source.connId, source.schema || source.database, source.table, source.dbType),
+  ])
+  return {
+    primaryKeys,
+    foreignKeys: foreignKeys.map(fk => ({
+      column: fk.column,
+      referencedTable: fk.referencedTable,
+      referencedColumn: fk.referencedColumn,
+    })),
+    indexes,
+  }
+}
+
+// ---------------------------------------------------------------- 函数参数提示（Ctrl+P）
+
+/** 开 / 关参数提示浮层的效果（值即 CM 的 Tooltip 描述，null 表示关闭） */
+const setParameterTip = StateEffect.define<Tooltip | null>()
+
+/**
+ * 参数提示的状态字段。
+ *
+ * 打开后的**跟随**逻辑在 update 里：光标 / 文档一变就重新解析 ——
+ * 还在某个（同一个或另一个）函数的参数列表里就跟着走（IDEA 的手感），
+ * 走出了参数列表就自动关掉。键位见 baseExtensions 的 keymap。
+ */
+const parameterTipField = StateField.define<Tooltip | null>({
+  create: () => null,
+  update(value, tr) {
+    const explicit = tr.effects.find(effect => effect.is(setParameterTip))
+    if (explicit) {
+      return explicit.value
+    }
+    if (!value) {
+      return null
+    }
+    return parameterTipSpecOf(tr.state)
+  },
+  provide: field => showTooltip.computeN([field], (state) => {
+    const tooltip = state.field(field)
+    return tooltip ? [tooltip] : []
+  }),
+})
+
+/** 由光标位置构造参数提示 tooltip；不在参数列表里返回 null */
+function parameterTipSpecOf(state: EditorState): Tooltip | null {
+  const info = parameterInfoAt(state.doc.toString(), state.selection.main.head)
+  if (!info) {
+    return null
+  }
+  return {
+    pos: info.openParen,
+    above: true,
+    create: () => ({ dom: buildParameterTipCard(info) }),
+  }
+}
+
+/** Ctrl+P：光标在参数列表里就显示提示。没有命中也要吞掉按键，否则浏览器会弹打印 */
+function showParameterInfo(view: EditorView): boolean {
+  view.dispatch({ effects: setParameterTip.of(parameterTipSpecOf(view.state)) })
+  return true
+}
+
+/** Esc 关闭（补全开着时 Esc 先归补全，它的键位注册在更高优先级） */
+function closeParameterTip(view: EditorView): boolean {
+  if (!view.state.field(parameterTipField, false)) {
+    return false
+  }
+  view.dispatch({ effects: setParameterTip.of(null) })
+  return true
+}
+
+/**
+ * 参数提示卡片：签名行（函数名 + 逐个参数，当前参数高亮）+ 描述 + 返回类型。
+ * 数据全部来自函数目录（utils/sql/functionCatalog.ts），这里只负责呈现。
+ */
+function buildParameterTipCard(info: ReturnType<typeof parameterInfoAt>): HTMLElement {
   const root = document.createElement('div')
-  root.className = 'column-hover'
+  root.className = 'param-tip'
+  if (!info) {
+    return root
+  }
 
-  const head = document.createElement('div')
-  head.className = 'column-hover__head'
-
+  const signature = document.createElement('div')
+  signature.className = 'param-tip__signature'
   const name = document.createElement('span')
-  name.className = 'column-hover__name'
-  name.textContent = info.name
-  head.appendChild(name)
+  name.className = 'param-tip__name'
+  name.textContent = info.doc.name
+  signature.appendChild(name)
+  signature.appendChild(document.createTextNode('('))
 
-  if (info.dataType) {
-    const type = document.createElement('span')
-    type.className = 'column-hover__type'
-    type.textContent = info.dataType
-    head.appendChild(type)
+  const lastParamIndex = Math.max(0, info.doc.params.length - 1)
+  info.doc.params.forEach((param, index) => {
+    if (index > 0) {
+      signature.appendChild(document.createTextNode(', '))
+    }
+    const arg = document.createElement('span')
+    arg.className = `param-tip__arg${index === Math.min(info.argIndex, lastParamIndex) ? ' is-active' : ''}`
+    arg.textContent = param.optional ? `${param.name}?` : param.name
+    signature.appendChild(arg)
+  })
+  if (info.doc.variadic) {
+    signature.appendChild(document.createTextNode(', …'))
   }
+  signature.appendChild(document.createTextNode(')'))
+  root.appendChild(signature)
 
-  root.appendChild(head)
+  const description = document.createElement('div')
+  description.className = 'param-tip__description'
+  description.textContent = info.doc.description
+  root.appendChild(description)
 
-  const rows: HTMLElement[] = []
-  if (info.table) {
-    rows.push(hoverRow(TABLE_ICON, info.derived ? `${info.table}（派生列）` : info.table))
+  if (info.doc.returns) {
+    const returns = document.createElement('div')
+    returns.className = 'param-tip__returns'
+    returns.textContent = `返回 ${info.doc.returns}`
+    root.appendChild(returns)
   }
-  if (info.comment) {
-    rows.push(hoverRow(COMMENT_ICON, info.comment))
-  }
-  if (rows.length) {
-    const meta = document.createElement('div')
-    meta.className = 'column-hover__meta'
-    meta.append(...rows)
-    root.appendChild(meta)
-  }
-
   return root
 }
 
-/** 悬停卡片里的一行「图标 + 内容」（图标是固定字符串，不含用户输入） */
-function hoverRow(icon: string, value: string): HTMLElement {
-  const row = document.createElement('div')
-  row.className = 'column-hover__row'
-
-  const glyph = document.createElement('span')
-  glyph.className = 'column-hover__icon'
-  glyph.innerHTML = icon
-  row.appendChild(glyph)
-
-  const text = document.createElement('span')
-  text.className = 'column-hover__value'
-  text.textContent = value
-  row.appendChild(text)
-
-  return row
+/** 仅 SQL / SQL 模板模式挂载：脚本与日志里没有受支持的函数上下文 */
+function parameterInfoExtension(): Extension {
+  const mode = resolvedCompletionMode()
+  if (mode !== 'sql' && mode !== 'sql-template') {
+    return []
+  }
+  return parameterTipField
 }
 
 /**
@@ -825,7 +964,17 @@ function renderColumnDetail(
     root.appendChild(type)
   }
   if (detail.from) {
-    root.appendChild(detailPart(doc, 'source', TABLE_ICON, detail.from))
+    const source = detailPart(doc, 'source', TABLE_ICON, detail.from)
+    // 来源表可点击：tips 就地转为这张表的结构卡片（独立浮层）
+    source.classList.add('cm-column-detail__part--link')
+    source.title = '点击查看表结构'
+    source.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+      openTableCardFromDetail(view, detail.from ?? '', rect)
+    })
+    root.appendChild(source)
   }
   if (detail.comment) {
     root.appendChild(detailPart(doc, 'comment', COMMENT_ICON, detail.comment))
@@ -1038,6 +1187,10 @@ function baseExtensions(): Extension[] {
       ...closeBracketsKeymap,
       ...defaultKeymap,
       ...historyKeymap,
+      // Ctrl+P：函数参数提示。没有命中也吞掉按键 —— 放行会让浏览器弹打印
+      { key: 'Ctrl-p', mac: 'Mod-p', run: showParameterInfo },
+      // Esc：关参数提示（补全开着时 Esc 由补全的高优先级键位先接走）
+      { key: 'Escape', run: closeParameterTip },
       { key: 'Space', run: toggleCheckedColumn },
       /*
        * Tab 先走「模板占位跳转」：块片段插入后条件位与块体是链上的两个占位，
@@ -1122,6 +1275,8 @@ onMounted(() => {
       // 表悬停排在列悬停之前：表名 / 别名位置优先出「表结构」，列位置才落到列卡片
       tableHoverExtension(),
       columnHoverExtension(),
+      // Ctrl+P 函数参数提示（仅在 SQL / SQL 模板模式挂载）
+      parameterInfoExtension(),
       // 重命名会话（状态 + 装饰 + Enter/Esc + 光标守护）
       renameExtension(),
       // 跳转到定义（Ctrl/Cmd + 左键、F12）
@@ -1293,64 +1448,53 @@ defineExpose({
 /* 补全弹层的高度 / 内边距 / 圆角由 utils/logLanguage.ts 的主题统一给出 */
 
 /*
- * 列悬停卡片（内容由 renderColumnHover 拼装）。
- * 浮层底色 / 边框 / 圆角 / 阴影由 CM 主题里的 .cm-tooltip 统一提供，这里只排内容。
- * 排版尽量扁平：标题行 + 两行带图标的次要信息，不用底色块与分隔线。
+ * 列悬停卡片与表结构卡片的样式在 styles/global.css（.column-hover* / .table-hover*）：
+ * 它们同时被补全候选的表名点击浮层与结果表头的 #app-tip 富卡片模式复用，
+ * 不能留在本组件的 scoped 样式里。
  */
-.code-editor :deep(.column-hover) {
-  min-width: 220px;
+
+/*
+ * 函数参数提示（Ctrl+P，DOM 由 buildParameterTipCard 拼装）。
+ * 浮层底色 / 边框 / 圆角 / 阴影由 CM 主题的 .cm-tooltip 提供，这里只排内容；
+ * 层次与列悬停卡片一致：签名是主体（函数名加粗、当前参数品牌色下划线），
+ * 描述与返回类型小一档弱色。
+ */
+.code-editor :deep(.param-tip) {
+  min-width: 180px;
   max-width: 420px;
-  padding: 10px 12px;
-  font-size: 12px;
+  padding: 8px 10px;
+  font-size: var(--app-font-size-xs);
   line-height: 1.5;
+  user-select: text;
 }
 
-.code-editor :deep(.column-hover__head) {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.code-editor :deep(.column-hover__name) {
-  color: var(--text-color);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-/* 类型跟一个等宽的完整定义（varchar(32) / decimal(10,2)），保持次要层级 */
-.code-editor :deep(.column-hover__type) {
-  min-width: 0;
+.code-editor :deep(.param-tip__signature) {
   color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11.5px;
   word-break: break-all;
 }
 
-.code-editor :deep(.column-hover__meta) {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-top: 8px;
+.code-editor :deep(.param-tip__name) {
+  color: var(--text-color);
+  font-weight: 600;
 }
 
-.code-editor :deep(.column-hover__row) {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
+.code-editor :deep(.param-tip__arg.is-active) {
+  color: var(--brand-color);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.code-editor :deep(.param-tip__description) {
+  margin-top: 6px;
+  color: var(--text-color);
+}
+
+.code-editor :deep(.param-tip__returns) {
+  margin-top: 4px;
   color: var(--text-muted);
-  font-size: 11.5px;
-}
-
-.code-editor :deep(.column-hover__icon) {
-  display: inline-flex;
-  flex: 0 0 auto;
-  margin-top: 1px;
-  opacity: 0.7;
-}
-
-.code-editor :deep(.column-hover__value) {
-  min-width: 0;
-  word-break: break-word;
+  font-size: var(--app-font-size-2xs);
 }
 
 /*
@@ -1364,88 +1508,9 @@ defineExpose({
 }
 
 /*
- * 表结构卡片（内容由 renderTableHover 拼装）。
- * 列清单用两列网格：名称固定宽度对齐，类型与注释跟在后面，长注释自动折行。
- */
-.code-editor :deep(.table-hover) {
-  min-width: 240px;
-  max-width: 460px;
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.code-editor :deep(.table-hover__head) {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.code-editor :deep(.table-hover__name) {
-  color: var(--text-color);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.code-editor :deep(.table-hover__copy) {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.code-editor :deep(.table-hover__copy:hover) {
-  color: var(--text-color);
-  border-color: var(--primary-color, #409eff);
-}
-
-.code-editor :deep(.table-hover__list) {
-  margin-top: 8px;
-  max-height: 260px;
-  overflow: auto;
-}
-
-.code-editor :deep(.table-hover__row) {
-  display: grid;
-  grid-template-columns: minmax(90px, max-content) minmax(70px, max-content) 1fr;
-  align-items: baseline;
-  gap: 10px;
-  padding: 1px 0;
-  color: var(--text-muted);
-  font-size: 11.5px;
-}
-
-.code-editor :deep(.table-hover__column) {
-  color: var(--text-color);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  word-break: break-all;
-}
-
-.code-editor :deep(.table-hover__type) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  word-break: break-all;
-}
-
-.code-editor :deep(.table-hover__comment) {
-  min-width: 0;
-  word-break: break-word;
-}
-
-/* 派生来源的说明（没有 DDL 可复制时占复制按钮的位置） */
-.code-editor :deep(.table-hover__hint) {
-  color: var(--text-muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-/*
+ * 表结构卡片的样式在 styles/global.css（.table-hover*）：
+ * 它同时被「补全候选里的表名点击弹出的独立浮层」复用，不能留在 scoped 样式里。
+ *
  * 光标处符号的出现位置：声明给稍重的底色，引用轻一档 ——
  * 既能一眼看出「用在哪」，也不至于把代码糊成一片。
  */

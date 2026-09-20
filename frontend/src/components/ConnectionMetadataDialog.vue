@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import Combobox from '@/components/ui/Combobox.vue'
+import DataTable from '@/components/ui/DataTable.vue'
+import Dialog from '@/components/ui/Dialog.vue'
+import Input from '@/components/ui/Input.vue'
+import { notify } from '@/utils/notify'
 import { useMetadataStore } from '@/stores/metadataStore'
 import { useConfigStore } from '@/stores/configStore'
 import { dialectOf } from '@/utils/sql/rowSql'
 import { filterDatabaseInfos, parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
+import type { TableColumn } from '@/utils/tableLayout'
 import type { DBConnection } from '@/types'
 
 /**
@@ -87,6 +92,30 @@ const columnsLoading = computed(
   () => meta.isColumnsLoading(connId.value, database.value, selectedTable.value),
 )
 
+/** 字段表列：三列都是弹性列，注释列权重最大（它最长） */
+const FIELD_COLUMNS: TableColumn[] = [
+  { key: 'name', label: '字段', minWidth: 150, ellipsis: true },
+  { key: 'dataType', label: '类型', minWidth: 130, ellipsis: true },
+  { key: 'comment', label: '注释', minWidth: 180, ellipsis: true },
+]
+
+/**
+ * 字段表空态文案。
+ *
+ * 旧代码用 `v-loading` 盖一层加载遮罩；这里改成**直接换文案**：
+ * 桌面端小面板里再叠一层半透明遮罩，反而看不清「到底在等什么」。
+ */
+const fieldEmptyText = computed(() => {
+  if (columnsLoading.value) {
+    return '正在读取字段…'
+  }
+  return selectedTable.value ? '该表没有字段信息' : '选择左侧的表查看字段'
+})
+
+/** 库下拉选项（Combobox 只吃 label / value） */
+const databaseOptions = computed(() =>
+  databases.value.map(info => ({ label: info.name, value: info.name })))
+
 /** 打开时准备数据：库列表 → 默认库 → 表列表 */
 watch(() => props.visible, async (open) => {
   if (!open || !connId.value) {
@@ -122,7 +151,7 @@ async function prepare() {
     }
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -133,7 +162,7 @@ async function handleDatabaseChange() {
     await meta.loadTables(connId.value, database.value)
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -144,190 +173,71 @@ async function selectTable(name: string) {
     await meta.loadColumns(connId.value, database.value, name)
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 </script>
 
 <template>
-  <el-dialog
-    v-model="dialogVisible"
-    :title="`元数据 · ${connection?.name ?? ''}`"
-    width="880px"
-    align-center
-    destroy-on-close
-  >
-    <div class="meta-dialog">
-      <header class="meta-dialog__bar">
-        <span class="meta-dialog__label">数据库</span>
-        <el-select
+  <Dialog v-model="dialogVisible" :title="`元数据 · ${connection?.name ?? ''}`" :width="880">
+    <div class="flex flex-col gap-2.5">
+      <header class="flex flex-wrap items-center gap-2">
+        <span class="text-sm text-muted">数据库</span>
+        <Combobox
           v-model="database"
-          class="meta-dialog__db"
-          filterable
-          :loading="databasesLoading"
-          placeholder="选择数据库"
-          @change="handleDatabaseChange"
-        >
-          <el-option
-            v-for="info in databases"
-            :key="info.name"
-            :label="info.name"
-            :value="info.name"
-          />
-        </el-select>
-
-        <el-input
+          :options="databaseOptions"
+          :placeholder="databasesLoading ? '读取中…' : '选择数据库'"
+          search-placeholder="搜索数据库…"
+          class="w-[220px]"
+          @update:model-value="handleDatabaseChange"
+        />
+        <Input
           v-model="keyword"
-          class="meta-dialog__search"
-          placeholder="搜索表 / 视图"
+          prefix-icon="search"
           clearable
-        >
-          <template #prefix>
-            <el-icon><Search /></el-icon>
-          </template>
-        </el-input>
+          placeholder="搜索表 / 视图"
+          class="w-[200px]"
+        />
 
-        <span class="meta-dialog__count">{{ tables.length }} 张表 / 视图</span>
-        <span class="meta-dialog__conn">
+        <span class="text-xs text-muted">{{ tables.length }} 张表 / 视图</span>
+        <span class="ml-auto font-mono text-xs text-muted">
           {{ connection?.dbType }} · {{ connection?.host }}:{{ connection?.port }}
         </span>
       </header>
 
-      <div class="meta-dialog__body">
-        <ul v-loading="tablesLoading" class="meta-dialog__tables">
+      <div class="flex h-[460px] min-h-0 gap-3">
+        <!--
+          表 / 视图列表：固定宽 + 内部滚动。
+          条目必须 `shrink-0`：这是纵向 flex 容器，条目默认可收缩，
+          而系统库动辄上百张表，不写会被平均压扁（表现为每行只露出文字上沿）。
+        -->
+        <ul class="flex w-[240px] shrink-0 flex-col overflow-auto rounded-md border border-border p-1.5">
           <li
             v-for="name in tables"
             :key="name"
-            class="meta-dialog__table"
-            :class="{ 'is-active': name === selectedTable }"
+            class="shrink-0 cursor-pointer truncate rounded-md px-2 py-1.5 text-sm leading-normal
+              transition-colors hover:bg-hover"
+            :class="name === selectedTable && 'bg-active'"
             :title="name"
             @click="selectTable(name)"
           >
             {{ name }}
           </li>
-          <li v-if="!tables.length && !tablesLoading" class="meta-dialog__empty">
-            {{ database ? '该库下没有表或视图' : '请先选择数据库' }}
+          <li v-if="!tables.length" class="shrink-0 px-2.5 py-4 text-center text-xs text-muted">
+            {{ tablesLoading ? '正在读取表…' : (database ? '该库下没有表或视图' : '请先选择数据库') }}
           </li>
         </ul>
 
-        <div class="meta-dialog__columns">
-          <el-table
-            v-loading="columnsLoading"
-            :data="columns"
-            size="small"
-            border
-            height="100%"
-            empty-text="选择左侧的表查看字段"
-          >
-            <el-table-column prop="name" label="字段" min-width="150" show-overflow-tooltip />
-            <el-table-column prop="dataType" label="类型" min-width="130" show-overflow-tooltip />
-            <el-table-column prop="comment" label="注释" min-width="180" show-overflow-tooltip />
-          </el-table>
-        </div>
+        <DataTable
+          :columns="FIELD_COLUMNS"
+          :rows="columns"
+          size="sm"
+          class="min-w-0 flex-1 rounded-md border border-border"
+          :empty-text="fieldEmptyText"
+        />
       </div>
     </div>
-  </el-dialog>
+  </Dialog>
 </template>
 
-<style scoped>
-.meta-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
 
-.meta-dialog__bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.meta-dialog__label {
-  color: var(--text-muted);
-  font-size: var(--app-font-size-sm);
-}
-
-.meta-dialog__db {
-  width: 220px;
-}
-
-.meta-dialog__search {
-  width: 200px;
-}
-
-.meta-dialog__count {
-  color: var(--text-muted);
-  font-size: var(--app-font-size-xs);
-}
-
-.meta-dialog__conn {
-  margin-left: auto;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--app-font-size-xs);
-}
-
-.meta-dialog__body {
-  display: flex;
-  gap: 12px;
-  height: 460px;
-  min-height: 0;
-}
-
-/* 左侧表列表：固定宽、内部滚动 */
-.meta-dialog__tables {
-  display: flex;
-  flex-direction: column;
-  flex: 0 0 240px;
-  margin: 0;
-  padding: 6px;
-  list-style: none;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  overflow: auto;
-}
-
-/*
- * flex: 0 0 auto 必不可少：
- * 列表是纵向 flex 容器，条目默认可收缩；系统库动辄上百张表，
- * 不加这一行会被平均压扁成几像素高（表现为每行只露出文字上沿）。
- */
-.meta-dialog__table {
-  flex: 0 0 auto;
-  padding: 6px 8px;
-  border-radius: 6px;
-  font-size: var(--app-font-size-sm);
-  line-height: 1.5;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.meta-dialog__table:hover {
-  background: var(--hover-bg);
-}
-
-.meta-dialog__table.is-active {
-  background: var(--active-bg);
-}
-
-.meta-dialog__empty {
-  flex: 0 0 auto;
-  padding: 18px 10px;
-  color: var(--text-muted);
-  font-size: var(--app-font-size-xs);
-  text-align: center;
-}
-
-/* 右侧字段表 */
-.meta-dialog__columns {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-</style>

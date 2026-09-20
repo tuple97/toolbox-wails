@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { notify } from '@/utils/notify'
 import type { EditorView } from '@codemirror/view'
 import ContextMenu from '@/components/ContextMenu.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
@@ -77,15 +77,15 @@ function selectedOrCurrentLine(): string {
 /** 写剪贴板 + 统一提示 */
 async function copyWithToast(text: string, message: string) {
   if (!text) {
-    ElMessage.warning('没有可复制的内容')
+    notify.warning('没有可复制的内容')
     return
   }
   try {
     await copyText(text)
-    ElMessage.success(message)
+    notify.success(message)
   }
   catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
+    notify.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -100,7 +100,7 @@ async function handleMenuSelect(item: ContextMenuAction) {
   }
   if (item.key === 'clear') {
     logStore.clear()
-    ElMessage.success('执行记录已清空')
+    notify.success('执行记录已清空')
   }
 }
 

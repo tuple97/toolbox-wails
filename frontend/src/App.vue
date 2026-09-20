@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { ElConfigProvider } from 'element-plus'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import TitleBar from '@/components/TitleBar.vue'
+import ConfirmHost from '@/components/ui/ConfirmHost.vue'
+import Toaster from '@/components/ui/Toaster.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import WindowResizeEdges from '@/components/WindowResizeEdges.vue'
 import Workbench from '@/layouts/Workbench.vue'
@@ -80,37 +80,39 @@ onMounted(async () => {
 </script>
 
 <template>
-  <!--
-    ElConfigProvider 负责把「控件大小」全局下发给所有 Element Plus 组件。
-    注意：这里不接管右键，右键菜单仅在标题栏触发。
-  -->
-  <ElConfigProvider :locale="zhCn" :size="configStore.controlSize">
-    <div class="app-root">
-      <!-- 自定义顶部工具栏：系统菜单与设置入口都在这里 -->
-      <TitleBar
-        title="Toolbox"
-        @close="closeWindow"
-        @settings="openSettings"
-        @context-menu="openContextMenu"
-      />
+  <!-- 注意：这里不接管右键，右键菜单仅在标题栏触发 -->
+  <div class="app-root">
+    <!-- 自定义顶部工具栏：系统菜单与设置入口都在这里 -->
+    <TitleBar
+      title="Toolbox"
+      @close="closeWindow"
+      @settings="openSettings"
+      @context-menu="openContextMenu"
+    />
 
-      <main class="app-main app-main--flush">
-        <Workbench />
-      </main>
+    <main class="app-main app-main--flush">
+      <Workbench />
+    </main>
 
-      <!-- 窗口四周缩放宽边热区 -->
-      <WindowResizeEdges />
+    <!-- 窗口四周缩放宽边热区 -->
+    <WindowResizeEdges />
 
-      <!-- 标题栏系统右键菜单 -->
-      <ContextMenu
-        v-model:visible="menuVisible"
-        :x="menuX"
-        :y="menuY"
-        :items="titleBarMenuItems"
-        @select="handleMenuSelect"
-      />
-    </div>
-  </ElConfigProvider>
+    <!-- 标题栏系统右键菜单 -->
+    <ContextMenu
+      v-model:visible="menuVisible"
+      :x="menuX"
+      :y="menuY"
+      :items="titleBarMenuItems"
+      @select="handleMenuSelect"
+    />
+
+    <!--
+      全局反馈宿主：各挂一个即可（内部 Teleport 到 body）。
+      提示与确认框都是「命令式调用 + 全局队列」，所以放在应用根部而不是逐页挂载。
+    -->
+    <Toaster />
+    <ConfirmHost />
+  </div>
 </template>
 
 <style scoped>

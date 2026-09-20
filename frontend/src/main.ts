@@ -1,29 +1,22 @@
 import { createApp, watchEffect } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import { syncWindowBackground } from './api/window'
 import { installTitleTooltip } from './utils/tooltip'
 import { useConfigStore } from './stores/configStore'
 
-import 'element-plus/dist/index.css'
-// Element Plus 暗色主题，与自定义工具栏配色保持一致
-import 'element-plus/theme-chalk/dark/css-vars.css'
+/*
+ * 样式入口顺序：先 Tailwind 与设计令牌（含元素级重置），再应用自己的 global.css。
+ * 自定义样式放最后，同特异性下由它说了算。
+ */
+import './styles/tailwind.css'
 import './styles/global.css'
 // 模板管理弹窗内面板的表单样式规范（变量配置 / 字段映射共用）
 import './styles/template-panels.css'
 
 const app = createApp(App)
 
-// 注册 Element Plus 图标组件
-for (const [name, component] of Object.entries(ElementPlusIconsVue)) {
-  app.component(name, component)
-}
-
 app.use(createPinia())
-app.use(ElementPlus, { locale: zhCn })
 
 // 主题由 configStore 在启动时从后端配置读取并应用，
 // 这里先默认暗色，避免首帧闪白。

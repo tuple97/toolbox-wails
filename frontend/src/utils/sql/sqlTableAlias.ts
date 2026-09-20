@@ -96,8 +96,11 @@ export function aliasForTable(table: string): string {
 /**
  * 表名 + 自动别名的插入文本。
  *
+ * 显式写 `AS`：省略 AS 的写法虽然合法，但生成的 SQL 是给人读的 ——
+ * `FROM users u` 这种一眼看过去分不清哪个是表名哪个是别名，`AS` 把意图写明白。
+ *
  * 表名已按方言加引用符，别名是推导出来的纯标识符（保证不需要引用符）。
  */
 export function aliasedTableText(quotedTable: string, alias: string): string {
-  return alias ? `${quotedTable} ${alias}` : quotedTable
+  return alias ? `${quotedTable} AS ${alias}` : quotedTable
 }

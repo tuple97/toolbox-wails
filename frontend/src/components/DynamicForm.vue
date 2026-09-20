@@ -1,5 +1,12 @@
 <script setup lang="ts">
 import { onMounted, reactive, watch } from 'vue'
+import Combobox from '@/components/ui/Combobox.vue'
+import DateInput from '@/components/ui/DateInput.vue'
+import Input from '@/components/ui/Input.vue'
+import MultiSelect from '@/components/ui/MultiSelect.vue'
+import Slider from '@/components/ui/Slider.vue'
+import Switch from '@/components/ui/Switch.vue'
+import { cn } from '@/lib/utils'
 import { fetchVariableOptions } from '@/api/db'
 import type { VariableConfig, VariableOption } from '@/types'
 
@@ -216,133 +223,128 @@ watch(
 </script>
 
 <template>
-  <div class="dynamic-form">
+  <div class="dynamic-form py-1">
     <p v-if="!configs.length" class="dynamic-form__empty">
       模板中未检测到变量。在 SQL 中使用 <code>&#123;&#123; 变量名 &#125;&#125;</code> 即可自动识别。
     </p>
 
     <!--
-      横向模式：条件名与控件同一行，两者作为整体参与换行，
-      避免条件名与控件被拆到两行。
+      横向模式（查询页的条件区）：条件名与控件同一行，两者作为整体参与换行，
+      避免条件名与控件被拆到两行；网格 300px 起步，窗口越宽列数越多。
     -->
-    <el-form
+    <form
       v-else
-      :label-position="inline ? 'right' : 'top'"
-      :label-width="inline ? '96px' : 'auto'"
-      size="default"
-      :class="{ 'dynamic-form__grid': inline }"
+      :class="inline
+        ? 'grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] items-center gap-x-4.5 gap-y-2.5'
+        : 'flex flex-col gap-3'"
       @submit.prevent="emit('submit')"
     >
-      <el-form-item
+      <div
         v-for="config in configs"
         :key="config.name"
-        :label="config.label || config.name"
-        :class="{ 'dynamic-form__item--full': inline && isFullWidthItem(config) }"
+        :class="cn(
+          inline ? 'flex items-center gap-2' : 'flex flex-col gap-1',
+          // 多行文本与滑块横向需求大，放进网格单列会很局促，横跨整行
+          inline && isFullWidthItem(config) && 'col-span-full',
+        )"
       >
-        <!-- 文本输入 -->
-        <el-input
-          v-if="config.component === 'input'"
-          :model-value="getStringValue(config)"
-          :placeholder="config.placeholder || `请输入 ${config.label || config.name}`"
-          clearable
-          @update:model-value="setValue(config, $event)"
-        />
-
-        <!-- 多行文本 -->
-        <el-input
-          v-else-if="config.component === 'textarea'"
-          :model-value="getStringValue(config)"
-          type="textarea"
-          :rows="3"
-          :placeholder="config.placeholder"
-          @update:model-value="setValue(config, $event)"
-        />
-
-        <!-- 单选下拉 -->
-        <el-select
-          v-else-if="config.component === 'select'"
-          :model-value="getStringValue(config)"
-          :loading="loadingOptions[config.name]"
-          :placeholder="config.placeholder || '请选择'"
-          clearable
-          filterable
-          style="width: 100%"
-          @update:model-value="setValue(config, $event)"
+        <label
+          :class="cn(
+            'text-sm text-muted',
+            inline ? 'w-24 shrink-0 truncate text-right' : 'w-auto',
+          )"
         >
-          <el-option
-            v-for="opt in optionsFor(config)"
-            :key="opt.value"
-            :label="opt.label"
-            :value="opt.value"
+          {{ config.label || config.name }}
+        </label>
+
+        <div class="min-w-0 flex-1">
+          <!-- 文本输入 -->
+          <Input
+            v-if="config.component === 'input'"
+            :model-value="getStringValue(config)"
+            :placeholder="config.placeholder || `请输入 ${config.label || config.name}`"
+            clearable
+            @update:model-value="setValue(config, $event)"
           />
-        </el-select>
 
-        <!-- 多选下拉 -->
-        <el-select
-          v-else-if="config.component === 'multi-select'"
-          :model-value="getArrayValue(config)"
-          multiple
-          collapse-tags
-          collapse-tags-tooltip
-          :loading="loadingOptions[config.name]"
-          :placeholder="config.placeholder || '请选择'"
-          style="width: 100%"
-          @update:model-value="setValue(config, $event)"
-        >
-          <el-option
-            v-for="opt in optionsFor(config)"
-            :key="opt.value"
-            :label="opt.label"
-            :value="opt.value"
+          <!-- 多行文本 -->
+          <Input
+            v-else-if="config.component === 'textarea'"
+            :model-value="getStringValue(config)"
+            type="textarea"
+            :rows="3"
+            :placeholder="config.placeholder"
+            @update:model-value="setValue(config, $event)"
           />
-        </el-select>
 
-        <!-- 日期选择 -->
-        <el-date-picker
-          v-else-if="config.component === 'date-picker'"
-          :model-value="getStringValue(config)"
-          type="date"
-          value-format="YYYY-MM-DD"
-          :placeholder="config.placeholder || '选择日期'"
-          style="width: 100%"
-          @update:model-value="setValue(config, $event)"
-        />
+          <!-- 单选下拉（动态选项尚在读取时用占位文案说明，而不是静默的空列表） -->
+          <Combobox
+            v-else-if="config.component === 'select'"
+            :model-value="getStringValue(config)"
+            :options="optionsFor(config)"
+            :placeholder="loadingOptions[config.name]
+              ? '正在读取选项…'
+              : (config.placeholder || '请选择')"
+            clearable
+            @update:model-value="setValue(config, $event)"
+          />
 
-        <!-- 滑块 -->
-        <el-slider
-          v-else-if="config.component === 'slider'"
-          :model-value="getNumberValue(config)"
-          :min="config.min ?? 0"
-          :max="config.max ?? 100"
-          :step="config.step ?? 1"
-          show-input
-          @update:model-value="setValue(config, $event)"
-        />
+          <!-- 多选下拉 -->
+          <MultiSelect
+            v-else-if="config.component === 'multi-select'"
+            :model-value="getArrayValue(config)"
+            :options="optionsFor(config)"
+            :placeholder="loadingOptions[config.name] ? '正在读取选项…' : (config.placeholder || '请选择')"
+            @update:model-value="setValue(config, $event)"
+          />
 
-        <!-- 开关 -->
-        <el-switch
-          v-else-if="config.component === 'switch'"
-          :model-value="getBooleanValue(config)"
-          @update:model-value="setValue(config, $event)"
-        />
+          <!-- 日期选择（原生 date 的值格式就是 YYYY-MM-DD，与旧 value-format 一致） -->
+          <DateInput
+            v-else-if="config.component === 'date-picker'"
+            :model-value="getStringValue(config)"
+            @update:model-value="setValue(config, $event)"
+          />
 
-        <!-- 兜底：按普通输入处理 -->
-        <el-input
-          v-else
-          :model-value="getStringValue(config)"
-          @update:model-value="setValue(config, $event)"
-        />
-      </el-form-item>
-    </el-form>
+          <!-- 滑块：数值文本由这里渲染（EP 的 show-input 位置） -->
+          <div v-else-if="config.component === 'slider'" class="flex items-center gap-3">
+            <Slider
+              :model-value="getNumberValue(config)"
+              :min="config.min ?? 0"
+              :max="config.max ?? 100"
+              :step="config.step ?? 1"
+              class="flex-1"
+              @update:model-value="setValue(config, $event)"
+            />
+            <span class="w-12 shrink-0 text-right text-sm text-muted">
+              {{ getNumberValue(config) }}
+            </span>
+          </div>
+
+          <!-- 开关 -->
+          <Switch
+            v-else-if="config.component === 'switch'"
+            :model-value="getBooleanValue(config)"
+            @update:model-value="setValue(config, $event)"
+          />
+
+          <!-- 兜底：按普通输入处理 -->
+          <Input
+            v-else
+            :model-value="getStringValue(config)"
+            @update:model-value="setValue(config, $event)"
+          />
+        </div>
+      </div>
+    </form>
   </div>
 </template>
 
 <style scoped>
-.dynamic-form {
-  padding: 4px 0;
-}
-
-/* 未检测到变量时的提示 */
+/*
+ * 只剩「未检测到变量」这条提示还需要样式：它是带虚线框的说明块，
+ * 用 Tailwind 写会很长且与语义无关，留在 scoped 里更好读。
+ * 其余版面（网格 / 标签对齐 / 横跨整行）都在模板里用工具类表达。
+ */
 .dynamic-form__empty {
   margin: 0;
   padding: 18px;
@@ -361,56 +363,5 @@ watch(
   background: var(--active-bg);
   color: var(--brand-color);
   font-family: var(--font-mono);
-}
-
-/* 竖排（上置标签）模式：用于非查询页的窄容器 */
-.dynamic-form :deep(.el-form-item) {
-  margin-bottom: 14px;
-}
-
-.dynamic-form :deep(.el-form-item__label) {
-  color: var(--text-muted);
-  font-size: var(--app-font-size-sm);
-}
-
-/*
- * 横向模式：用网格排布条件。
- *
- * 相比 flex-wrap，网格能保证各列宽度一致、上下行标签对齐；
- * 列宽 300px 起步，窗口越宽列数越多（auto-fill 不会拉伸已有列）。
- */
-.dynamic-form__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 10px 18px;
-  align-items: center;
-}
-
-.dynamic-form :deep(.dynamic-form__grid .el-form-item) {
-  margin: 0;
-  align-items: center;
-}
-
-/* 标签与控件垂直居中（Element Plus 的行内标签默认行高是给竖排标签用的） */
-.dynamic-form :deep(.dynamic-form__grid .el-form-item__label) {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  height: auto;
-  padding: 0 10px 0 0;
-  line-height: 1.4;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.dynamic-form :deep(.dynamic-form__grid .el-form-item__content) {
-  flex: 1;
-  min-width: 0;
-}
-
-/* 多行文本 / 滑块：横跨整行 */
-.dynamic-form :deep(.dynamic-form__grid .el-form-item.dynamic-form__item--full) {
-  grid-column: 1 / -1;
 }
 </style>

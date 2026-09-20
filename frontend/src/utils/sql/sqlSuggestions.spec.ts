@@ -190,9 +190,14 @@ describe('候选族注册表', () => {
       .toEqual(['tables', 'namespaces', 'keywords'])
   })
 
-  it('紧贴正在输入的标识符时库名让位（还在写名字，轮不到库）', () => {
-    // `FROM or|`：表名照给（orders 正是用户要的），库名不给
-    expect(providersAt(ctxOf({ kind: 'source', tight: 'name' }))).toEqual(['tables'])
+  it('紧贴正在输入的标识符时，表与库一起给（两者时机相同）', () => {
+    /*
+     * `FROM ord|`：表名（orders）与库名（order_center）都是用户可能要写的 ——
+     * 选定库名后接着敲 `.` 就能展开它的表。所以表与库共用同一条资格判据，
+     * 不再拿 tight 当「库名要不要让位」的代理。
+     */
+    expect(providersAt(ctxOf({ kind: 'source', tight: 'name' })))
+      .toEqual(['tables', 'namespaces'])
   })
 
   it('函数候选可由 featureFlags 关掉（轻量场景）', () => {

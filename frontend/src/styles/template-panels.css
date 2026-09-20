@@ -1,42 +1,18 @@
 /*
- * 模板管理弹窗内「变量配置 / 字段映射」面板的统一表单样式。
+ * 模板管理弹窗内「变量配置 / 字段映射」面板的统一样式。
  *
  * 重要：本文件是**全局样式表**（不是 SFC 的 scoped 块），
  * 因此不能用 `:deep()`——那是 Vue scoped CSS 的语法，在纯 CSS 里无效。
  * 这里统一用 `.tpl-panel__*` 前缀做命名空间隔离，避免影响其他组件。
  *
  * 设计约定：
- *   - 标签左置且与控件垂直居中（Element Plus 默认标签行高是给「上置标签」用的，
- *     必须在这里重置，否则标签与控件会错位）；
- *   - 多行文本框的标签改为顶部对齐；
+ *   - 表单行由 `components/ui/Field.vue` 提供（标签左置 + 控件在右，标签宽度可传）；
+ *     **标签与控件的对齐不再由本文件负责** —— 以前那几段
+ *     `.el-form-item` / `.el-form-item__label` 的样式是在重置 Element Plus
+ *     给「上置标签」准备的行高，随组件库一起删掉了；
  *   - 用网格自动分列，窗口越宽信息越紧凑，不再单列堆叠；
  *   - 分组用小标题 + 虚线分隔，弱化视觉噪音。
  */
-
-/* ------------------------------------------------------------ 折叠列表 */
-
-.tpl-panel-list__collapse.el-collapse,
-.tpl-panel-list__collapse .el-collapse {
-  border-top: none;
-  border-bottom: none;
-}
-
-.tpl-panel-list__collapse .el-collapse-item__header {
-  height: calc(40px * var(--app-control-scale));
-  padding: 0 4px;
-  border-bottom: 1px solid var(--border-color);
-  background: transparent;
-  font-size: var(--app-font-size);
-}
-
-.tpl-panel-list__collapse .el-collapse-item__wrap {
-  border-bottom: 1px solid var(--border-color);
-  background: transparent;
-}
-
-.tpl-panel-list__collapse .el-collapse-item__content {
-  padding: 12px 4px 14px;
-}
 
 /* 收起态标题：字族名 chip + 描述 + 标记 */
 .tpl-panel__title {
@@ -74,41 +50,23 @@
   padding: 0;
 }
 
+/* ------------------------------------------------------------ 高度链（左右两栏独立滚动） */
+
 /*
- * 行内标签与控件垂直居中。
- * Element Plus 的 .el-form-item 本身是 flex 容器，
- * 但标签带有用于「上置标签」的 line-height / padding，这里统一重置。
+ * 面板必须**填满页签内容区**，左右两栏的 `overflow: auto` 才有界可滚。
+ * 以前 `.tpl-master` 只有 min-height、高度随内容长 —— 超出后被外层
+ * `overflow: hidden` 裁掉，表现就是「滚动条直接没了」。
  */
-.tpl-panel__form .el-form-item {
+.tpl-panel-list {
   display: flex;
-  align-items: center;
-  margin-bottom: 10px;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
-.tpl-panel__form .el-form-item__label {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  height: auto;
-  padding: 0 10px 0 0;
-  color: var(--text-muted);
-  font-size: var(--app-font-size-sm);
-  line-height: 1.4;
-}
-
-.tpl-panel__form .el-form-item__content {
-  flex: 1;
-  min-width: 0;
-  line-height: normal;
-}
-
-/* 多行控件（文本域）：标签顶部对齐更自然 */
-.tpl-panel__form .el-form-item.tpl-panel__field--multiline {
-  align-items: flex-start;
-}
-
-.tpl-panel__form .tpl-panel__field--multiline .el-form-item__label {
-  padding-top: 5px;
+.tpl-panel-list > .tpl-master {
+  flex: 1 1 auto;
+  min-height: 200px;
 }
 
 /* ------------------------------------------------------------ 分组与网格 */
@@ -147,7 +105,13 @@
   gap: 8px;
 }
 
-.tpl-panel__option-row .el-input {
+/*
+ * 行内输入自己撑满剩余宽度；末尾的「删除」按钮保持自然宽度。
+ * （Input 单行时根节点是 div、多行时是 textarea，两种都要覆盖。）
+ */
+.tpl-panel__option-row > div,
+.tpl-panel__option-row > input,
+.tpl-panel__option-row > textarea {
   flex: 1;
   min-width: 0;
 }

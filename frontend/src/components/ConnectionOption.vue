@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import Tag from '@/components/ui/Tag.vue'
 import { connectionEnvBadge } from '@/utils/connectionDisplay'
 import type { DBConnection } from '@/types'
 
 /**
  * 连接下拉里的选项内容：颜色点 + 名称 + 环境标签 + 只读标签 + 数据库类型。
  *
- * 供 el-option 的默认插槽使用（`<el-option :label="..."><ConnectionOption :connection="conn" /></el-option>`），
- * 这样各个「选择数据源」的下拉展示完全一致。
+ * 供「连接下拉」的选项行与选中项共用（`<ConnectionOption :connection="conn" />`），
+ * 这样各个「选择数据源」的展示完全一致 —— 下拉里长什么样，选中后就长什么样。
  */
 
 const props = defineProps<{
@@ -28,10 +29,10 @@ const envBadge = computed(() => connectionEnvBadge(props.connection))
     />
     <span class="conn-option__name">{{ connection.name }}</span>
 
-    <el-tag v-if="envBadge" size="small" :type="envBadge.type" effect="plain">
+    <Tag v-if="envBadge" size="sm" :tone="envBadge.type" effect="plain">
       {{ envBadge.text }}
-    </el-tag>
-    <el-tag v-if="connection.readOnly" size="small" type="info" effect="plain">只读</el-tag>
+    </Tag>
+    <Tag v-if="connection.readOnly" size="sm" tone="info" effect="plain">只读</Tag>
 
     <span class="conn-option__type">{{ connection.dbType }}</span>
   </span>

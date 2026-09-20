@@ -11,7 +11,7 @@ export interface ToolDefinition {
   type: ToolType
   /** 菜单与标签上展示的名称 */
   label: string
-  /** Element Plus 图标组件名（全局已注册） */
+  /** 图标名（自绘图标库 utils/icons.ts；由 `<Icon :name="..." />` 渲染） */
   icon: string
   /**
    * 是否多例：多例工具可同时打开多个标签（如 SQL 查询），
@@ -26,51 +26,50 @@ export const TOOLS: ToolDefinition[] = [
   {
     type: 'home',
     label: '首页',
-    icon: 'HomeFilled',
+    icon: 'home',
     multi: false,
     description: '工作台首页（单例标签）',
   },
   {
     type: 'connections',
     label: '连接管理',
-    icon: 'Link',
+    icon: 'link',
     multi: false,
     description: '维护数据库连接（单例标签）',
   },
   {
     type: 'sql-template',
     label: 'SQL 模板',
-    icon: 'Document',
+    icon: 'document',
     multi: false,
     description: '维护 SQL 模板与变量配置（单例标签）',
   },
   {
     type: 'db-query',
     label: 'SQL 查询',
-    icon: 'Search',
+    icon: 'search',
     multi: true,
     description: '按模板执行查询（多例标签，可同时打开多个）',
   },
   {
     type: 'command-executor',
     label: 'SQL 执行',
-    // 注意：图标名必须是 @element-plus/icons-vue 里真实存在的导出
-    // （此前用的 Terminal 并不存在，导致菜单与标签页都没有图标）
-    icon: 'Monitor',
+    // 图标名必须存在于自绘图标库（utils/icons.ts）：拼错会渲染成问号并在开发期告警
+    icon: 'terminal',
     multi: true,
     description: '自由编写并执行 SQL，支持取消与智能补全',
   },
   {
     type: 'dictionary',
     label: '词典',
-    icon: 'Collection',
+    icon: 'book',
     multi: false,
     description: '维护本地词典数据（单例标签）',
   },
   {
     type: 'settings',
     label: '设置',
-    icon: 'Setting',
+    icon: 'settings',
     multi: false,
     description: '应用外观与行为设置（单例标签）',
   },
