@@ -15,9 +15,9 @@ permissions:
 
 env:
   WAILS_VERSION: v3.0.0-beta.20
-  GO_VERSION: '1.25'
-  # pnpm 11 要求 Node >= 22.13（更低的 Node 会缺 node:sqlite，install 直接失败）
-  NODE_VERSION: '22.13.0'
+  GO_VERSION: '1.27.1'
+  NODE_VERSION: '24.16.0'
+  # pnpm 11 要求 Node >= 22.13（更低的 Node 缺 node:sqlite，install 直接失败）
   PNPM_VERSION: 11.17.0
   EXE_NAME: toolbox-windows-amd64.exe
   CHECKSUM_FILE: checksums.txt
@@ -42,25 +42,30 @@ jobs:
         with:
           version: ${{ env.PNPM_VERSION }}
 
-      # 版本矩阵自检：Node 低于 22.13 时 pnpm 11 会在 install 阶段才报
-      # ERR_UNKNOWN_BUILTIN_MODULE（node:sqlite），这里提前给出可读原因
-      - name: 检查 Node 与 pnpm 版本
+      # 工具链自检：CI 用的是精确版本，这里核对「环境 == 项目声明的版本」。
+      # 起因：Node 低于 22.13 时 pnpm 11 要到 install 阶段才报
+      # ERR_UNKNOWN_BUILTIN_MODULE（node:sqlite），报错点离原因太远。
+      # 换版本只改上面的 env，这一步不用动。
+      - name: 检查 Go / Node / pnpm 版本
         shell: pwsh
         run: |
+          go version
           node --version
           pnpm --version
 
-          $nodeVersion = (node --version | Select-Object -First 1).Trim().TrimStart('v')
-          $parts = $nodeVersion.Split('.')
-          $major = [int]$parts[0]
-          $minor = [int]$parts[1]
-          if ($major -lt 22 -or ($major -eq 22 -and $minor -lt 13)) {
-            throw "Node.js 至少需要 22.13（pnpm 11 依赖 node:sqlite），当前为 $nodeVersion"
+          $go = ((go version) | Select-Object -First 1) -replace '^go version go([0-9][^\s]*).*$', '$1'
+          if ($go -ne $env:GO_VERSION) {
+            throw "Go 版本不一致：期望 $env:GO_VERSION，实际 $go"
           }
 
-          $pnpmVersion = (pnpm --version | Select-Object -First 1).Trim()
-          if ($pnpmVersion -ne $env:PNPM_VERSION) {
-            throw "pnpm 版本不一致：期望 $env:PNPM_VERSION，实际 $pnpmVersion"
+          $node = (node --version | Select-Object -First 1).Trim().TrimStart('v')
+          if ($node -ne $env:NODE_VERSION) {
+            throw "Node.js 版本不一致：期望 $env:NODE_VERSION，实际 $node"
+          }
+
+          $pnpm = (pnpm --version | Select-Object -First 1).Trim()
+          if ($pnpm -ne $env:PNPM_VERSION) {
+            throw "pnpm 版本不一致：期望 $env:PNPM_VERSION，实际 $pnpm"
           }
 
       - name: 安装前端依赖

@@ -52,9 +52,9 @@
 
 环境要求：
 
-- Go >= 1.25
+- Go >= 1.27.1
 - Wails CLI v3：`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.20`（生成绑定与图标资源用）
-- Node >= 22.13 + pnpm 11.17.0（`corepack enable pnpm` 或 `npm i -g pnpm`；Node 低于 22.13 时 pnpm 11 会因缺少 `node:sqlite` 直接失败）
+- Node >= 24.16.0 + pnpm 11.17.0（`corepack enable pnpm` 或 `npm i -g pnpm`；Node 低于 22.13 时 pnpm 11 会因缺少 `node:sqlite` 直接失败）
 
 ```bash
 git clone https://github.com/tuple97/toolbox-wails.git
@@ -148,7 +148,7 @@ git push origin v0.2.0
 
 ## 技术栈
 
-- **后端**：Go 1.25 + Wails v3（beta.20，WebView2 渲染）；SQLite（modernc.org/sqlite，纯 Go 无 CGO）；`text/template` 渲染模板；goja 执行前置 / 后置脚本；驱动 go-sql-driver/mysql、lib/pq；密码用 AES-256-GCM + 系统凭证。
+- **后端**：Go 1.27.1 + Wails v3（beta.20，WebView2 渲染）；SQLite（modernc.org/sqlite，纯 Go 无 CGO）；`text/template` 渲染模板；goja 执行前置 / 后置脚本；驱动 go-sql-driver/mysql、lib/pq；密码用 AES-256-GCM + 系统凭证。
 - **前端**：Vue 3（SFC，`<script setup>`）+ TypeScript + Vite 7 + pnpm；状态用 Pinia；UI 是项目内自绘组件（Tailwind v4 + reka-ui 无头组件），不依赖 Element Plus 等成品库；编辑器为 CodeMirror 6（SQL / JS / 模板补全、悬停、重命名、跳转均为自研）；另用 vue-draggable-plus（拖拽排序）、sql-formatter、pinyin-pro（拼音补全）。
 - **测试**：Go 标准库测试 + vitest（前端单测覆盖补全、光标分析、模板引擎、SQL 生成等纯逻辑）。
 
