@@ -38,8 +38,9 @@ export const ExecuteTemplateQuery = App.ExecuteTemplateQuery
 export const RenderExportTemplate = App.RenderExportTemplate
 export const CheckUpdate = App.CheckUpdate
 export const DownloadUpdate = App.DownloadUpdate
+export const CancelUpdate = App.CancelUpdate
 export const RestartToApplyUpdate = App.RestartToApplyUpdate
-export const UpdateState = App.UpdateState
+export const UpdateSnapshot = App.UpdateSnapshot
 
 // ---- 词典 ----
 export const ListDictionaries = App.ListDictionaries
@@ -58,6 +59,8 @@ export const ListSystemFonts = App.ListSystemFonts
 
 // ---- 应用信息 ----
 export const GetAppInfo = App.GetAppInfo
+export const GetAppStartupState = App.GetAppStartupState
+export const RetryInit = App.RetryInit
 
 export const WindowMinimise = App.WindowMinimise
 export const WindowToggleMaximise = App.WindowToggleMaximise

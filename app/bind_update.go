@@ -1,101 +1,43 @@
 package app
 
 import (
-	"context"
-	"fmt"
-	"time"
-
-	"github.com/wailsapp/wails/v3/pkg/updater"
+	"toolbox-wails/app/internal/update"
 )
 
-// checkTimeout 版本检查超时：网络不通时不该让界面一直转
-const checkTimeout = 15 * time.Second
+/*
+更新相关的绑定：一律薄转发。
 
-// UpdateInfo 一次版本检查的结果。
-type UpdateInfo struct {
-	// Current 当前版本
-	Current string `json:"current"`
-	// Latest 最新版本；没有新版本时与 Current 相同
-	Latest string `json:"latest"`
-	// Available 是否有新版本可装
-	Available bool `json:"available"`
-	// Notes 发版说明（GitHub Release 正文）
-	Notes string `json:"notes"`
-	// PublishedAt 发布时间（RFC3339，未知时为空）
-	PublishedAt string `json:"publishedAt"`
-	// AssetName 更新包文件名
-	AssetName string `json:"assetName"`
-	// AssetSize 更新包字节数
-	AssetSize int64 `json:"assetSize"`
+真正的并发保护、生命周期（取消 / 重启）、发布策略（校验和强制、开发模式）
+与状态快照都在 app/internal/update.Controller 里；Wails 的 updater 只负责
+执行更新动作，不作为应用层状态机。
+*/
+
+// CheckUpdate 检查新版本。
+//
+// 已有检查或下载在跑时直接返回（不打断当前流程）：前端继续读 UpdateSnapshot 即可。
+func (a *App) CheckUpdate() error {
+	return a.updateCtrl.Check()
 }
 
-// CheckUpdate 检查是否有新版本；没有更新时 Available 为 false。
-func (a *App) CheckUpdate() (UpdateInfo, error) {
-	info := UpdateInfo{Current: Version, Latest: Version}
-	client, err := a.updater()
-	if err != nil {
-		return info, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
-	defer cancel()
-
-	release, err := client.Check(ctx)
-	if err != nil {
-		return info, fmt.Errorf("检查更新失败: %w", err)
-	}
-	if release == nil {
-		return info, nil
-	}
-
-	info.Available = true
-	info.Latest = release.Version
-	info.Notes = release.Notes
-	info.AssetName = release.Artifact.Filename
-	info.AssetSize = release.Artifact.Size
-	if !release.PublishedAt.IsZero() {
-		info.PublishedAt = release.PublishedAt.Format(time.RFC3339)
-	}
-	return info, nil
-}
-
-// DownloadUpdate 下载并安装更新；进度与阶段通过 wails:updater:* 事件上报。
+// DownloadUpdate 下载并安装已发现的新版本；取消走 CancelUpdate。
 func (a *App) DownloadUpdate() error {
-	client, err := a.updater()
-	if err != nil {
-		return err
-	}
-	if err := client.DownloadAndInstall(context.Background()); err != nil {
-		return fmt.Errorf("下载更新失败: %w", err)
-	}
-	return nil
+	return a.updateCtrl.Download()
 }
 
-// RestartToApplyUpdate 重启应用以应用已安装的更新。
+// CancelUpdate 取消正在进行的下载（回到「有新版本可下载」状态）。
+func (a *App) CancelUpdate() error {
+	return a.updateCtrl.Cancel()
+}
+
+// RestartToApplyUpdate 重启应用以应用已下载的更新（仅「已就绪」时可用）。
 func (a *App) RestartToApplyUpdate() error {
-	client, err := a.updater()
-	if err != nil {
-		return err
-	}
-	return client.Restart(context.Background())
+	return a.updateCtrl.Restart()
 }
 
-// UpdateState 当前更新状态：unconfigured / idle / checking / available /
-// downloading / verifying / installing / ready / error。
-func (a *App) UpdateState() string {
-	if a.wailsApp == nil {
-		return string(updater.StateUnconfigured)
-	}
-	return string(a.wailsApp.Updater.State())
-}
-
-// updater 取已初始化的更新器；未初始化时给出可读的提示
-func (a *App) updater() (*updater.Updater, error) {
-	if err := a.ready(); err != nil {
-		return nil, err
-	}
-	if a.wailsApp == nil || a.wailsApp.Updater == nil {
-		return nil, fmt.Errorf("更新功能不可用")
-	}
-	return a.wailsApp.Updater, nil
+// UpdateSnapshot 当前更新状态的完整快照：前端唯一的状态源。
+//
+// 更新能力不可用时也返回快照（state 为 unconfigured，message 说明原因），
+// 前端不需要为「不可用」单独准备一套展示逻辑。
+func (a *App) UpdateSnapshot() update.Snapshot {
+	return a.updateCtrl.Snapshot()
 }

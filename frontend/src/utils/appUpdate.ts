@@ -1,29 +1,34 @@
-/** 应用更新流程：检查 → 询问 → 下载 → 提示重启 */
-import { checkUpdate, downloadUpdate, restartToApplyUpdate } from '@/api/update'
+/**
+ * 更新流程编排：启动检查 → 询问 → 下载 → 提示重启。
+ *
+ * 状态与并发保护都在 updateStore / 后端控制器里，这里只负责
+ * 「按设置决定要不要查」和弹窗编排；设置页的按钮走同一套 store 动作。
+ */
 import { useConfigStore } from '@/stores/configStore'
+import { useUpdateStore } from '@/stores/updateStore'
 import { askConfirm } from '@/utils/confirm'
 import { notify } from '@/utils/notify'
 
 /** 启动时按设置自动检查：有新版本就问一次；检查失败静默，不打扰使用 */
 export async function autoCheckUpdateOnStartup(): Promise<void> {
+  const store = useUpdateStore()
+
   if (useConfigStore().values.app_auto_update !== 'true') {
     return
   }
-
-  let info
-  try {
-    info = await checkUpdate()
-  }
-  catch {
+  // 更新能力不可用（开发模式 / 初始化失败）或已有流程在跑：静默跳过
+  if (!store.snapshot.canCheck) {
     return
   }
-  if (!info.available) {
+
+  await store.check()
+  if (!store.snapshot.available) {
     return
   }
 
   const confirmed = await askConfirm({
     title: '发现新版本',
-    message: `v${info.latest} 已发布，是否现在更新？`,
+    message: `v${store.snapshot.latestVersion} 已发布，是否现在更新？`,
     confirmText: '立即更新',
   })
   if (confirmed) {
@@ -31,14 +36,19 @@ export async function autoCheckUpdateOnStartup(): Promise<void> {
   }
 }
 
-/** 下载并安装更新，完成后询问是否重启 */
+/** 下载并安装更新，完成后询问是否重启（启动流程与设置页共用） */
 export async function installUpdate(): Promise<void> {
+  const store = useUpdateStore()
   notify.info('正在下载更新…')
-  try {
-    await downloadUpdate()
+
+  await store.download()
+
+  if (store.state === 'error') {
+    notify.error(store.error || '下载更新失败')
+    return
   }
-  catch (e) {
-    notify.error(e instanceof Error ? e.message : String(e))
+  // 用户主动取消：状态里已有说明，不必再弹错误
+  if (store.state !== 'ready') {
     return
   }
 
@@ -49,6 +59,6 @@ export async function installUpdate(): Promise<void> {
     confirmText: '立即重启',
   })
   if (confirmed) {
-    await restartToApplyUpdate()
+    await store.restart()
   }
 }

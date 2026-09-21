@@ -7,16 +7,20 @@ import ContextMenu from '@/components/ContextMenu.vue'
 import WindowResizeEdges from '@/components/WindowResizeEdges.vue'
 import Workbench from '@/layouts/Workbench.vue'
 import { closeWindow, openDevTools, toggleMaximiseWindow } from '@/api/window'
+import { useAppStore } from '@/stores/appStore'
 import { useConfigStore } from '@/stores/configStore'
 import { useLogStore } from '@/stores/logStore'
 import { useTabStore } from '@/stores/tabStore'
+import { useUpdateStore } from '@/stores/updateStore'
 import type { ContextMenuAction } from '@/types'
 import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
 import { autoCheckUpdateOnStartup } from '@/utils/appUpdate'
 
+const appStore = useAppStore()
 const configStore = useConfigStore()
 const logStore = useLogStore()
 const tabStore = useTabStore()
+const updateStore = useUpdateStore()
 
 /** 自定义右键菜单状态（仅标题栏触发） */
 const menuVisible = ref(false)
@@ -65,10 +69,18 @@ function handleMenuSelect(item: ContextMenuAction) {
 }
 
 onMounted(async () => {
-  // 启动时加载全局配置并应用主题/字号
-  await configStore.load()
-  logStore.setMaxLines(configStore.logMaxLines)
-  // 按设置检查新版本（默认开启；检查失败静默）
+  // 先看后端初始化状态：失败（degraded）时本地数据功能不可用，
+  // 但界面与更新能力仍然可用，所以下面只跳过依赖本地库的加载
+  await appStore.load()
+  if (!appStore.degraded) {
+    // 启动时加载全局配置并应用主题/字号
+    await configStore.load()
+    logStore.setMaxLines(configStore.logMaxLines)
+  }
+
+  // 更新状态是应用级能力：先订阅状态变化（初始化一次），
+  // 再按设置检查新版本——始终执行，数据库损坏时也能靠更新自救
+  updateStore.init()
   void autoCheckUpdateOnStartup()
   window.addEventListener('keydown', (event) => {
     if (event.defaultPrevented) {

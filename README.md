@@ -40,9 +40,13 @@
 应用内置基于 **GitHub Releases** 的更新（Wails v3 自带 updater，含下载校验与可执行文件替换）：
 
 - 默认启动后自动检查一次新版本；发现新版本会询问是否更新，下载完成后可选择立即重启应用生效
-- 设置 → 更新：可关闭自动检查、手动「检查更新」、查看当前版本与发版说明
-- 更新包校验：发布时随包上传 `checksums.txt`，下载后核对 SHA-256
-- 版本号显示在标题栏应用名右侧
+- 设置 → 更新：可关闭自动检查、手动「检查更新」、查看当前版本与发版说明，下载中可以取消
+- 更新包校验：发布时必须随包上传 `checksums.txt`，下载后核对 SHA-256；**清单缺失或有异常时直接拒绝更新**（不会静默跳过校验）
+- 更新状态以后端快照（`UpdateSnapshot`）为唯一来源：设置页只读它，事件只当「状态变了」的通知，前端不自己推断状态
+- 同一时刻只允许一个更新流程：正在检查或下载时再点「检查更新」不会打断当前流程
+- 开发模式下不启用更新（`dev:app` 会注入 `FRONTEND_DEVSERVER_URL`），避免把已发布的正式版提示成新版本
+- 更新能力不依赖数据库：本地库打不开时（界面顶部会提示「初始化失败」）依然可以检查并安装更新
+- 版本号显示在状态栏右侧；`toolbox-windows-amd64.exe --version` 可直接打印版本（发布流水线用它校验）
 
 ## 快速开始
 
@@ -94,6 +98,12 @@ go build -tags production -trimpath `
   -o build/bin/toolbox-windows-amd64.exe .
 ```
 
+可以顺手验一下版本号是否真的注入了（发布流水线也做这一步）：
+
+```powershell
+build/bin/toolbox-windows-amd64.exe --version   # 应输出 0.2.0
+```
+
 ### 发布（CI 自动发版）
 
 在 `main` 上打 tag 即触发 [.github/workflows/release.yml](.github/workflows/release.yml)：
@@ -103,9 +113,9 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-流水线会依次：安装依赖 → 前端类型检查与单测 → 同步版本号到各清单 → 生成图标资源 → 构建前端 → `go vet` / `go test` → 编译 `toolbox-windows-amd64.exe`（注入 tag 版本号）→ 生成 `checksums.txt` → 创建 Release 并上传两个资产。
+流水线依次：安装依赖 → **后端校验（`gofmt` + `go vet` + `go test`）** → 同步版本号到各清单 → 生成图标资源 → **校验绑定与后端一致（重新生成绑定并比对）** → 前端类型检查 / 单测 / 构建 → 编译 `toolbox-windows-amd64.exe`（注入 tag 版本号）→ 生成 `checksums.txt` 并反向校验 → **用 `--version` 校验 exe 内的版本号等于 tag** → 创建 Release 并上传两个资产。
 
-> 资产名必须是 `toolbox-windows-amd64.exe`：应用内更新按「文件名含平台 + 架构」挑选资产；`checksums.txt` 是下载校验的来源。`workflow_dispatch` 手动触发时只上传构建产物、不发版，方便验证流水线。
+> 资产名必须是 `toolbox-windows-amd64.exe`：应用内更新按「文件名含平台 + 架构」挑选资产；`checksums.txt` 是下载校验的来源，缺它应用会拒绝更新。校验（格式 / 绑定 / 版本 / 校验和）任何一项不过都不会创建 Release；`workflow_dispatch` 手动触发时只上传构建产物、不发版，方便验证流水线。
 
 ## 数据存储
 
@@ -146,18 +156,20 @@ git push origin v0.2.0
 
 ```
 toolbox-wails/
-├── main.go                     # 入口：服务注册、资源嵌入（go:embed all:frontend/dist）、主窗口、更新器配置
+├── main.go                     # 入口：服务注册、资源嵌入（go:embed all:frontend/dist）、主窗口、--version
 ├── wails.json                  # Wails 项目配置（应用名、输出文件名、版本）
 ├── scripts/set-version.ps1     # 一处改版本号，同步各处清单
-├── .github/workflows/          # CI：打 tag 构建并发版
+├── .github/workflows/          # CI：打 tag 构建并发版（含格式 / 绑定 / 版本 / 校验和四道闸）
 ├── app/                        # Go 后端
-│   ├── app.go                  # App 结构体：依赖装配、生命周期
+│   ├── app.go                  # App 结构体：依赖装配、生命周期、启动状态（degraded + 重试初始化）
+│   ├── update_setup.go         # 更新能力接线（来源配置、HTTP 客户端、签名公钥）
 │   ├── bind_*.go               # 绑定层：db / dict / font / settings / tabs / template / update（校验 + 转发）
 │   ├── system.go               # 版本号（构建时注入）与应用信息
 │   ├── window.go               # 窗口控制
 │   └── internal/
 │       ├── database/           # SQLite 访问（repository、建表与迁移）
 │       ├── services/           # 业务服务（连接 / 模板 / 词典 / 标签 / 设置 / 执行器）
+│       ├── update/             # 更新控制器（并发保护、取消、发布策略、状态快照）
 │       ├── script/             # goja 前置 / 后置脚本引擎
 │       └── utils/              # 模板渲染、加解密等
 ├── build/                      # 打包资源（icon.ico、manifest、info.json）与产物（build/bin 不入库）
@@ -167,7 +179,7 @@ toolbox-wails/
         ├── api/                # 后端接口封装（显式类型映射）
         ├── components/         # 通用组件（标题栏、代码编辑器、结果表格、各配置面板、ui/ 基础组件）
         ├── layouts/            # 工作台布局（左侧菜单 + 多标签）
-        ├── stores/             # Pinia（标签 / 配置 / 词典 / 日志 / 元数据）
+        ├── stores/             # Pinia（标签 / 配置 / 词典 / 日志 / 元数据 / 更新状态 / 启动状态）
         ├── utils/              # 工具注册表、SQL 补全与模板语言、更新流程等
         ├── views/              # 页面（首页 + views/tools/ 各工具）
         ├── styles/             # 全局样式与主题变量
@@ -179,7 +191,8 @@ toolbox-wails/
 - **新增后端方法**：在 `app/bind_*.go` 加方法（校验 + 转发到 `internal/services`）→ `pnpm gen:bindings` → 前端在 `src/api/*.ts` 封装后使用。
 - **新增配置项**：三处同步——Go `defaultSettings`、前端 `configStore.DEFAULTS`、`types` 的 `SettingKey`。
 - **新增工具**：`frontend/src/utils/tools.ts` 注册一项 → `Workbench.vue` 加渲染分支 → `views/tools/` 新增视图（初始化结束时 `emit('ready')`，父级据此关闭加载遮罩）。
-- **新增更新来源**：`main.go` 的 `initUpdater` 里换 / 加 `updater.Provider`（框架自带 GitHub、Endpoint、Appcast、Keygen 四种）。
+- **新增更新来源**：`main.go` 里改 `UpdateOptions`，接线细节在 `app/update_setup.go` 的 `SetupUpdate`（框架自带 GitHub、Endpoint、Appcast、Keygen 四种 Provider）；状态契约见 `app/internal/update/snapshot.go`。
+- **启用发布签名**：把 Ed25519 公钥填进 `app/internal/update/policy.go` 的 `PublicKey`（当前为 nil，只做 SHA-256 校验），签名发布流程另开一次变更。
 
 ## 常见问题
 
@@ -188,6 +201,8 @@ toolbox-wails/
 - **改了后端方法前端调不到**：忘了 `pnpm gen:bindings`。
 - **打包后界面是旧的**：先 `pnpm build` 再编译 Go（`build:app` 已包含这一步）。
 - **自动更新检查失败**：多为网络原因（GitHub API 访问受限）；不影响应用使用，也可手动下载新版 exe 覆盖。
+- **更新提示「发布包缺少校验和」**：该 Release 没上传 `checksums.txt`（或清单里没有对应文件名）。这是有意的拒绝策略，重新发一次带校验清单的版本即可。
+- **界面顶部提示「初始化失败」**：本地库打不开（损坏或权限问题）。点提示里的「重试初始化」，或删除 `%AppData%\Toolbox\` 后重启；更新能力不受影响。
 
 ## 许可
 

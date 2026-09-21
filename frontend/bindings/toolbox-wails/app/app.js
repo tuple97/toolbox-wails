@@ -22,6 +22,9 @@ import * as database$0 from "./internal/database/models.js";
 import * as services$0 from "./internal/services/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as update$0 from "./internal/update/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as utils$0 from "./internal/utils/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -47,13 +50,21 @@ export function AttachWindow(window) {
 }
 
 /**
- * CheckUpdate 检查是否有新版本；没有更新时 Available 为 false。
- * @returns {$CancellablePromise<$models.UpdateInfo>}
+ * CancelUpdate 取消正在进行的下载（回到「有新版本可下载」状态）。
+ * @returns {$CancellablePromise<void>}
+ */
+export function CancelUpdate() {
+    return $Call.ByID(699082623);
+}
+
+/**
+ * CheckUpdate 检查新版本。
+ * 
+ * 已有检查或下载在跑时直接返回（不打断当前流程）：前端继续读 UpdateSnapshot 即可。
+ * @returns {$CancellablePromise<void>}
  */
 export function CheckUpdate() {
-    return $Call.ByID(264084285).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType0($result);
-    }));
+    return $Call.ByID(264084285);
 }
 
 /**
@@ -93,7 +104,7 @@ export function DeleteTemplate(id) {
 }
 
 /**
- * DownloadUpdate 下载并安装更新；进度与阶段通过 wails:updater:* 事件上报。
+ * DownloadUpdate 下载并安装已发现的新版本；取消走 CancelUpdate。
  * @returns {$CancellablePromise<void>}
  */
 export function DownloadUpdate() {
@@ -107,7 +118,7 @@ export function DownloadUpdate() {
  */
 export function ExecuteQuery(req) {
     return $Call.ByID(722935905, req).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType2($result);
+        return $$createType1($result);
     }));
 }
 
@@ -118,7 +129,7 @@ export function ExecuteQuery(req) {
  */
 export function ExecuteStatement(req) {
     return $Call.ByID(1693566536, req).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType3($result);
     }));
 }
 
@@ -129,7 +140,7 @@ export function ExecuteStatement(req) {
  */
 export function ExecuteTemplateQuery(req) {
     return $Call.ByID(2760232183, req).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType2($result);
+        return $$createType1($result);
     }));
 }
 
@@ -140,7 +151,7 @@ export function ExecuteTemplateQuery(req) {
  */
 export function ExtractTemplateVariables(sqlText) {
     return $Call.ByID(347742172, sqlText).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType4($result);
     }));
 }
 
@@ -161,7 +172,7 @@ export function FetchCreateTableSQL(connID, database, table) {
  */
 export function GetAllSettings() {
     return $Call.ByID(2335488078).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType6($result);
     }));
 }
 
@@ -171,6 +182,16 @@ export function GetAllSettings() {
  */
 export function GetAppInfo() {
     return $Call.ByID(2996357887).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType7($result);
+    }));
+}
+
+/**
+ * GetAppStartupState 应用启动状态（degraded 时前端展示原因与重试入口）。
+ * @returns {$CancellablePromise<$models.AppStartupState>}
+ */
+export function GetAppStartupState() {
+    return $Call.ByID(2620907841).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType8($result);
     }));
 }
@@ -277,7 +298,7 @@ export function ListSqlTemplates() {
  */
 export function ListSystemFonts() {
     return $Call.ByID(1215069897).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType4($result);
     }));
 }
 
@@ -302,7 +323,7 @@ export function ListTableColumns(connID, database, table) {
  */
 export function ListTables(connID, database) {
     return $Call.ByID(2064401305, connID, database).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType4($result);
     }));
 }
 
@@ -374,16 +395,29 @@ export function QueryVariableOptions(connID, query) {
  */
 export function RenderExportTemplate(tplText, rows) {
     return $Call.ByID(3743317892, tplText, rows).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType4($result);
     }));
 }
 
 /**
- * RestartToApplyUpdate 重启应用以应用已安装的更新。
+ * RestartToApplyUpdate 重启应用以应用已下载的更新（仅「已就绪」时可用）。
  * @returns {$CancellablePromise<void>}
  */
 export function RestartToApplyUpdate() {
     return $Call.ByID(486819579);
+}
+
+/**
+ * RetryInit 重新执行初始化。
+ * 
+ * 用于数据库损坏、目录权限异常等情况下的自救：成功后本地数据功能恢复，
+ * 失败则把新的原因回给前端。已经初始化成功时直接返回当前状态（不重复打开数据库）。
+ * @returns {$CancellablePromise<$models.AppStartupState>}
+ */
+export function RetryInit() {
+    return $Call.ByID(1405400900).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType8($result);
+    }));
 }
 
 /**
@@ -472,12 +506,16 @@ export function TestConnection(conn) {
 }
 
 /**
- * UpdateState 当前更新状态：unconfigured / idle / checking / available /
- * downloading / verifying / installing / ready / error。
- * @returns {$CancellablePromise<string>}
+ * UpdateSnapshot 当前更新状态的完整快照：前端唯一的状态源。
+ * 
+ * 更新能力不可用时也返回快照（state 为 unconfigured，message 说明原因），
+ * 前端不需要为「不可用」单独准备一套展示逻辑。
+ * @returns {$CancellablePromise<update$0.Snapshot>}
  */
-export function UpdateState() {
-    return $Call.ByID(2862223398);
+export function UpdateSnapshot() {
+    return $Call.ByID(4184629245).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType32($result);
+    }));
 }
 
 /**
@@ -496,7 +534,7 @@ export function ValidateScript(source) {
  */
 export function ValidateTemplate(sqlText) {
     return $Call.ByID(3453963828, sqlText).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType32($result);
+        return $$createType33($result);
     }));
 }
 
@@ -533,15 +571,15 @@ export function WindowToggleMaximise() {
 }
 
 // Private type creation functions
-const $$createType0 = $models.UpdateInfo.createFrom;
-const $$createType1 = services$0.QueryResult.createFrom;
-const $$createType2 = $Create.Nullable($$createType1);
-const $$createType3 = services$0.ExecutorResult.createFrom;
-const $$createType4 = $Create.Nullable($$createType3);
-const $$createType5 = $Create.Array($Create.Any);
-const $$createType6 = database$0.Setting.createFrom;
-const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = $models.AppInfo.createFrom;
+const $$createType0 = services$0.QueryResult.createFrom;
+const $$createType1 = $Create.Nullable($$createType0);
+const $$createType2 = services$0.ExecutorResult.createFrom;
+const $$createType3 = $Create.Nullable($$createType2);
+const $$createType4 = $Create.Array($Create.Any);
+const $$createType5 = database$0.Setting.createFrom;
+const $$createType6 = $Create.Array($$createType5);
+const $$createType7 = $models.AppInfo.createFrom;
+const $$createType8 = $models.AppStartupState.createFrom;
 const $$createType9 = database$0.DBConnection.createFrom;
 const $$createType10 = $Create.Nullable($$createType9);
 const $$createType11 = database$0.SQLTemplate.createFrom;
@@ -565,4 +603,5 @@ const $$createType28 = $Create.Array($$createType11);
 const $$createType29 = $Create.Map($Create.Any, $$createType19);
 const $$createType30 = $Create.Map($Create.Any, $Create.Any);
 const $$createType31 = $Create.Array($$createType30);
-const $$createType32 = utils$0.TemplateCheck.createFrom;
+const $$createType32 = update$0.Snapshot.createFrom;
+const $$createType33 = utils$0.TemplateCheck.createFrom;

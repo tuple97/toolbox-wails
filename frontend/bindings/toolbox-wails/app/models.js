@@ -66,81 +66,45 @@ export class AppInfo {
 }
 
 /**
- * UpdateInfo 一次版本检查的结果。
+ * AppStartupState 应用启动状态。
+ * 
+ * degraded 表示初始化失败（例如数据库损坏）：界面照常打开并显示原因，
+ * 用户可重试初始化，也能靠应用内更新拉一个修复版本——所以这里不用
+ * 「启动失败直接退出」的语义。
  */
-export class UpdateInfo {
+export class AppStartupState {
     /**
-     * Creates a new UpdateInfo instance.
-     * @param {Partial<UpdateInfo>} [$$source = {}] - The source object to create the UpdateInfo.
+     * Creates a new AppStartupState instance.
+     * @param {Partial<AppStartupState>} [$$source = {}] - The source object to create the AppStartupState.
      */
     constructor($$source = {}) {
-        if (!("current" in $$source)) {
+        if (!("state" in $$source)) {
             /**
-             * Current 当前版本
+             * State initializing / ready / degraded
              * @member
              * @type {string}
              */
-            this["current"] = "";
+            this["state"] = "";
         }
-        if (!("latest" in $$source)) {
+        if (!("error" in $$source)) {
             /**
-             * Latest 最新版本；没有新版本时与 Current 相同
+             * Error 初始化失败原因（degraded 时非空）
              * @member
              * @type {string}
              */
-            this["latest"] = "";
-        }
-        if (!("available" in $$source)) {
-            /**
-             * Available 是否有新版本可装
-             * @member
-             * @type {boolean}
-             */
-            this["available"] = false;
-        }
-        if (!("notes" in $$source)) {
-            /**
-             * Notes 发版说明（GitHub Release 正文）
-             * @member
-             * @type {string}
-             */
-            this["notes"] = "";
-        }
-        if (!("publishedAt" in $$source)) {
-            /**
-             * PublishedAt 发布时间（RFC3339，未知时为空）
-             * @member
-             * @type {string}
-             */
-            this["publishedAt"] = "";
-        }
-        if (!("assetName" in $$source)) {
-            /**
-             * AssetName 更新包文件名
-             * @member
-             * @type {string}
-             */
-            this["assetName"] = "";
-        }
-        if (!("assetSize" in $$source)) {
-            /**
-             * AssetSize 更新包字节数
-             * @member
-             * @type {number}
-             */
-            this["assetSize"] = 0;
+            this["error"] = "";
         }
 
         Object.assign(this, $$source);
     }
 
     /**
-     * Creates a new UpdateInfo instance from a string or object.
+     * Creates a new AppStartupState instance from a string or object.
      * @param {any} [$$source = {}]
-     * @returns {UpdateInfo}
+     * @returns {AppStartupState}
      */
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new UpdateInfo(/** @type {Partial<UpdateInfo>} */($$parsedSource));
+        return new AppStartupState(/** @type {Partial<AppStartupState>} */($$parsedSource));
     }
 }

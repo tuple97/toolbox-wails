@@ -346,14 +346,32 @@ export interface Setting {
   value: string
 }
 
-/** 一次版本检查的结果，与后端 app.UpdateInfo 对应 */
-export interface UpdateInfo {
-  /** 当前版本 */
-  current: string
-  /** 最新版本；没有更新时与 current 相同 */
-  latest: string
-  /** 是否有新版本 */
-  available: boolean
+/** 更新流程阶段，与后端 update.Snapshot.state 一一对应 */
+export type UpdateState =
+  | 'unconfigured'
+  | 'idle'
+  | 'checking'
+  | 'up-to-date'
+  | 'available'
+  | 'downloading'
+  | 'verifying'
+  | 'installing'
+  | 'ready'
+  | 'error'
+
+/**
+ * 更新状态快照，与后端 update.Snapshot 对应。
+ *
+ * 这是前端唯一的状态源：`wails:updater:*` 事件只当作「状态可能变了」的通知，
+ * 收到后回后端重新拉一次快照，前端不自己推断状态。
+ */
+export interface UpdateSnapshot {
+  /** 当前阶段 */
+  state: UpdateState
+  /** 当前运行的版本 */
+  currentVersion: string
+  /** 已发现的新版本（无则空） */
+  latestVersion: string
   /** 发版说明 */
   notes: string
   /** 发布时间（RFC3339，未知时为空） */
@@ -362,6 +380,32 @@ export interface UpdateInfo {
   assetName: string
   /** 更新包字节数 */
   assetSize: number
+  /** 是否已发现可安装的新版本 */
+  available: boolean
+  /** 下载进度百分比；-1 表示总长未知 */
+  progress: number
+  /** 已下载字节数 */
+  written: number
+  /** 更新包总字节数（未知为 0） */
+  total: number
+  /** 状态说明（更新不可用的原因 / 已取消等） */
+  message: string
+  /** 最近一次失败原因（无失败为空） */
+  error: string
+  /** 现在可以发起检查 */
+  canCheck: boolean
+  /** 现在可以（或重试）下载 */
+  canDownload: boolean
+  /** 现在可以取消下载 */
+  canCancel: boolean
+  /** 现在可以重启生效 */
+  canRestart: boolean
+}
+
+/** 应用启动状态：degraded 表示初始化失败（界面仍可用，本地数据功能不可用） */
+export interface AppStartupState {
+  state: 'initializing' | 'ready' | 'degraded'
+  error: string
 }
 
 /** 全局配置的键名 */

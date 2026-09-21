@@ -2,9 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { Component, ComponentPublicInstance } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
+import { useAppStore } from '@/stores/appStore'
 import { useTabStore } from '@/stores/tabStore'
 import { useDictStore } from '@/stores/dictStore'
 import { useConfigStore } from '@/stores/configStore'
+import { useLogStore } from '@/stores/logStore'
 import { EventsOn } from '@/api/runtime'
 import { toolOf } from '@/utils/tools'
 import { matchesShortcut, shortcutOf } from '@/utils/shortcuts'
@@ -12,6 +14,7 @@ import { parseSidebarView, serializeSidebarView } from '@/utils/sidebarView'
 import { askConfirm } from '@/utils/confirm'
 import { notify } from '@/utils/notify'
 import Icon from '@/components/ui/Icon.vue'
+import Button from '@/components/ui/Button.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import ToolPickerDialog from '@/components/ToolPickerDialog.vue'
 import DbQuery from '@/views/tools/DbQuery.vue'
@@ -24,9 +27,11 @@ import HomeView from '@/views/HomeView.vue'
 import { fetchAppInfo } from '@/api/system'
 import type { ToolType, WorkbenchTab } from '@/types'
 
+const appStore = useAppStore()
 const tabStore = useTabStore()
 const dictStore = useDictStore()
 const configStore = useConfigStore()
+const logStore = useLogStore()
 
 /** 工具图标名（注册表里没有对应工具时给问号图标，模板里就不必到处判空） */
 function iconOf(type: string): string {
@@ -198,6 +203,34 @@ onBeforeUnmount(() => {
   offQuit?.()
   window.removeEventListener('keydown', handleWorkbenchShortcut)
 })
+
+// ------------------------------------------------------------ 初始化失败
+
+/** 正在重试初始化 */
+const retrying = ref(false)
+
+/**
+ * 重试初始化。
+ *
+ * 成功说明本地库恢复了，把启动时被跳过的数据补上（标签 / 词典 / 配置），
+ * 否则界面会停在空数据上，得重启一次才正常。
+ */
+async function handleRetryInit() {
+  retrying.value = true
+  try {
+    const ok = await appStore.retry()
+    if (!ok) {
+      notify.error(appStore.startup.error || '初始化仍然失败')
+      return
+    }
+    await Promise.all([tabStore.load(), dictStore.loadAll(), configStore.load()])
+    logStore.setMaxLines(configStore.logMaxLines)
+    notify.success('初始化完成')
+  }
+  finally {
+    retrying.value = false
+  }
+}
 
 function handleWorkbenchShortcut(event: KeyboardEvent) {
   if (event.defaultPrevented) {
@@ -631,6 +664,23 @@ function handleTabReady(uid: string) {
             <Icon name="arrow-right" />
           </button>
         </div>
+      </div>
+
+      <!--
+        初始化失败（degraded）：显式告知 + 重试入口。
+        界面其余部分仍可用，应用内更新同样可用（数据库坏了也能拉修复版）。
+      -->
+      <div
+        v-if="appStore.degraded"
+        class="flex flex-none items-center gap-2 border-b border-danger/35 bg-danger/10 px-4 py-2 text-sm text-danger"
+      >
+        <Icon name="alert-triangle" class="shrink-0" />
+        <span class="min-w-0 flex-1 truncate" :title="appStore.startup.error">
+          初始化失败，本地数据（连接 / 模板 / 词典 / 设置）暂不可用：{{ appStore.startup.error || '未知原因' }}
+        </span>
+        <Button variant="danger" size="sm" :loading="retrying" @click="handleRetryInit">
+          重试初始化
+        </Button>
       </div>
 
       <!--

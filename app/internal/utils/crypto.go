@@ -140,5 +140,3 @@ func MaskPassword(secret string) string {
 	}
 	return strings.Repeat("*", 8)
 }
-
-

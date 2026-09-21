@@ -2,11 +2,11 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"log"
+	"os"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/updater"
-	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 
 	"toolbox-wails/app"
 )
@@ -20,9 +20,16 @@ const (
 	appHeight = 800
 	// repository 更新来源（GitHub Releases）
 	repository = "tuple97/toolbox-wails"
+	// checksumAsset 校验清单资产名：与 exe 一起上传，下载后核对 SHA-256
+	checksumAsset = "checksums.txt"
 )
 
 func main() {
+	// `--version` 是产品接口：发布流水线用它校验注入到 exe 里的版本号
+	if printVersion() {
+		return
+	}
+
 	// 创建业务实例
 	service := app.NewApp()
 
@@ -46,7 +53,11 @@ func main() {
 	// 注入应用实例
 	service.Attach(wailsApp)
 
-	initUpdater(wailsApp)
+	// 装配应用内更新（来源配置在这里给出，接线细节见 app.SetupUpdate）
+	app.SetupUpdate(wailsApp, service, app.UpdateOptions{
+		Repository:    repository,
+		ChecksumAsset: checksumAsset,
+	})
 
 	// 创建主窗口
 	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
@@ -69,24 +80,16 @@ func main() {
 	}
 }
 
-// initUpdater 配置应用内更新。失败只记日志：没有更新能力不该影响启动。
-func initUpdater(wailsApp *application.App) {
-	provider, err := github.New(github.Config{
-		Repository: repository,
-		// 发版时随包发布校验和，下载后核对 SHA-256
-		ChecksumAsset: "checksums.txt",
-	})
-	if err != nil {
-		log.Printf("更新来源不可用: %v", err)
-		return
+// printVersion 处理 `--version`：输出版本号后返回 true（由调用方直接结束）。
+//
+// 打包版是 GUI 子系统（没有控制台），但 stdout 被重定向时（发布流水线里）
+// 依旧能读到输出，因此 CI 可以拿它做「exe 内的版本号 == git tag」的硬校验。
+func printVersion() bool {
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" || arg == "-version" {
+			fmt.Println(app.NormalizedVersion())
+			return true
+		}
 	}
-
-	if err := wailsApp.Updater.Init(updater.Config{
-		CurrentVersion: app.NormalizedVersion(),
-		Providers:      []updater.Provider{provider},
-		// 更新界面由设置页承担，不用框架自带窗口
-		Window: updater.WindowNone,
-	}); err != nil {
-		log.Printf("更新功能初始化失败: %v", err)
-	}
+	return false
 }
