@@ -54,7 +54,7 @@
 
 - Go >= 1.25
 - Wails CLI v3：`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.20`（生成绑定与图标资源用）
-- Node >= 20.19 + pnpm 11（`corepack enable pnpm` 或 `npm i -g pnpm`）
+- Node >= 22.13 + pnpm 11.17.0（`corepack enable pnpm` 或 `npm i -g pnpm`；Node 低于 22.13 时 pnpm 11 会因缺少 `node:sqlite` 直接失败）
 
 ```bash
 git clone https://github.com/tuple97/toolbox-wails.git

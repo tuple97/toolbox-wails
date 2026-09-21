@@ -16,7 +16,8 @@ permissions:
 env:
   WAILS_VERSION: v3.0.0-beta.20
   GO_VERSION: '1.25'
-  NODE_VERSION: '20'
+  # pnpm 11 要求 Node >= 22.13（更低的 Node 会缺 node:sqlite，install 直接失败）
+  NODE_VERSION: '22.13.0'
   PNPM_VERSION: 11.17.0
   EXE_NAME: toolbox-windows-amd64.exe
   CHECKSUM_FILE: checksums.txt
@@ -40,6 +41,27 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
+
+      # 版本矩阵自检：Node 低于 22.13 时 pnpm 11 会在 install 阶段才报
+      # ERR_UNKNOWN_BUILTIN_MODULE（node:sqlite），这里提前给出可读原因
+      - name: 检查 Node 与 pnpm 版本
+        shell: pwsh
+        run: |
+          node --version
+          pnpm --version
+
+          $nodeVersion = (node --version | Select-Object -First 1).Trim().TrimStart('v')
+          $parts = $nodeVersion.Split('.')
+          $major = [int]$parts[0]
+          $minor = [int]$parts[1]
+          if ($major -lt 22 -or ($major -eq 22 -and $minor -lt 13)) {
+            throw "Node.js 至少需要 22.13（pnpm 11 依赖 node:sqlite），当前为 $nodeVersion"
+          }
+
+          $pnpmVersion = (pnpm --version | Select-Object -First 1).Trim()
+          if ($pnpmVersion -ne $env:PNPM_VERSION) {
+            throw "pnpm 版本不一致：期望 $env:PNPM_VERSION，实际 $pnpmVersion"
+          }
 
       - name: 安装前端依赖
         working-directory: frontend
