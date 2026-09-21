@@ -113,16 +113,29 @@ jobs:
         working-directory: frontend
         run: pnpm gen:icon
 
-      # 绑定是入库的：改了后端方法却忘了重新生成，CI 必须拦住
+      # 绑定是入库的：改了后端方法却忘了重新生成，CI 必须拦住。
+      # 比较时忽略行尾（--ignore-cr-at-eol）：Windows 检出的绑定是 CRLF，
+      # 而生成器写的是 LF，直接看 `git status` 会把 19 个文件全报成已修改（假阳性）。
       - name: 校验绑定与后端一致
         shell: pwsh
         run: |
           pnpm gen:bindings
-          $drift = git status --porcelain -- frontend/bindings
-          if ($drift) {
-            Write-Host $drift
-            throw "frontend/bindings 与后端不一致：本地执行 pnpm gen:bindings 并提交"
+
+          $modified = git diff --ignore-cr-at-eol --name-only -- frontend/bindings
+          $untracked = git ls-files --others --exclude-standard -- frontend/bindings
+          if ($modified -or $untracked) {
+            if ($modified) {
+              Write-Host '内容与后端不一致：'
+              $modified | ForEach-Object { Write-Host "  $_" }
+              git --no-pager diff --ignore-cr-at-eol --stat -- frontend/bindings
+            }
+            if ($untracked) {
+              Write-Host '未入库（生成器新建，需要提交）：'
+              $untracked | ForEach-Object { Write-Host "  $_" }
+            }
+            throw 'frontend/bindings 与后端不一致：本地执行 pnpm gen:bindings 并提交'
           }
+          Write-Host '绑定与后端一致'
 
       - name: 前端校验与构建
         working-directory: frontend
